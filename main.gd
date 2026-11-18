@@ -1985,6 +1985,9 @@ func _update_vehicles(delta: float) -> void:
 
 func _spawn_wave() -> void:
 	wave += 1
+	if wave == 1:
+		# Restart the initialization guard on the exact Wave 1 transition frame.
+		campaign_start_grace_timer = 1.0
 	var escalation_phase: int = int(float(wave - 1) / 6.0) + 1
 	# Escalate through the 30-wave campaign; endless mode grows more slowly
 	# after the campaign ceiling so entity counts remain bounded on mobile.
