@@ -883,12 +883,7 @@ func _call_to_arms() -> void:
 		message = "CALL TO ARMS REQUIRES $%d" % cost
 		message_timer = 1.5
 		return
-	if source_outpost_index >= 0:
-		outposts[source_outpost_index]["sheltered"] = int(outposts[source_outpost_index]["sheltered"]) - 1
-	else:
-		civilians.remove_at(civilian_index)
-		if civilian_index < civilian_steering.size():
-			civilian_steering.remove_at(civilian_index)
+	outposts[source_outpost_index]["sheltered"] = maxi(0, int(outposts[source_outpost_index]["sheltered"]) - 1)
 	units.append({"id": _next_unit_id(), "pos": _outpost_recruit_spawn(source_outpost_index, source_position), "kind": "militia", "cooldown": 0.2, "hp": 100.0, "max_hp": 100.0, "badge": "MILITIA", "garrisoned": false, "garrison_building": -1, "move_target": null, "manual_order": false, "ai_task": "", "steering": {}})
 	funds -= cost
 	_save_operation()
@@ -1486,7 +1481,7 @@ func _find_unit_combat_target(position: Vector2, attack_range: float, sniper: bo
 	return _find_nearest_zombie(position, attack_range)
 
 func _update_auto_ops(delta: float) -> void:
-	if not auto_ops_enabled:
+	if delta <= 0.0 or not auto_ops_enabled:
 		return
 	for unit_index in range(units.size()):
 		var unit: Dictionary = units[unit_index]
@@ -2009,6 +2004,7 @@ func _handle_tap(pos: Vector2) -> void:
 		if _is_valid_street_position(world_pos):
 			_exit_unit_garrison(selected_unit_index, world_pos)
 			units[selected_unit_index]["move_target"] = world_pos
+			units[selected_unit_index]["manual_order"] = true
 			message = "SQUAD REPOSITIONED"
 			message_timer = 1.2
 			selected_unit_index = -1
