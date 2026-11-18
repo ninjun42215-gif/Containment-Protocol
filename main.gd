@@ -1152,7 +1152,8 @@ func _confirm_outpost_placement() -> void:
 		# The HQ, perimeter and evacuation zone are now registered before the campaign can tick.
 		campaign_started = not outposts.is_empty() and float(outposts[0].get("hp", 0.0)) > 0.0
 		campaign_start_grace_timer = PREPARATION_SECONDS
-		radio_banner_text = "DAY 1 — CONTAINMENT PROTOCOL ACTIVATED. COMMAND, ESTABLISH YOUR PERIMETER."
+		radio_banner_text = "VANCE: CONTAINMENT PROTOCOL IS LIVE. ROSTOVA, CONFIRM THE HOSPITAL CHANNEL."
+		radio_log.append("DAY 1 — " + radio_banner_text)
 		radio_banner_timer = 7.0
 		radio_day_announced = 1
 	outpost_placement_active = false
@@ -4104,15 +4105,20 @@ func _update_radio_transmission() -> void:
 	radio_day_announced = survival_day
 	match survival_day:
 		2:
-			radio_banner_text = "DISTRESS SIGNALS: A HOSPITAL AND ARMORY ARE STILL BROADCASTING."
+			radio_banner_text = "VANCE: ROSTOVA AT ST. MARROW HOSPITAL — BLACKWOOD RAIDERS ARE CLOSING IN."
+		3:
+			radio_banner_text = "ROSTOVA: THE ARMORY HAS RATIONS. KEEP AN ENGINEER FREE FOR SALVAGE."
 		4:
-			radio_banner_text = "BIOLOGICAL WARNING: NEW MUTATIONS DETECTED IN THE OUTER DISTRICTS."
-		7:
-			radio_banner_text = "QUARANTINE AUTHORITY: THE OFFICIAL EVACUATION ORDER WAS NEVER THE REAL MISSION."
-		10:
-			radio_banner_text = "DEEP-STATE ARCHIVE: CONTAINMENT WAS DESIGNED TO KEEP SOMETHING INSIDE."
+			radio_banner_text = "LAZARUS FILE 02: BLACKWOOD RAIDERS HAVE BEEN MOVING INFECTED SPECIMENS."
+		6:
+			radio_banner_text = "VANCE: BUILD FARMS BEFORE YOUR SETTLERS OUTNUMBER YOUR FOOD STOCKPILE."
+		9:
+			radio_banner_text = "ROSTOVA: THE QUARANTINE WAS NOT BUILT TO KEEP THE DEAD OUT."
+		14:
+			radio_banner_text = "LAZARUS FILE 07: BLACKWOOD WAS FUNDED BY THE CONTINUITY DIRECTORATE."
 		_:
-			radio_banner_text = "COMMAND LOG — DAY %d. RESISTANCE NETWORKS REPORT INCREASING INFECTED ACTIVITY." % survival_day
+			radio_banner_text = "COMMAND LOG — DAY %d. VANCE REPORTS THE OUTER DEFENSE LINE IS FAILING." % survival_day
+	radio_log.append("DAY %d — %s" % [survival_day, radio_banner_text])
 	radio_banner_timer = 7.0
 
 func _draw_radio_banner() -> void:
@@ -4231,7 +4237,7 @@ func _save_operation() -> void:
 	# Never replace a prior valid campaign with an incomplete HQ-placement state.
 	if not campaign_started or game_state == "hq_placement":
 		return
-	var state: Dictionary = {"version": SAVE_VERSION, "scrap": scrap, "fuel": fuel, "world_clock_minutes": world_clock_minutes, "survival_day": survival_day, "best_days_survived": best_days_survived, "best_civilians_saved": best_civilians_saved, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer, "tactical_decals": tactical_decals}
+	var state: Dictionary = {"version": SAVE_VERSION, "materials": scrap, "food": food, "last_upkeep_day": last_upkeep_day, "trees": trees, "wildlife": wildlife, "raider_camps": raider_camps, "constructed_buildings": constructed_buildings, "radio_log": radio_log, "scrap": scrap, "fuel": fuel, "world_clock_minutes": world_clock_minutes, "survival_day": survival_day, "best_days_survived": best_days_survived, "best_civilians_saved": best_civilians_saved, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer, "tactical_decals": tactical_decals}
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify(_save_variant(state)))
@@ -4256,7 +4262,19 @@ func _resume_operation() -> void:
 		district_seed_points.assign(state["district_seed_points"])
 	wave = int(state.get("wave", 0))
 	funds = int(state.get("funds", 300))
-	scrap = maxi(0, int(state.get("scrap", 120)))
+	scrap = maxi(0, int(state.get("materials", state.get("scrap", 120))))
+	food = maxi(0, int(state.get("food", 120)))
+	last_upkeep_day = maxi(1, int(state.get("last_upkeep_day", int(state.get("survival_day", 1)))))
+	if state.has("trees"):
+		trees.assign(state["trees"])
+	if state.has("wildlife"):
+		wildlife.assign(state["wildlife"])
+	if state.has("raider_camps"):
+		raider_camps.assign(state["raider_camps"])
+	if state.has("constructed_buildings"):
+		constructed_buildings.assign(state["constructed_buildings"])
+	if state.has("radio_log"):
+		radio_log.assign(state["radio_log"])
 	fuel = maxf(0.0, float(state.get("fuel", 300.0)))
 	initial_civilian_count = maxi(int(state.get("initial_civilian_count", 0)), civilians.size() + int(state.get("saved_count", 0)) + int(state.get("lost_count", 0)))
 	saved_count = int(state.get("saved_count", 0))
@@ -4337,6 +4355,7 @@ func _resume_operation() -> void:
 	survival_day = maxi(1, int(state.get("survival_day", floor(world_clock_minutes / 1440.0) + 1)))
 	best_days_survived = maxi(best_days_survived, int(state.get("best_days_survived", 0)))
 	best_civilians_saved = maxi(best_civilians_saved, int(state.get("best_civilians_saved", 0)))
+	last_upkeep_day = maxi(last_upkeep_day, survival_day)
 	_update_day_phase()
 	endless_containment = bool(state.get("endless_containment", false))
 	while civilian_steering.size() < civilians.size():
