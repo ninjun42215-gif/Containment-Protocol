@@ -522,6 +522,18 @@ func _process(delta: float) -> void:
 
 	for unit_index in range(units.size()):
 		var unit: Dictionary = units[unit_index]
+		var unit_move_target: Variant = unit.get("move_target", null)
+		if unit_move_target is Vector2:
+			var unit_position: Vector2 = unit["pos"]
+			var unit_waypoint: Vector2 = _outpost_gate_waypoint(unit_position, unit_move_target)
+			if unit_position.distance_to(unit_waypoint) > 12.0:
+				var raw_unit_steering: Variant = unit.get("steering", {})
+				var unit_steering: Dictionary = raw_unit_steering if raw_unit_steering is Dictionary else {}
+				var unit_speed: float = 58.0 if str(unit.get("kind", "")) == "militia" else 52.0
+				var unit_displacement: Vector2 = (unit_waypoint - unit_position).normalized() * unit_speed * sim_delta
+				unit["pos"] = _move_circle_with_buildings(unit_position, unit_displacement, 8.0, sim_delta, unit_waypoint, unit_steering)
+				unit["steering"] = unit_steering
+		units[unit_index] = unit
 		unit["cooldown"] = maxf(0.0, float(unit["cooldown"]) - sim_delta)
 		if float(unit["cooldown"]) > 0.0 or zombies.is_empty():
 			continue
