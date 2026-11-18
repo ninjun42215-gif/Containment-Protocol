@@ -223,7 +223,7 @@ func _start_sector(index: int) -> void:
 	command_tab = 0
 	manual_paused = false
 	lifecycle_paused = false
-	funds = 300
+	funds = 500
 	saved_count = 0
 	lost_count = 0
 	wave = 0
@@ -498,14 +498,20 @@ func _process(delta: float) -> void:
 		if float(unit["cooldown"]) > 0.0 or zombies.is_empty():
 			continue
 		var unit_pos: Vector2 = unit["pos"]
-		var is_sniper: bool = unit["kind"] == "sniper"
-		var attack_range: float = 390.0 if is_sniper else 205.0
+		var unit_kind: String = str(unit["kind"])
+		var is_sniper: bool = unit_kind == "sniper"
+		var is_militia: bool = unit_kind == "militia"
+		var attack_range: float = 390.0 if is_sniper else (MILITIA_RANGE if is_militia else 205.0)
 		var target_index: int = _find_nearest_zombie(unit_pos, attack_range)
 		if target_index >= 0:
 			var target_pos: Vector2 = zombies[target_index]["pos"]
 			_add_bullet_tracer(unit_pos, target_pos)
-			_damage_zombie(target_index, 80.0 if is_sniper else 35.0)
-			unit["cooldown"] = 1.05 if is_sniper else 0.62
+			var unit_damage: float = 80.0 if is_sniper else (16.0 if is_militia else 35.0)
+			var fire_interval: float = 1.05 if is_sniper else (0.85 if is_militia else 0.62)
+			if _is_near_building_type(unit_pos, "ARMORY", ARMORY_RADIUS):
+				fire_interval *= 0.85
+			_damage_zombie(target_index, unit_damage)
+			unit["cooldown"] = fire_interval
 			muzzle_flashes.append({"pos": unit_pos, "life": 0.10, "max_life": 0.10})
 			_queue_sfx("gunfire")
 			_rebuild_zombie_spatial_grid()
@@ -941,11 +947,45 @@ func _add_bullet_tracer(origin: Vector2, target: Vector2) -> void:
 	bullet_tracers.append({"from": origin, "to": target, "life": 0.12, "max_life": 0.12})
 
 func _draw_buildings() -> void:
-	for building in buildings:
-		draw_rect(building, Color("#172b27"))
-		draw_rect(building, Color("#49645a"), false, 3.0)
-		draw_line(building.position + Vector2(10.0, 14.0), building.position + Vector2(building.size.x - 10.0, 14.0), Color("#314a41"), 2.0)
-		draw_line(building.position + Vector2(10.0, building.size.y - 14.0), building.position + Vector2(building.size.x - 10.0, building.size.y - 14.0), Color("#314a41"), 2.0)
+	var visible_rect: Rect2 = _camera_view_rect().grow(120.0)
+	for index in range(buildings.size()):
+		var building: Rect2 = buildings[index]
+		if not visible_rect.intersects(building):
+			continue
+		var archetype: String = _building_type_at(index)
+		var fill: Color = Color("#172b27")
+		var edge: Color = Color("#49645a")
+		match archetype:
+			"HOSPITAL":
+				fill = Color("#203b3d")
+				edge = Color("#75d9df")
+			"ARMORY":
+				fill = Color("#3a3020")
+				edge = Color("#e5bd65")
+			"WAREHOUSE":
+				fill = Color("#30302a")
+				edge = Color("#c1a879")
+			"HIGHRISE":
+				fill = Color("#252e3c")
+				edge = Color("#8ca8c8")
+		draw_rect(building, fill)
+		draw_rect(building, edge, false, 5.0 if archetype == "HIGHRISE" else 3.0)
+		if archetype == "HOSPITAL":
+			var center: Vector2 = building.get_center()
+			draw_rect(Rect2(center - Vector2(20.0, 6.0), Vector2(40.0, 12.0)), Color("#b8f5ef"))
+			draw_rect(Rect2(center - Vector2(6.0, 20.0), Vector2(12.0, 40.0)), Color("#b8f5ef"))
+		elif archetype == "ARMORY":
+			draw_line(building.position + Vector2(20.0, 20.0), building.end - Vector2(20.0, 20.0), edge, 5.0)
+		elif archetype == "WAREHOUSE":
+			for stripe in range(1, 4):
+				var stripe_x: float = building.position.x + building.size.x * float(stripe) / 4.0
+				draw_line(Vector2(stripe_x, building.position.y + 18.0), Vector2(stripe_x, building.end.y - 18.0), edge, 3.0)
+		elif archetype == "HIGHRISE":
+			for window_index in range(1, 4):
+				var window_x: float = building.position.x + building.size.x * float(window_index) / 4.0
+				draw_line(Vector2(window_x, building.position.y + 15.0), Vector2(window_x, building.end.y - 15.0), Color("#7189a5"), 2.0)
+		else:
+			draw_line(building.position + Vector2(10.0, 14.0), building.position + Vector2(building.size.x - 10.0, 14.0), Color("#314a41"), 2.0)
 
 func _spawn_wave() -> void:
 	wave += 1
@@ -1347,15 +1387,15 @@ func _draw() -> void:
 		_draw_title_screen()
 		return
 	if game_state == "hq_placement":
-		var hq_hint := "TAP OPEN STREET TO PLACE PRIMARY HQ" if primary_hq_position.x < 0.0 else "HQ LOCKED — TAP START OPERATION"
+		var hq_hint := "DRAG TO SIZE THE STATE HQ PERIMETER" if outpost_placement_active else "DRAG ON AN OPEN STREET TO DESIGN HQ"
 		_draw_world_scene()
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 		draw_rect(Rect2(0.0, viewport_size.y - 150.0, viewport_size.x, 150.0), Color("#071713", 0.96))
 		_draw_text("SELECT HQ LOCATION", Vector2(24.0, viewport_size.y - 112.0), 22, Color("#e8fff0"))
 		_draw_text(hq_hint, Vector2(24.0, viewport_size.y - 78.0), 15, Color("#a9c8b7"))
-		if primary_hq_position.x >= 0.0:
-			draw_rect(Rect2(24.0, viewport_size.y - 62.0, viewport_size.x - 48.0, 48.0), Color("#244a38"))
-			_draw_text("[ START OPERATION ]", Vector2(170.0, viewport_size.y - 30.0), 19, Color("#f0fff5"))
+		if outpost_placement_active:
+			_draw_outpost_placement_hud(viewport_size.y - 112.0)
+			_draw_text("%.0f x %.0f  COST $%d  SHELTER %d" % [outpost_placement_rect.size.x, outpost_placement_rect.size.y, _outpost_build_cost(outpost_placement_rect.size), maxi(12, roundi(outpost_placement_rect.size.x * outpost_placement_rect.size.y / 18000.0))], Vector2(24.0, viewport_size.y - 124.0), 13, Color("#e8fff0"))
 		return
 	var shake_offset := Vector2.ZERO
 	if shake_timer > 0.0:
@@ -1396,6 +1436,8 @@ func _draw() -> void:
 	_draw_structure_actions()
 	_draw_minimap()
 	_draw_deployment_bar()
+	if outpost_placement_active:
+		_draw_outpost_placement_hud(viewport_size.y - 260.0)
 	if manual_paused or lifecycle_paused:
 		_draw_pause_overlay()
 	if game_state != "playing":
@@ -1543,18 +1585,27 @@ func _draw_entities() -> void:
 			draw_circle(p, 7.0, Color("#f0444f"))
 	for wall in barricades:
 		var wall_pos: Vector2 = wall["pos"]
-		if not visible_rect.has_point(wall_pos):
+		var wall_rect: Rect2 = wall.get("rect", Rect2(wall_pos - Vector2(15.0, 15.0), Vector2(30.0, 30.0)))
+		if not visible_rect.intersects(wall_rect):
 			continue
 		var wall_hp: float = float(wall["hp"]) / float(wall["max_hp"])
-		draw_rect(Rect2(wall_pos - Vector2(15, 15), Vector2(30, 30)), Color("#9b8b70"), false, 4.0)
-		draw_line(wall_pos + Vector2(-11, 0), wall_pos + Vector2(11, 0), Color("#cbb99a", 0.35 + 0.65 * wall_hp), 3.0)
+		draw_rect(wall_rect, Color("#9b8b70", 0.85))
+		draw_rect(wall_rect, Color("#cbb99a", 0.35 + 0.65 * wall_hp), false, 2.5)
+	for gate in gates:
+		var gate_rect: Rect2 = gate["rect"]
+		if visible_rect.intersects(gate_rect):
+			draw_rect(gate_rect, Color("#5ad88b") if bool(gate.get("open", false)) else Color("#d8ad62"))
+			draw_rect(gate_rect, Color("#eaf7db"), false, 2.0)
 	for crate in supply_crates:
 		if visible_rect.has_point(crate["pos"]):
 			draw_circle(crate["pos"], 18.0, Color(0.9, 0.72, 0.24, 0.2))
 			draw_rect(Rect2(crate["pos"] - Vector2(11.0, 11.0), Vector2(22.0, 22.0)), Color("#d8b65b"))
 			draw_line(crate["pos"] + Vector2(-7.0, 0.0), crate["pos"] + Vector2(7.0, 0.0), Color("#fff0b0"), 2.0)
 	for outpost in outposts:
-		if visible_rect.has_point(outpost["pos"]):
+		var outpost_rect: Rect2 = outpost.get("rect", Rect2(outpost["pos"] - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
+		if visible_rect.intersects(outpost_rect):
+			draw_rect(outpost_rect, Color("#43d77a", 0.08))
+			draw_rect(outpost_rect, Color("#43d77a"), false, 3.0)
 			draw_rect(Rect2(outpost["pos"] - Vector2(15.0, 15.0), Vector2(30.0, 30.0)), Color("#43d77a"))
 	for turret in turrets:
 		if visible_rect.has_point(turret["pos"]):
@@ -1564,10 +1615,14 @@ func _draw_entities() -> void:
 		var p: Vector2 = unit["pos"]
 		if not visible_rect.has_point(p):
 			continue
-		var sniper: bool = unit["kind"] == "sniper"
-		var tint := Color("#6bdc9a") if not sniper else Color("#8ab6ff")
+		var unit_kind: String = str(unit["kind"])
+		var sniper: bool = unit_kind == "sniper"
+		var militia: bool = unit_kind == "militia"
+		var tint := Color("#c6d46b") if militia else (Color("#6bdc9a") if not sniper else Color("#8ab6ff"))
 		draw_rect(Rect2(p - Vector2(9, 9), Vector2(18, 18)), tint)
-		draw_arc(p, (390.0 if sniper else 205.0) * _night_vision_multiplier(), 0.0, TAU, 48, Color(tint.r, tint.g, tint.b, 0.10), 1.0)
+		if militia:
+			_draw_text("M", p + Vector2(-4.0, 4.0), 11, Color("#1b2410"))
+		draw_arc(p, (390.0 if sniper else (MILITIA_RANGE if militia else 205.0)) * _night_vision_multiplier(), 0.0, TAU, 48, Color(tint.r, tint.g, tint.b, 0.10), 1.0)
 		if unit_index == selected_unit_index:
 			draw_arc(p, 24.0, 0.0, TAU, 32, Color("#fff28a"), 3.0)
 	for tracer in bullet_tracers:
@@ -1617,7 +1672,11 @@ func _draw_hud() -> void:
 	_draw_text("CONTAINMENT PROTOCOL", Vector2(34.0, 52.0), 22, Color("#e2f4e9"))
 	_draw_text("FUNDS  $%d" % funds, Vector2(34.0, 88.0), 21, Color("#f4d77b"))
 	_draw_text("SECTOR %02d  WAVE %d/%d" % [sector_index + 1, wave, sector_wave_limit], Vector2(34.0, 122.0), 15, Color("#ffad62"))
-	_draw_text("SAVED %d  LOST %d  HORDE %d" % [saved_count, lost_count, zombies.size()], Vector2(34.0, 142.0), 13, Color("#9cbcaf"))
+	_draw_text("SAVED %d  LOST %d  HORDE %d/%d" % [saved_count, lost_count, zombies.size(), MAX_ACTIVE_ZOMBIES], Vector2(34.0, 142.0), 13, Color("#9cbcaf"))
+	draw_rect(Rect2(18.0, 340.0, 192.0, 48.0), Color("#33422a"))
+	draw_rect(Rect2(18.0, 340.0, 192.0, 48.0), Color("#d5c36b"), false, 2.0)
+	var militia_cost: int = roundi(float(CALL_TO_ARMS_COST) * (0.75 if _is_near_building_type(primary_hq_position, "ARMORY", ARMORY_RADIUS) else 1.0))
+	_draw_text("CALL TO ARMS $%d" % militia_cost, Vector2(28.0, 370.0), 14, Color("#fff4c7"))
 	_draw_text("%s  |  %s" % [day_phase, "ENDLESS" if endless_containment else "CAMPAIGN"], Vector2(34.0, 162.0), 12, Color("#a9c8b7"))
 	if message_timer > 0.0:
 		_draw_text(message, Vector2(34.0, 177.0), 14, Color("#ffbd76"))
@@ -1797,6 +1856,11 @@ func _update_preview_position(position: Vector2) -> void:
 	queue_redraw()
 
 func _draw_placement_preview() -> void:
+	if outpost_placement_active:
+		var footprint_color: Color = Color("#55ef91") if outpost_placement_valid else Color("#ff5d62")
+		draw_rect(outpost_placement_rect, Color(footprint_color.r, footprint_color.g, footprint_color.b, 0.14))
+		draw_rect(outpost_placement_rect, footprint_color, false, 5.0)
+		return
 	if not preview_active or game_state != "playing":
 		return
 	var choices: Array = UNIT_DEPLOYMENTS if command_tab == 0 else BASE_DEPLOYMENTS
