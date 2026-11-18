@@ -374,7 +374,7 @@ func _process(delta: float) -> void:
 					zpos -= (target - wall_pos).normalized() * 38.0 * sim_delta
 				break
 
-	for turret_index in range(turrets.size() - 1, -1, -1):
+		for turret_index in range(turrets.size() - 1, -1, -1):
 			var nearby_turret: Dictionary = turrets[turret_index]
 			var turret_position: Vector2 = nearby_turret["pos"]
 			if zpos.distance_to(turret_position) <= 26.0:
