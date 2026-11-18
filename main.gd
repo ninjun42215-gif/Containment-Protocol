@@ -1135,7 +1135,7 @@ func _input(event: InputEvent) -> void:
 		var touch := event as InputEventScreenTouch
 		if touch.pressed:
 			touch_points[touch.index] = touch.position
-			if touch.position.y < viewport_size.y - 270.0 and (game_state == "hq_placement" or (game_state == "playing" and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost")):
+			if ((game_state == "hq_placement" and touch.position.y < viewport_size.y - 270.0) or (game_state == "playing" and touch.position.y > 520.0 and touch.position.y < viewport_size.y - 270.0 and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost")):
 				_begin_outpost_placement(_screen_to_world(touch.position), "hq" if game_state == "hq_placement" else "outpost")
 			if touch_points.size() == 1:
 				camera_drag_origin = touch.position
@@ -1195,7 +1195,7 @@ func _input(event: InputEvent) -> void:
 		var mouse := event as InputEventMouseButton
 		if mouse.button_index == MOUSE_BUTTON_LEFT:
 			if mouse.pressed:
-				if mouse.position.y < viewport_size.y - 270.0 and (game_state == "hq_placement" or (game_state == "playing" and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost")):
+				if ((game_state == "hq_placement" and mouse.position.y < viewport_size.y - 270.0) or (game_state == "playing" and mouse.position.y > 520.0 and mouse.position.y < viewport_size.y - 270.0 and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost")):
 					_begin_outpost_placement(_screen_to_world(mouse.position), "hq" if game_state == "hq_placement" else "outpost")
 				camera_drag_origin = mouse.position
 				camera_drag_distance = 0.0
@@ -1270,7 +1270,7 @@ func _handle_tap(pos: Vector2) -> void:
 			outpost_placement_dragging = false
 		queue_redraw()
 		return
-	if pos.x >= 18.0 and pos.x <= 210.0 and pos.y >= 340.0 and pos.y <= 390.0:
+	if pos.x >= 18.0 and pos.x <= 210.0 and pos.y >= 452.0 and pos.y <= 500.0:
 		_call_to_arms()
 		queue_redraw()
 		return
@@ -1786,10 +1786,10 @@ func _draw_hud() -> void:
 	_draw_text("FUNDS  $%d" % funds, Vector2(34.0, 88.0), 21, Color("#f4d77b"))
 	_draw_text("SECTOR %02d  WAVE %d/%d" % [sector_index + 1, wave, sector_wave_limit], Vector2(34.0, 122.0), 15, Color("#ffad62"))
 	_draw_text("SAVED %d  LOST %d  HORDE %d/%d" % [saved_count, lost_count, zombies.size(), MAX_ACTIVE_ZOMBIES], Vector2(34.0, 142.0), 13, Color("#9cbcaf"))
-	draw_rect(Rect2(18.0, 340.0, 192.0, 48.0), Color("#33422a"))
-	draw_rect(Rect2(18.0, 340.0, 192.0, 48.0), Color("#d5c36b"), false, 2.0)
+	draw_rect(Rect2(18.0, 452.0, 192.0, 48.0), Color("#33422a"))
+	draw_rect(Rect2(18.0, 452.0, 192.0, 48.0), Color("#d5c36b"), false, 2.0)
 	var militia_cost: int = roundi(float(CALL_TO_ARMS_COST) * (0.75 if _is_near_building_type(primary_hq_position, "ARMORY", ARMORY_RADIUS) else 1.0))
-	_draw_text("CALL TO ARMS $%d" % militia_cost, Vector2(28.0, 370.0), 14, Color("#fff4c7"))
+	_draw_text("CALL TO ARMS $%d" % militia_cost, Vector2(28.0, 482.0), 14, Color("#fff4c7"))
 	_draw_text("%s  |  %s" % [day_phase, "ENDLESS" if endless_containment else "CAMPAIGN"], Vector2(34.0, 162.0), 12, Color("#a9c8b7"))
 	if message_timer > 0.0:
 		_draw_text(message, Vector2(34.0, 177.0), 14, Color("#ffbd76"))
