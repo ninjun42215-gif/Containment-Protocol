@@ -74,9 +74,9 @@ jobs:
           mkdir -p build/ios
           "$GITHUB_WORKSPACE/Godot.app/Contents/MacOS/Godot" --headless --path "$GITHUB_WORKSPACE" \
             --export-debug "iOS" build/ios/ContainmentProtocol
-          test -d build/ios/ContainmentProtocol
-          test -s build/ios/ContainmentProtocol/project.pbxproj
-          ditto -c -k --sequesterRsrc --keepParent build/ios/ContainmentProtocol build/ios/ContainmentProtocol-Xcode.zip
+          test -s build/ios/ContainmentProtocol.xcodeproj/project.pbxproj
+          test -d build/ios/ContainmentProtocol.xcframework
+          ditto -c -k --sequesterRsrc --keepParent build/ios build/ios/ContainmentProtocol-Xcode.zip
           shasum -a 256 build/ios/ContainmentProtocol-Xcode.zip | tee build/ios/ContainmentProtocol-Xcode.zip.sha256
 
       - name: Upload unsigned iOS Xcode artifact
