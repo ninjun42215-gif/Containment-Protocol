@@ -2033,11 +2033,12 @@ func _draw_structure_actions() -> void:
 		_:
 			return
 	var action_top: float = STRUCTURE_ACTION_TOP + safe_insets.y
-	draw_rect(Rect2(safe_insets.x + 18.0, action_top, 380.0, 94.0), Color("#0b1b17", 0.96))
+	var action_panel_height: float = touch_target_size + 52.0
+	draw_rect(Rect2(safe_insets.x + 18.0, action_top, 380.0, action_panel_height), Color("#0b1b17", 0.96))
 	_draw_text("%s  HP %d/%d" % [structure_label, roundi(structure_hp), roundi(structure_max_hp)], Vector2(safe_insets.x + 30.0, action_top + 24.0), 14, Color("#dcefe4"))
-	draw_rect(Rect2(safe_insets.x + 24.0, action_top + 34.0, 166.0, 50.0), Color("#254538"))
-	draw_rect(Rect2(safe_insets.x + 24.0, action_top + 34.0, 166.0, 50.0), Color("#72d69a"), false, 2.0)
-	_draw_text("REPAIR $40", Vector2(safe_insets.x + 40.0, action_top + 65.0), 16, Color("#f0fff5"))
+	draw_rect(Rect2(safe_insets.x + 24.0, action_top + 42.0, 166.0, touch_target_size), Color("#254538"))
+	draw_rect(Rect2(safe_insets.x + 24.0, action_top + 42.0, 166.0, touch_target_size), Color("#72d69a"), false, 2.0)
+	_draw_text("REPAIR $40", Vector2(safe_insets.x + 40.0, action_top + 42.0 + touch_target_size * 0.62), 16, Color("#f0fff5"))
 	if can_upgrade:
 		var level := 1
 		if selected_structure_type == "outpost":
@@ -2045,35 +2046,38 @@ func _draw_structure_actions() -> void:
 		else:
 			level = int(turrets[selected_structure_index].get("level", 1))
 		if level < 2:
-			draw_rect(Rect2(safe_insets.x + 204.0, action_top + 34.0, 166.0, 50.0), Color("#3a3420"))
-			draw_rect(Rect2(safe_insets.x + 204.0, action_top + 34.0, 166.0, 50.0), Color("#e4c66d"), false, 2.0)
-			_draw_text("UPGRADE $150", Vector2(safe_insets.x + 213.0, action_top + 65.0), 15, Color("#fff4c7"))
+			draw_rect(Rect2(safe_insets.x + 204.0, action_top + 42.0, 166.0, touch_target_size), Color("#3a3420"))
+			draw_rect(Rect2(safe_insets.x + 204.0, action_top + 42.0, 166.0, touch_target_size), Color("#e4c66d"), false, 2.0)
+			_draw_text("UPGRADE $150", Vector2(safe_insets.x + 213.0, action_top + 42.0 + touch_target_size * 0.62), 15, Color("#fff4c7"))
 
 func _draw_deployment_bar() -> void:
-	var top: float = _safe_bottom_y(200.0)
+	var panel_height: float = _deployment_panel_height()
+	var top: float = _safe_bottom_y(panel_height)
 	var safe_left: float = safe_insets.x
 	var safe_width: float = viewport_size.x - safe_insets.x - safe_insets.z
-	draw_rect(Rect2(safe_left, top, safe_width, 200.0), Color("#0b1715"))
+	draw_rect(Rect2(safe_left, top, safe_width, panel_height), Color("#0b1715"))
 	draw_line(Vector2(safe_left, top), Vector2(safe_left + safe_width, top), Color("#45665a"), 2.0)
 	var half_width: float = safe_width * 0.5
-	draw_rect(Rect2(safe_left, top, half_width, 48.0), Color("#254538") if command_tab == 0 else Color("#12251f"))
-	draw_rect(Rect2(safe_left + half_width, top, half_width, 48.0), Color("#254538") if command_tab == 1 else Color("#12251f"))
-	_draw_text("UNITS & STRIKES", Vector2(safe_left + 28.0, top + 32.0), 16, Color("#e8fff0"))
-	_draw_text("BUILD BASE", Vector2(safe_left + half_width + 42.0, top + 32.0), 16, Color("#e8fff0"))
+	draw_rect(Rect2(safe_left, top, half_width, touch_target_size), Color("#254538") if command_tab == 0 else Color("#12251f"))
+	draw_rect(Rect2(safe_left + half_width, top, half_width, touch_target_size), Color("#254538") if command_tab == 1 else Color("#12251f"))
+	_draw_text("UNITS & STRIKES", Vector2(safe_left + 28.0, top + touch_target_size * 0.62), 16, Color("#e8fff0"))
+	_draw_text("BUILD BASE", Vector2(safe_left + half_width + 42.0, top + touch_target_size * 0.62), 16, Color("#e8fff0"))
 	var choices: Array = UNIT_DEPLOYMENTS if command_tab == 0 else BASE_DEPLOYMENTS
 	var button_width: float = safe_width / float(choices.size())
+	var cards_top: float = top + touch_target_size + 6.0
+	var card_height: float = panel_height - touch_target_size - 6.0
 	for i in range(choices.size()):
 		var x: float = safe_left + float(i) * button_width
 		var selected := i == selected_deployment
-		draw_rect(Rect2(x + 3.0, top + 54.0, button_width - 6.0, 140.0), Color("#254538") if selected else Color("#12251f"))
-		draw_rect(Rect2(x + 3.0, top + 54.0, button_width - 6.0, 140.0), Color("#72d69a") if selected else Color("#29443a"), false, 2.0)
+		draw_rect(Rect2(x + 3.0, cards_top, button_width - 6.0, card_height), Color("#254538") if selected else Color("#12251f"))
+		draw_rect(Rect2(x + 3.0, cards_top, button_width - 6.0, card_height), Color("#72d69a") if selected else Color("#29443a"), false, 2.0)
 		var deployment: Dictionary = choices[i]
-		_draw_text(str(deployment["name"]), Vector2(x + 8.0, top + 91.0), 13, Color("#e8fff0") if selected else Color("#b2c7bc"))
+		_draw_text(str(deployment["name"]), Vector2(x + 8.0, cards_top + card_height * 0.27), 13, Color("#e8fff0") if selected else Color("#b2c7bc"))
 		var detail := str(deployment["detail"])
 		if str(deployment["kind"]) == "outpost":
 			detail = "$%d" % _deployment_cost("outpost")
-		_draw_text(detail, Vector2(x + 8.0, top + 126.0), 12, Color("#f0cc77"))
-		_draw_text("TAP MAP", Vector2(x + 8.0, top + 163.0), 10, Color("#8da99a"))
+		_draw_text(detail, Vector2(x + 8.0, cards_top + card_height * 0.52), 12, Color("#f0cc77"))
+		_draw_text("TAP MAP", Vector2(x + 8.0, cards_top + card_height * 0.78), 10, Color("#8da99a"))
 
 func _select_structure_at(world_position: Vector2) -> bool:
 	for index in range(outposts.size() - 1, -1, -1):
