@@ -2457,7 +2457,7 @@ func _handle_tap(pos: Vector2) -> void:
 			queue_redraw()
 			return
 		selected_unit_index = -1
-	var choices: Array = UNIT_DEPLOYMENTS if command_tab == 0 else BASE_DEPLOYMENTS
+	var choices: Array = BASE_DEPLOYMENTS if command_tab == 0 else (RECRUIT_DEPLOYMENTS if command_tab == 1 else UNIT_DEPLOYMENTS)
 	if selected_deployment >= choices.size():
 		selected_deployment = 0
 	var deployment: Dictionary = choices[selected_deployment]
@@ -3197,7 +3197,7 @@ func _draw_placement_preview() -> void:
 		return
 	if not preview_active or game_state != "playing":
 		return
-	var choices: Array = UNIT_DEPLOYMENTS if command_tab == 0 else BASE_DEPLOYMENTS
+	var choices: Array = BASE_DEPLOYMENTS if command_tab == 0 else (RECRUIT_DEPLOYMENTS if command_tab == 1 else UNIT_DEPLOYMENTS)
 	if selected_deployment < 0 or selected_deployment >= choices.size():
 		return
 	var deployment: Dictionary = choices[selected_deployment]
