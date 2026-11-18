@@ -242,6 +242,7 @@ func _process(delta: float) -> void:
 	civilian_grid = _build_spatial_grid(civilians)
 	for i in range(zombies.size() - 1, -1, -1):
 		var zombie: Dictionary = zombies[i]
+		zombie["turret_attack_cooldown"] = maxf(0.0, float(zombie.get("turret_attack_cooldown", 0.0)) - sim_delta)
 		var zpos: Vector2 = zombie["pos"]
 		var target_index: int = _find_nearest_entity(civilian_grid, civilians, zpos, 640.0)
 		var target: Vector2 = _nearest_evac_zone(zpos)
@@ -290,6 +291,21 @@ func _process(delta: float) -> void:
 						zombie["wall_cooldown"] = maxf(0.0, attack_cooldown - sim_delta)
 				else:
 					zpos -= (target - wall_pos).normalized() * 38.0 * sim_delta
+				break
+		for turret_index in range(turrets.size() - 1, -1, -1):
+			var nearby_turret: Dictionary = turrets[turret_index]
+			var turret_position: Vector2 = nearby_turret["pos"]
+			if zpos.distance_to(turret_position) <= 26.0:
+				if float(zombie["turret_attack_cooldown"]) <= 0.0:
+					var turret_damage := 28.0 if zombie_kind == "brute" else 14.0
+					nearby_turret["hp"] = maxf(0.0, float(nearby_turret["hp"]) - turret_damage)
+					zombie["turret_attack_cooldown"] = 1.0
+					if float(nearby_turret["hp"]) <= 0.0:
+						turrets.remove_at(turret_index)
+						message = "SENTRY TURRET DESTROYED"
+						message_timer = 1.2
+					else:
+						turrets[turret_index] = nearby_turret
 				break
 		zombie["pos"] = zpos
 		zombies[i] = zombie
