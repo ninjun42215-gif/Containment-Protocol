@@ -39,7 +39,7 @@ const FLARE_LURE_RADIUS := 220.0
 const AUDIO_SAMPLE_RATE := 22050.0
 const MAX_ACTIVE_ZOMBIES := 650
 const PENDING_WAVE_SPAWN_INTERVAL := 0.20
-const SAVE_VERSION := 2
+const SAVE_VERSION := 3
 const OUTPOST_MIN_SIZE := 220.0
 const OUTPOST_MAX_SIZE := 760.0
 const OUTPOST_SNAP := 20.0
@@ -69,6 +69,8 @@ var zombies: Array[Dictionary] = []
 var pending_wave_spawns := 0
 var pending_wave_spawn_timer := 0.0
 var units: Array[Dictionary] = []
+var vehicles: Array[Dictionary] = []
+var auto_ops_enabled := true
 var barricades: Array[Dictionary] = []
 var flares: Array[Dictionary] = []
 var medevac: Dictionary = {}
@@ -211,6 +213,8 @@ func _start_sector(index: int) -> void:
 	civilians.clear()
 	zombies.clear()
 	units.clear()
+	vehicles.clear()
+	auto_ops_enabled = true
 	barricades.clear()
 	flares.clear()
 	outposts.clear()
@@ -304,6 +308,8 @@ func _process(delta: float) -> void:
 
 	elapsed += sim_delta
 	_update_medevac(sim_delta)
+	_update_vehicles(sim_delta)
+	_update_auto_ops(sim_delta)
 	message_timer = maxf(0.0, message_timer - sim_delta)
 	airstrike_timer = maxf(0.0, airstrike_timer - sim_delta)
 	wave_timer -= sim_delta
@@ -601,7 +607,7 @@ func _process(delta: float) -> void:
 		var attack_range: float = 390.0 if is_sniper else (MILITIA_RANGE if is_militia else 205.0)
 		if bool(unit.get("garrisoned", false)):
 			attack_range *= 1.35
-		var target_index: int = _find_nearest_zombie(unit_pos, attack_range)
+		var target_index: int = _find_unit_combat_target(unit_pos, attack_range, is_sniper)
 		if target_index >= 0:
 			var target_pos: Vector2 = zombies[target_index]["pos"]
 			var firing_origin: Vector2 = unit_pos
@@ -684,6 +690,7 @@ func _generate_state_map() -> void:
 	spawn_districts.clear()
 	district_seed_points.clear()
 	campaign_map_seed = randi()
+	vehicles.clear()
 	var map_rng := RandomNumberGenerator.new()
 	map_rng.seed = campaign_map_seed
 	for district_index in range(5):
@@ -735,6 +742,16 @@ func _generate_state_map() -> void:
 				var base_hp: float = 1800.0 if archetype == "HIGHRISE" else 900.0
 				buildings.append(rect)
 				building_archetypes.append({"type": archetype, "district": district_index, "cache_available": archetype == "WAREHOUSE", "cache_hold": 0.0, "hp": base_hp, "max_hp": base_hp, "destroyed": false, "fortified": false, "secured": false, "fortified_outpost_index": -1})
+	for vehicle_index in range(map_rng.randi_range(4, 6)):
+		var industrial_region: Rect2 = district_regions[2]
+		var humvee_pos := Vector2(map_rng.randf_range(industrial_region.position.x, industrial_region.end.x), map_rng.randf_range(industrial_region.position.y, industrial_region.end.y))
+		if _is_open_world_position(humvee_pos, 34.0):
+			vehicles.append({"kind": "humvee", "pos": humvee_pos, "hp": 350.0, "max_hp": 350.0, "active": false, "salvage_timer": 0.0, "salvage_cost": 120, "move_target": null, "onboard": 0, "cooldown": 0.0})
+	for helicopter_index in range(map_rng.randi_range(2, 3)):
+		var medical_region: Rect2 = district_regions[3]
+		var helicopter_pos := Vector2(map_rng.randf_range(medical_region.position.x, medical_region.end.x), map_rng.randf_range(medical_region.position.y, medical_region.end.y))
+		if _is_open_world_position(helicopter_pos, 42.0):
+			vehicles.append({"kind": "helicopter", "pos": helicopter_pos, "hp": 260.0, "max_hp": 260.0, "active": false, "salvage_timer": 0.0, "salvage_cost": 220, "move_target": null, "onboard": 0, "cooldown": 0.0})
 
 func _building_type_for_district(district_index: int, row: int, column: int) -> String:
 	match district_index:
@@ -839,19 +856,12 @@ func _update_gate_states() -> void:
 		gates[gate_index] = gate
 
 func _call_to_arms_cost() -> int:
-	var source_position: Vector2 = primary_hq_position
-	for outpost in outposts:
-		if int(outpost.get("sheltered", 0)) > 0:
-			source_position = outpost["pos"]
-			break
+	var source_index: int = _best_recruitment_outpost()
+	var source_position: Vector2 = outposts[source_index]["pos"] if source_index >= 0 else primary_hq_position
 	return roundi(float(CALL_TO_ARMS_COST) * (0.75 if _is_near_building_type(source_position, "ARMORY", ARMORY_RADIUS) else 1.0))
 
 func _call_to_arms() -> void:
-	var source_outpost_index: int = -1
-	for index in range(outposts.size()):
-		if int(outposts[index].get("sheltered", 0)) > 0:
-			source_outpost_index = index
-			break
+	var source_outpost_index: int = _best_recruitment_outpost()
 	var source_position: Vector2 = primary_hq_position
 	var civilian_index: int = -1
 	if source_outpost_index >= 0:
@@ -886,7 +896,7 @@ func _call_to_arms() -> void:
 		civilians.remove_at(civilian_index)
 		if civilian_index < civilian_steering.size():
 			civilian_steering.remove_at(civilian_index)
-	units.append({"pos": source_position + Vector2(28.0, 0.0), "kind": "militia", "cooldown": 0.2, "hp": 100.0, "max_hp": 100.0, "badge": "MILITIA"})
+	units.append({"id": _next_unit_id(), "pos": _outpost_recruit_spawn(source_outpost_index, source_position), "kind": "militia", "cooldown": 0.2, "hp": 100.0, "max_hp": 100.0, "badge": "MILITIA", "garrisoned": false, "garrison_building": -1, "move_target": null, "manual_order": false, "ai_task": "", "steering": {}})
 	funds -= cost
 	_save_operation()
 	message = "MILITIA RIFLEMAN MOBILIZED — $%d" % cost
@@ -1409,6 +1419,243 @@ func _draw_buildings() -> void:
 		if bool(state.get("fortified", false)):
 			draw_rect(building.grow(-7.0), Color("#53e89b"), false, 4.0)
 
+func _next_unit_id() -> int:
+	var highest_id: int = 0
+	for existing_unit in units:
+		highest_id = maxi(highest_id, int(existing_unit.get("id", 0)))
+	return highest_id + 1
+
+func _best_recruitment_outpost() -> int:
+	var best_index: int = -1
+	var best_discount: bool = false
+	for index in range(outposts.size()):
+		if int(outposts[index].get("sheltered", 0)) <= 0:
+			continue
+		var discounted: bool = _is_near_building_type(outposts[index]["pos"], "ARMORY", ARMORY_RADIUS)
+		if best_index < 0 or (discounted and not best_discount):
+			best_index = index
+			best_discount = discounted
+	return best_index
+
+func _outpost_recruit_spawn(outpost_index: int, fallback: Vector2) -> Vector2:
+	if outpost_index < 0 or outpost_index >= outposts.size():
+		return fallback + Vector2(28.0, 0.0)
+	for gate in gates:
+		if int(gate.get("outpost_index", -1)) == outpost_index:
+			return gate["rect"].get_center() + Vector2(0.0, 20.0)
+	return outposts[outpost_index]["pos"] + Vector2(0.0, 118.0)
+
+func _recruit_unit(kind: String) -> void:
+	var source_index: int = _best_recruitment_outpost()
+	if source_index < 0:
+		message = "REQUIRES 1 SHELTERED SETTLER IN AN OUTPOST"
+		message_timer = 2.0
+		return
+	var base_cost: int = 65 if kind == "infantry" else 110
+	var discounted: bool = _is_near_building_type(outposts[source_index]["pos"], "ARMORY", ARMORY_RADIUS)
+	var cost: int = roundi(float(base_cost) * (0.75 if discounted else 1.0))
+	if funds < cost:
+		message = "RECRUITMENT REQUIRES $%d" % cost
+		message_timer = 1.5
+		return
+	var spawn_position: Vector2 = _outpost_recruit_spawn(source_index, outposts[source_index]["pos"])
+	outposts[source_index]["sheltered"] = maxi(0, int(outposts[source_index].get("sheltered", 0)) - 1)
+	units.append({"id": _next_unit_id(), "pos": spawn_position, "kind": kind, "cooldown": 0.1, "hp": 100.0, "max_hp": 100.0, "garrisoned": false, "garrison_building": -1, "move_target": null, "manual_order": false, "ai_task": "", "steering": {}})
+	funds -= cost
+	selected_unit_index = units.size() - 1
+	message = "%s RECRUITED — $%d" % [kind.to_upper(), cost]
+	message_timer = 2.0
+	_save_operation()
+
+func _ai_button_rect() -> Rect2:
+	return Rect2(Vector2(safe_insets.x + 180.0, safe_insets.y + 196.0), Vector2(176.0, touch_target_size))
+
+func _recruit_button_rect(index: int) -> Rect2:
+	return Rect2(Vector2(safe_insets.x + 180.0 + float(index) * 178.0, safe_insets.y + 196.0 + touch_target_size + 6.0), Vector2(172.0, touch_target_size))
+
+func _salvage_button_rect() -> Rect2:
+	return Rect2(Vector2(safe_insets.x + 180.0, safe_insets.y + 196.0 + 2.0 * (touch_target_size + 6.0)), Vector2(172.0, touch_target_size))
+
+func _find_unit_combat_target(position: Vector2, attack_range: float, sniper: bool) -> int:
+	if sniper:
+		var special_index: int = -1
+		var special_distance: float = attack_range * attack_range
+		for index in range(zombies.size()):
+			var zombie: Dictionary = zombies[index]
+			if str(zombie.get("kind", "")) != "brute" and str(zombie.get("kind", "")) != "spitter":
+				continue
+			var distance: float = position.distance_squared_to(zombie["pos"])
+			if distance <= special_distance:
+				special_distance = distance
+				special_index = index
+		if special_index >= 0:
+			return special_index
+	return _find_nearest_zombie(position, attack_range)
+
+func _update_auto_ops(delta: float) -> void:
+	if not auto_ops_enabled:
+		return
+	for unit_index in range(units.size()):
+		var unit: Dictionary = units[unit_index]
+		if bool(unit.get("garrisoned", false)) or bool(unit.get("manual_order", false)):
+			continue
+		var current_target: Variant = unit.get("move_target", null)
+		if current_target is Vector2:
+			if unit["pos"].distance_to(current_target) > 20.0:
+				continue
+			unit["move_target"] = null
+			unit["ai_task"] = ""
+		var position: Vector2 = unit["pos"]
+		var task: String = ""
+		var target: Vector2 = position
+		if str(unit.get("kind", "")) == "infantry" and float(unit.get("hp", 100.0)) / maxf(float(unit.get("max_hp", 100.0)), 1.0) < 0.25:
+			var retreat_index: int = _nearest_outpost_index(position)
+			if retreat_index >= 0:
+				target = outposts[retreat_index]["pos"]
+				task = "RETREAT"
+		if task.is_empty():
+			var rescue_index: int = _nearest_unescorted_civilian(position, 500.0)
+			var safe_outpost_index: int = _nearest_outpost_index(position)
+			if rescue_index >= 0 and safe_outpost_index >= 0:
+				target = civilians[rescue_index]
+				task = "RESCUE"
+		if task.is_empty():
+			var crate_index: int = _nearest_supply_crate(position, 420.0)
+			if crate_index >= 0:
+				target = supply_crates[crate_index]["pos"]
+				task = "SCAVENGE"
+		if task.is_empty() and _zombies_nearby(position, 260.0):
+			var shelter_index: int = _nearest_intact_building(position, 180.0)
+			if shelter_index >= 0 and _building_garrison_count(shelter_index) < (8 if _building_type_at(shelter_index) == "HIGHRISE" else 4):
+				_garrison_unit(unit_index, shelter_index)
+				continue
+		if not task.is_empty() and position.distance_to(target) > 24.0:
+			unit["move_target"] = target
+			unit["ai_task"] = task
+			units[unit_index] = unit
+
+func _nearest_outpost_index(position: Vector2) -> int:
+	var best: int = -1
+	var best_distance: float = INF
+	for index in range(outposts.size()):
+		var distance: float = position.distance_squared_to(outposts[index]["pos"])
+		if distance < best_distance:
+			best_distance = distance
+			best = index
+	return best
+
+func _nearest_unescorted_civilian(position: Vector2, radius: float) -> int:
+	var best: int = -1
+	var best_distance: float = radius * radius
+	for index in range(civilians.size()):
+		var distance: float = position.distance_squared_to(civilians[index])
+		if distance <= best_distance:
+			best_distance = distance
+			best = index
+	return best
+
+func _nearest_supply_crate(position: Vector2, radius: float) -> int:
+	var best: int = -1
+	var best_distance: float = radius * radius
+	for index in range(supply_crates.size()):
+		var distance: float = position.distance_squared_to(supply_crates[index]["pos"])
+		if distance <= best_distance:
+			best_distance = distance
+			best = index
+	return best
+
+func _zombies_nearby(position: Vector2, radius: float) -> bool:
+	for zombie in zombies:
+		if position.distance_squared_to(zombie["pos"]) <= radius * radius:
+			return true
+	return false
+
+func _nearest_intact_building(position: Vector2, radius: float) -> int:
+	var best: int = -1
+	var best_distance: float = radius * radius
+	for index in range(buildings.size()):
+		if bool(building_archetypes[index].get("destroyed", false)):
+			continue
+		var distance: float = position.distance_squared_to(buildings[index].get_center())
+		if distance <= best_distance:
+			best_distance = distance
+			best = index
+	return best
+
+func _building_garrison_count(building_index: int) -> int:
+	var count: int = 0
+	for unit in units:
+		if bool(unit.get("garrisoned", false)) and int(unit.get("garrison_building", -1)) == building_index:
+			count += 1
+	return count
+
+func _salvage_nearest_vehicle() -> void:
+	var best_index: int = -1
+	var best_distance: float = 75.0 * 75.0
+	for index in range(vehicles.size()):
+		if bool(vehicles[index].get("active", false)):
+			continue
+		for unit in units:
+			if not bool(unit.get("garrisoned", false)):
+				var distance: float = unit["pos"].distance_squared_to(vehicles[index]["pos"])
+				if distance <= best_distance:
+					best_distance = distance
+					best_index = index
+	if best_index < 0:
+		message = "SQUAD MUST HOLD WITHIN 75M OF VEHICLE"
+		message_timer = 1.8
+		return
+	var vehicle: Dictionary = vehicles[best_index]
+	if funds < int(vehicle.get("salvage_cost", 0)):
+		message = "SALVAGE REQUIRES $%d" % int(vehicle.get("salvage_cost", 0))
+		message_timer = 1.5
+		return
+	vehicle["salvage_started"] = true
+	vehicle["salvage_timer"] = 4.0
+	vehicles[best_index] = vehicle
+	message = "SALVAGE CREW DEPLOYED — HOLD 4.0S"
+	message_timer = 1.8
+
+func _update_vehicles(delta: float) -> void:
+	for index in range(vehicles.size()):
+		var vehicle: Dictionary = vehicles[index]
+		var position: Vector2 = vehicle["pos"]
+		if not bool(vehicle.get("active", false)):
+			if bool(vehicle.get("salvage_started", false)):
+				var held: bool = false
+				for unit in units:
+					if not bool(unit.get("garrisoned", false)) and unit["pos"].distance_to(position) <= 75.0:
+						held = true
+						break
+				if held:
+					vehicle["salvage_timer"] = maxf(0.0, float(vehicle.get("salvage_timer", 4.0)) - delta)
+					if float(vehicle["salvage_timer"]) <= 0.0 and funds >= int(vehicle.get("salvage_cost", 0)):
+						funds -= int(vehicle.get("salvage_cost", 0))
+						vehicle["active"] = true
+						vehicle["salvage_started"] = false
+						message = "VEHICLE RESTORED — PLAYER CONTROL ENABLED"
+						message_timer = 2.0
+				else:
+					vehicle["salvage_timer"] = 4.0
+		else:
+			var target_value: Variant = vehicle.get("move_target", null)
+			if target_value is Vector2:
+				var target: Vector2 = target_value
+				var speed: float = 250.0 if str(vehicle.get("kind", "")) == "helicopter" else 145.0
+				var step: float = speed * delta
+				position = position.move_toward(target, step)
+				vehicle["pos"] = position
+				if position.distance_to(target) <= 8.0:
+					vehicle["move_target"] = null
+				vehicle["cooldown"] = maxf(0.0, float(vehicle.get("cooldown", 0.0)) - delta)
+				if float(vehicle["cooldown"]) <= 0.0:
+					var target_zombie: int = _find_nearest_zombie(position, 230.0)
+					if target_zombie >= 0:
+						_add_bullet_tracer(position, zombies[target_zombie]["pos"])
+						_damage_zombie(target_zombie, 24.0 if str(vehicle.get("kind", "")) == "helicopter" else 32.0)
+						vehicle["cooldown"] = 0.35
+		vehicles[index] = vehicle
+
 func _spawn_wave() -> void:
 	wave += 1
 	var escalation_phase: int = int(float(wave - 1) / 6.0) + 1
@@ -1650,6 +1897,24 @@ func _handle_tap(pos: Vector2) -> void:
 			outpost_placement_dragging = false
 		queue_redraw()
 		return
+	if _ai_button_rect().has_point(pos):
+		auto_ops_enabled = not auto_ops_enabled
+		message = "AUTO-OPS ENABLED" if auto_ops_enabled else "UNITS HOLD POSITION"
+		message_timer = 1.5
+		queue_redraw()
+		return
+	if _recruit_button_rect(0).has_point(pos):
+		_recruit_unit("infantry")
+		queue_redraw()
+		return
+	if _recruit_button_rect(1).has_point(pos):
+		_recruit_unit("sniper")
+		queue_redraw()
+		return
+	if _salvage_button_rect().has_point(pos):
+		_salvage_nearest_vehicle()
+		queue_redraw()
+		return
 	if pos.x >= safe_insets.x + HUD_EDGE_PADDING and pos.x <= safe_insets.x + HUD_EDGE_PADDING + 192.0 and pos.y >= _call_to_arms_top() and pos.y <= _call_to_arms_top() + touch_target_size:
 		_call_to_arms()
 		queue_redraw()
@@ -1821,7 +2086,8 @@ func _handle_tap(pos: Vector2) -> void:
 				return
 			medevac = {"pos": Vector2(-90.0, world_pos.y), "target": world_pos, "phase": "inbound", "hp": MEDEVAC_HP, "landing_timer": MEDEVAC_LANDING_TIME, "onboard": 0, "attack_flash": 0.0}
 		"infantry", "sniper":
-			units.append({"pos": world_pos, "kind": kind, "cooldown": 0.1, "hp": 100.0, "max_hp": 100.0})
+			_recruit_unit(kind)
+			return
 		"turret":
 			world_pos = _snap_turret_to_outpost(world_pos)
 			turrets.append({"pos": world_pos, "hp": 250.0, "max_hp": 250.0, "cooldown": 0.1, "level": 1, "range": TURRET_RANGE, "vision_radius": TURRET_RANGE, "damage": 22.0, "fire_interval": 0.18})
@@ -2167,6 +2433,24 @@ func _draw_entities() -> void:
 			var first_x: float = roof.get_center().x - float(count - 1) * 10.0
 			for pip in range(count):
 				draw_circle(Vector2(first_x + float(pip) * 20.0, roof.position.y + 30.0), 6.0, Color("#63f4cb"))
+	for vehicle_index in range(vehicles.size()):
+		var vehicle: Dictionary = vehicles[vehicle_index]
+		var vehicle_pos: Vector2 = vehicle["pos"]
+		if not visible_rect.has_point(vehicle_pos):
+			continue
+		var aircraft: bool = str(vehicle.get("kind", "")) == "helicopter"
+		var vehicle_color := Color("#73c9d6") if aircraft else Color("#b6a36a")
+		if aircraft:
+			draw_line(vehicle_pos + Vector2(-28.0, -24.0), vehicle_pos + Vector2(28.0, 24.0), vehicle_color, 4.0)
+			draw_line(vehicle_pos + Vector2(-28.0, 24.0), vehicle_pos + Vector2(28.0, -24.0), vehicle_color, 4.0)
+			draw_line(vehicle_pos + Vector2(-42.0, 0.0), vehicle_pos + Vector2(42.0, 0.0), Color("#d6f6f7"), 3.0)
+		else:
+			draw_rect(Rect2(vehicle_pos - Vector2(25.0, 14.0), Vector2(50.0, 28.0)), vehicle_color)
+			draw_rect(Rect2(vehicle_pos - Vector2(12.0, 9.0), Vector2(24.0, 18.0)), Color("#26352e"))
+		var health_ratio: float = clampf(float(vehicle.get("hp", 0.0)) / maxf(float(vehicle.get("max_hp", 1.0)), 1.0), 0.0, 1.0)
+		draw_rect(Rect2(vehicle_pos + Vector2(-24.0, -25.0), Vector2(48.0 * health_ratio, 4.0)), Color("#67e89b"))
+		if not bool(vehicle.get("active", false)):
+			_draw_text("SALVAGE $%d" % int(vehicle.get("salvage_cost", 0)), vehicle_pos + Vector2(-38.0, -34.0), 10, Color("#f4d77b"))
 	for unit_index in range(units.size()):
 		var unit: Dictionary = units[unit_index]
 		var p: Vector2 = unit["pos"]
@@ -2250,6 +2534,21 @@ func _draw_hud() -> void:
 	draw_rect(Rect2(hud_left, sfx_top, 172.0, touch_target_size), Color("#183329"))
 	draw_rect(Rect2(hud_left, sfx_top, 172.0, touch_target_size), Color("#6ccf91") if sfx_enabled else Color("#8b6262"), false, 2.0)
 	_draw_text("[SFX: ON]" if sfx_enabled else "[SFX: OFF]", Vector2(hud_left + 15.0, sfx_top + touch_target_size * 0.62), 16, Color("#e5f8eb"))
+	var ai_rect := _ai_button_rect()
+	draw_rect(ai_rect, Color("#183329"))
+	draw_rect(ai_rect, Color("#6ccf91") if auto_ops_enabled else Color("#8b6262"), false, 2.0)
+	_draw_text("[AI: %s]" % ("AUTO-OPS" if auto_ops_enabled else "HOLD POSITION"), ai_rect.position + Vector2(8.0, touch_target_size * 0.62), 12, Color("#e5f8eb"))
+	var inf_rect := _recruit_button_rect(0)
+	var sniper_rect := _recruit_button_rect(1)
+	for recruit_rect in [inf_rect, sniper_rect]:
+		draw_rect(recruit_rect, Color("#183329"))
+		draw_rect(recruit_rect, Color("#6ccf91"), false, 2.0)
+	_draw_text("[RECRUIT INF]", inf_rect.position + Vector2(7.0, touch_target_size * 0.62), 12, Color("#e5f8eb"))
+	_draw_text("[RECRUIT SNIPER]", sniper_rect.position + Vector2(7.0, touch_target_size * 0.62), 11, Color("#e5f8eb"))
+	var salvage_rect := _salvage_button_rect()
+	draw_rect(salvage_rect, Color("#3a3420"))
+	draw_rect(salvage_rect, Color("#e4c66d"), false, 2.0)
+	_draw_text("[SALVAGE]", salvage_rect.position + Vector2(10.0, touch_target_size * 0.62), 13, Color("#fff4c7"))
 	var diagnostic_rect := Rect2(Vector2(safe_insets.x + DIAGNOSTIC_BUTTON.position.x, safe_insets.y + DIAGNOSTIC_BUTTON.position.y), Vector2(DIAGNOSTIC_BUTTON.size.x, touch_target_size))
 	draw_rect(diagnostic_rect, Color("#183329"))
 	draw_rect(diagnostic_rect, Color("#6ccf91") if diagnostics_enabled else Color("#49645a"), false, 2.0)
@@ -2906,7 +3205,7 @@ func _has_valid_save() -> bool:
 		return false
 	if int(state.get("wave", -1)) < 0:
 		return false
-	var required_arrays: Array[String] = ["evacuation_zones", "civilians", "zombies", "units", "outposts", "turrets", "barricades", "gates", "building_archetypes", "district_regions", "zombie_grid_serialized", "civilian_grid_serialized"]
+	var required_arrays: Array[String] = ["evacuation_zones", "civilians", "zombies", "units", "vehicles", "outposts", "turrets", "barricades", "gates", "building_archetypes", "district_regions", "zombie_grid_serialized", "civilian_grid_serialized"]
 	for key in required_arrays:
 		if not state.has(key) or not state[key] is Array:
 			return false
@@ -2938,7 +3237,7 @@ func _save_operation() -> void:
 	# Never replace a prior valid campaign with an incomplete HQ-placement state.
 	if not campaign_started or game_state == "hq_placement":
 		return
-	var state: Dictionary = {"version": SAVE_VERSION, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "medevac": medevac, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer}
+	var state: Dictionary = {"version": SAVE_VERSION, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "medevac": medevac, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer}
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify(_save_variant(state)))
@@ -2970,6 +3269,8 @@ func _resume_operation() -> void:
 	civilians.assign(state.get("civilians", []))
 	zombies.assign(state.get("zombies", []))
 	units.assign(state.get("units", []))
+	vehicles.assign(state.get("vehicles", []))
+	auto_ops_enabled = bool(state.get("auto_ops_enabled", true))
 	outposts.assign(state.get("outposts", []))
 	turrets.assign(state.get("turrets", []))
 	barricades.assign(state.get("barricades", []))
