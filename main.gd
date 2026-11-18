@@ -601,6 +601,9 @@ func _process(delta: float) -> void:
 				var unit_displacement: Vector2 = (unit_waypoint - unit_position).normalized() * unit_speed * sim_delta
 				unit["pos"] = _move_circle_with_buildings(unit_position, unit_displacement, 8.0, sim_delta, unit_waypoint, unit_steering)
 				unit["steering"] = unit_steering
+			else:
+				unit["move_target"] = null
+				unit["manual_order"] = false
 		units[unit_index] = unit
 		unit["cooldown"] = maxf(0.0, float(unit["cooldown"]) - sim_delta)
 		if float(unit["cooldown"]) > 0.0 or zombies.is_empty():
@@ -1456,13 +1459,13 @@ func _recruit_unit(kind: String) -> void:
 	_save_operation()
 
 func _ai_button_rect() -> Rect2:
-	return Rect2(Vector2(safe_insets.x + 180.0, safe_insets.y + 196.0), Vector2(176.0, touch_target_size))
+	return Rect2(Vector2(safe_insets.x + 390.0, safe_insets.y + 196.0), Vector2(140.0, touch_target_size))
 
 func _recruit_button_rect(index: int) -> Rect2:
-	return Rect2(Vector2(safe_insets.x + 180.0 + float(index) * 178.0, safe_insets.y + 196.0 + touch_target_size + 6.0), Vector2(172.0, touch_target_size))
+	return Rect2(Vector2(safe_insets.x + 390.0, safe_insets.y + 196.0 + float(index + 1) * (touch_target_size + 6.0)), Vector2(140.0, touch_target_size))
 
 func _salvage_button_rect() -> Rect2:
-	return Rect2(Vector2(safe_insets.x + 180.0, safe_insets.y + 196.0 + 2.0 * (touch_target_size + 6.0)), Vector2(172.0, touch_target_size))
+	return Rect2(Vector2(safe_insets.x + 390.0, safe_insets.y + 196.0 + 3.0 * (touch_target_size + 6.0)), Vector2(140.0, touch_target_size))
 
 func _find_unit_combat_target(position: Vector2, attack_range: float, sniper: bool) -> int:
 	if sniper:
