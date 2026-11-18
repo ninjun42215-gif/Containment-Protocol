@@ -267,7 +267,7 @@ func _start_sector(index: int) -> void:
 				zombies.append({"pos": outbreak_position, "kind": "shambler", "hp": 30.0, "max_hp": 30.0, "wall_cooldown": 0.0})
 	message = "SCOUT THE CITY — SELECT PRIMARY HQ LOCATION"
 	message_timer = 6.0
-	camera_position = WORLD_SIZE * 0.5
+	camera_position = scenario_camera_target
 	_clamp_camera()
 
 func _process(delta: float) -> void:
@@ -822,7 +822,7 @@ func _begin_outpost_resize(world_position: Vector2) -> void:
 	outpost_placement_anchor = opposite_corners[nearest_corner_index]
 	outpost_placement_dragging = true
 	outpost_placement_gesture_mode = "resize"
-	_update_outpost_placement_from_anchor(world_position)
+	_update_outpost_placement_from_anchor(corners[nearest_corner_index])
 
 func _update_outpost_placement(world_position: Vector2) -> void:
 	_update_outpost_placement_from_anchor(world_position)
