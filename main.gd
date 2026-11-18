@@ -710,6 +710,8 @@ func _spawn_pending_wave_spawns(delta: float, fill_available: bool = false) -> v
 	if pending_wave_spawns <= 0:
 		pending_wave_spawn_timer = 0.0
 		return
+	if spawn_districts.is_empty():
+		return
 	if fill_available:
 		while pending_wave_spawns > 0 and zombies.size() < MAX_ACTIVE_ZOMBIES:
 			_spawn_one_wave_zombie()
@@ -1991,6 +1993,9 @@ func _resume_operation() -> void:
 	if state.has("spawn_districts"):
 		spawn_districts.assign(state["spawn_districts"])
 	pending_wave_spawns = maxi(0, int(state.get("pending_wave_spawns", 0)))
+	if zombies.size() > MAX_ACTIVE_ZOMBIES:
+		pending_wave_spawns += zombies.size() - MAX_ACTIVE_ZOMBIES
+		zombies.resize(MAX_ACTIVE_ZOMBIES)
 	pending_wave_spawn_timer = maxf(0.0, float(state.get("pending_wave_spawn_timer", 0.0)))
 	time_scale_index = clampi(int(state.get("time_scale_index", 0)), 0, TIME_SCALES.size() - 1)
 	day_phase = str(state.get("day_phase", "DAY"))
