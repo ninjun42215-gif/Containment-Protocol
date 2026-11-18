@@ -700,31 +700,6 @@ func _spawn_wave() -> void:
 	var count: int = mini(roundi(float(18 + wave * 8) * phase_multiplier), 900)
 	pending_wave_spawns += count
 	_spawn_pending_wave_spawns(0.0, true)
-	var brute_chance: float = clampf(0.08 + float(wave) * 0.008, 0.08, 0.32)
-	var spitter_chance: float = clampf(0.10 + float(wave) * 0.006, 0.10, 0.28)
-	var runner_chance: float = clampf(0.16 + float(wave) * 0.006, 0.16, 0.34)
-	for i in range(count):
-		var district: Rect2 = spawn_districts[randi_range(0, spawn_districts.size() - 1)]
-		var spawn_point := Vector2(randf_range(district.position.x, district.end.x), randf_range(district.position.y, district.end.y))
-		var x: float = spawn_point.x
-		var y: float = spawn_point.y
-		var roll := randf()
-		var kind := "shambler"
-		if wave >= 2 and roll < brute_chance:
-			kind = "brute"
-		elif wave >= 2 and roll < brute_chance + spitter_chance:
-			kind = "spitter"
-		elif roll < brute_chance + spitter_chance + runner_chance:
-			kind = "runner"
-		var hp := 30.0
-		if kind == "runner":
-			hp = 25.0
-		elif kind == "brute":
-			hp = 180.0 + float(wave) * 15.0
-		elif kind == "spitter":
-			hp = 42.0 + float(wave) * 4.0
-		if zombies.size() < MAX_ACTIVE_ZOMBIES:
-			zombies.append({"pos": Vector2(x, y), "kind": kind, "hp": hp, "max_hp": hp, "wall_cooldown": 0.0})
 	if wave % 5 == 0:
 		_spawn_refugee_wave()
 	message = "PHASE %d — HORDE WAVE %d INBOUND" % [ceili(float(wave) / 6.0), wave]
