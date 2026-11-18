@@ -102,7 +102,6 @@ var touch_points: Dictionary = {}
 var pinch_start_distance := 0.0
 var pinch_start_zoom := 1.0
 var command_tab := 0
-var selected_deployment := 0
 var viewport_size := VIEW_SIZE
 
 func _ready() -> void:
@@ -541,16 +540,69 @@ func _spawn_wave() -> void:
 	message_timer = 2.5
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventScreenDrag:
-		_update_preview_position(event.position)
-	elif event is InputEventMouseMotion:
-		_update_preview_position(event.position)
-	elif event is InputEventScreenTouch and event.pressed:
-		_update_preview_position(event.position)
-		_handle_tap(event.position)
-	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		_update_preview_position(event.position)
-		_handle_tap(event.position)
+	if event is InputEventScreenTouch:
+		var touch := event as InputEventScreenTouch
+		if touch.pressed:
+			touch_points[touch.index] = touch.position
+			if touch_points.size() == 1:
+				camera_drag_origin = touch.position
+				camera_last_position = touch.position
+				camera_drag_distance = 0.0
+				camera_dragging = false
+			elif touch_points.size() == 2:
+				var points: Array = touch_points.values()
+				pinch_start_distance = (points[0] as Vector2).distance_to(points[1] as Vector2)
+		else:
+			if touch_points.has(touch.index):
+				if touch_points.size() == 1 and not camera_dragging and camera_drag_distance < CAMERA_DRAG_THRESHOLD:
+					_handle_tap(touch.position)
+				touch_points.erase(touch.index)
+			if touch_points.size() < 2:
+				pinch_start_distance = 0.0
+			if touch_points.size() == 1:
+				camera_last_position = touch_points.values()[0]
+				camera_drag_distance = 0.0
+				camera_dragging = false
+	elif event is InputEventScreenDrag:
+		var drag := event as InputEventScreenDrag
+		if touch_points.has(drag.index):
+			touch_points[drag.index] = drag.position
+		if touch_points.size() >= 2:
+			var points: Array = touch_points.values()
+			var distance := (points[0] as Vector2).distance_to(points[1] as Vector2)
+			if pinch_start_distance > 0.0:
+				_zoom_camera(distance / pinch_start_distance, (points[0] + points[1]) * 0.5)
+				pinch_start_distance = distance
+		else:
+			camera_drag_distance += drag.relative.length()
+			if camera_drag_distance > CAMERA_DRAG_THRESHOLD:
+				camera_dragging = true
+			if camera_dragging:
+				camera_position -= drag.relative / camera_zoom
+				_clamp_camera()
+				queue_redraw()
+	elif event is InputEventMouseButton:
+		var mouse := event as InputEventMouseButton
+		if mouse.button_index == MOUSE_BUTTON_LEFT:
+			if mouse.pressed:
+				camera_drag_origin = mouse.position
+				camera_drag_distance = 0.0
+				camera_dragging = false
+			elif not camera_dragging and camera_drag_distance < CAMERA_DRAG_THRESHOLD:
+				_handle_tap(mouse.position)
+		elif mouse.pressed and mouse.button_index == MOUSE_BUTTON_WHEEL_UP:
+			_zoom_camera(1.12, mouse.position)
+		elif mouse.pressed and mouse.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			_zoom_camera(0.89, mouse.position)
+	elif event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		var motion := event as InputEventMouseMotion
+		camera_drag_distance += motion.relative.length()
+		if camera_drag_distance > CAMERA_DRAG_THRESHOLD:
+			camera_dragging = true
+		if camera_dragging:
+			camera_position -= motion.relative / camera_zoom
+			_clamp_camera()
+			queue_redraw()
 
 func _handle_tap(pos: Vector2) -> void:
 	if game_state == "title":
@@ -558,8 +610,8 @@ func _handle_tap(pos: Vector2) -> void:
 		queue_redraw()
 		return
 	if game_state == "sector_select":
-		if pos.y >= 570.0 and pos.y < 1005.0:
-			var selected_sector := clampi(int((pos.y - 570.0) / 145.0), 0, 2)
+		if pos.y >= viewport_size.y * 0.44 and pos.y < viewport_size.y * 0.80:
+			var selected_sector := clampi(int((pos.y - viewport_size.y * 0.44) / (viewport_size.y * 0.12)), 0, 2)
 			_start_sector(selected_sector)
 		queue_redraw()
 		return
@@ -570,10 +622,23 @@ func _handle_tap(pos: Vector2) -> void:
 	if game_state != "playing":
 		return
 	if manual_paused or lifecycle_paused:
-		if pos.x >= 150.0 and pos.x <= 570.0 and pos.y >= 700.0 and pos.y <= 810.0:
+		if pos.x >= viewport_size.x * 0.2 and pos.x <= viewport_size.x * 0.8 and pos.y >= viewport_size.y * 0.52 and pos.y <= viewport_size.y * 0.68:
 			manual_paused = false
 			lifecycle_paused = false
 		queue_redraw()
+		return
+	var minimap_rect := Rect2(Vector2(viewport_size.x - MINIMAP_SIZE.x - 18.0, 18.0), MINIMAP_SIZE)
+	if minimap_rect.has_point(pos):
+		var local := (pos - minimap_rect.position) / minimap_rect.size
+		camera_position = Vector2(local.x * WORLD_SIZE.x, local.y * WORLD_SIZE.y)
+		_clamp_camera()
+		queue_redraw()
+		return
+	if pos.x >= viewport_size.x - 112.0 and pos.y >= 220.0 and pos.y <= 276.0:
+		_zoom_camera(1.18, viewport_size * 0.5)
+		return
+	if pos.x >= viewport_size.x - 112.0 and pos.y >= 282.0 and pos.y <= 338.0:
+		_zoom_camera(0.85, viewport_size * 0.5)
 		return
 	if pos.x >= 520.0 and pos.y >= 145.0 and pos.y <= 206.0:
 		time_scale_index = (time_scale_index + 1) % TIME_SCALES.size()
@@ -586,88 +651,77 @@ func _handle_tap(pos: Vector2) -> void:
 			audio_effect = ""
 		queue_redraw()
 		return
-	if pos.y >= BAR_TOP:
-		var button_width := VIEW_SIZE.x / 6.0
-		selected_deployment = clampi(int(pos.x / button_width), 0, 5)
-		message = str(DEPLOYMENTS[selected_deployment]["name"]) + " SELECTED"
+	var bar_top := viewport_size.y - 200.0
+	if pos.y >= bar_top:
+		if pos.y <= bar_top + 48.0:
+			command_tab = 1 - command_tab
+			selected_deployment = 0
+			queue_redraw()
+			return
+		var choices: Array = UNIT_DEPLOYMENTS if command_tab == 0 else BASE_DEPLOYMENTS
+		var button_width := viewport_size.x / float(choices.size())
+		selected_deployment = clampi(int(pos.x / button_width), 0, choices.size() - 1)
+		message = str(choices[selected_deployment]["name"]) + " SELECTED"
 		message_timer = 1.2
 		queue_redraw()
 		return
 	if pos.y < 270.0:
 		return
-
-	# Squad hit-testing takes priority over repositioning, so tapping another
-	# deployed squad changes selection instead of moving the current selection.
+	var world_pos := _screen_to_world(pos)
 	for squad_index in range(units.size() - 1, -1, -1):
-		if pos.distance_to(units[squad_index]["pos"]) <= UNIT_SELECT_RADIUS:
+		if world_pos.distance_to(units[squad_index]["pos"]) <= UNIT_SELECT_RADIUS:
 			selected_unit_index = squad_index
 			message = "SQUAD SELECTED — TAP STREET TO MOVE"
 			message_timer = 2.0
 			queue_redraw()
 			return
-	# First tap selects a deployed squad; the next valid street tap repositions it.
 	if selected_unit_index >= 0 and selected_unit_index < units.size():
-		if _is_valid_street_position(pos):
-			units[selected_unit_index]["pos"] = pos
+		if _is_valid_street_position(world_pos):
+			units[selected_unit_index]["pos"] = world_pos
 			message = "SQUAD REPOSITIONED"
 			message_timer = 1.2
 			selected_unit_index = -1
 			queue_redraw()
 			return
 		selected_unit_index = -1
-	for i in range(units.size() - 1, -1, -1):
-		if pos.distance_to(units[i]["pos"]) <= UNIT_SELECT_RADIUS:
-			selected_unit_index = i
-			message = "SQUAD SELECTED — TAP STREET TO MOVE"
-			message_timer = 2.0
-			queue_redraw()
-			return
-	if not _is_valid_street_position(pos):
-		message = "POSITION BLOCKED — SELECT AN OPEN STREET"
-		message_timer = 1.4
-		queue_redraw()
-		return
-
-	var options: Array = UNIT_DEPLOYMENTS if command_tab == 0 else BASE_DEPLOYMENTS
-	if selected_deployment >= options.size():
-		return
-	var deployment: Dictionary = options[selected_deployment]
-	var cost: int = deployment["cost"]
+	var choices: Array = UNIT_DEPLOYMENTS if command_tab == 0 else BASE_DEPLOYMENTS
+	if selected_deployment >= choices.size():
+		selected_deployment = 0
+	var deployment: Dictionary = choices[selected_deployment]
+	var cost: int = int(deployment["cost"])
+	var kind: String = str(deployment["kind"])
 	if funds < cost:
 		message = "INSUFFICIENT FUNDS"
 		message_timer = 1.5
 		queue_redraw()
 		return
-
-	var kind: String = deployment["kind"]
-	if kind == "airstrike":
-		_execute_airstrike(pos)
-		funds -= cost
-	elif kind == "flare":
-		flares.append({"pos": pos, "life": FLARE_LIFETIME, "phase": 0.0})
-		funds -= cost
-		message = "TACTICAL FLARE DEPLOYED"
-		_queue_sfx("flare")
-	elif kind == "medevac":
-		if not medevac.is_empty():
-			message = "MEDEVAC ALREADY ACTIVE"
-			message_timer = 1.5
-			return
-		medevac = {"pos": Vector2(-90.0, pos.y), "target": pos, "phase": "inbound", "hp": MEDEVAC_HP, "landing_timer": MEDEVAC_LANDING_TIME, "onboard": 0, "attack_flash": 0.0}
-		funds -= cost
-		message = "MEDEVAC INBOUND"
-	elif kind == "barricade":
-		barricades.append({"pos": pos, "hp": 100.0, "max_hp": 100.0})
-		funds -= cost
-		message = "CONCRETE BARRICADE DEPLOYED"
-	elif kind == "sniper":
-		units.append({"pos": pos, "kind": "sniper", "cooldown": 0.2})
-		funds -= cost
-		message = "SNIPER TEAM DEPLOYED"
-	else:
-		units.append({"pos": pos, "kind": "infantry", "cooldown": 0.1})
-		funds -= cost
-		message = "INFANTRY SQUAD DEPLOYED"
+	if not _is_valid_street_position(world_pos):
+		message = "POSITION BLOCKED — SELECT OPEN STREET"
+		message_timer = 1.4
+		queue_redraw()
+		return
+	match kind:
+		"airstrike":
+			_execute_airstrike(world_pos)
+		"flare":
+			flares.append({"pos": world_pos, "life": FLARE_LIFETIME, "phase": 0.0})
+			_queue_sfx("flare")
+		"medevac":
+			if not medevac.is_empty():
+				message = "MEDEVAC ALREADY ACTIVE"
+				message_timer = 1.5
+				return
+			medevac = {"pos": Vector2(-90.0, world_pos.y), "target": world_pos, "phase": "inbound", "hp": MEDEVAC_HP, "landing_timer": MEDEVAC_LANDING_TIME, "onboard": 0, "attack_flash": 0.0}
+		"infantry", "sniper":
+			units.append({"pos": world_pos, "kind": kind, "cooldown": 0.1})
+		"outpost":
+			outposts.append({"pos": world_pos, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": 175.0, "vision_radius": 260.0, "hp": 500.0})
+		"turret":
+			turrets.append({"pos": world_pos, "hp": 250.0, "max_hp": 250.0, "cooldown": 0.1})
+		"wall":
+			barricades.append({"pos": world_pos, "hp": 400.0, "max_hp": 400.0})
+	funds -= cost
+	message = str(deployment["name"]) + " DEPLOYED"
 	message_timer = 1.6
 	queue_redraw()
 
@@ -905,35 +959,38 @@ func _draw_hud() -> void:
 	_draw_text("[SFX: ON]" if sfx_enabled else "[SFX: OFF]", Vector2(545.0, 247.0), 16, Color("#e5f8eb"))
 
 func _draw_deployment_bar() -> void:
-	draw_rect(Rect2(0, BAR_TOP, 720, 200), Color("#0b1715"))
-	draw_line(Vector2(0, BAR_TOP), Vector2(720, BAR_TOP), Color("#45665a"), 2.0)
-	for i in range(6):
-		var button_width := VIEW_SIZE.x / 6.0
+	var top := viewport_size.y - 200.0
+	draw_rect(Rect2(0.0, top, viewport_size.x, 200.0), Color("#0b1715"))
+	draw_line(Vector2(0.0, top), Vector2(viewport_size.x, top), Color("#45665a"), 2.0)
+	var half_width := viewport_size.x * 0.5
+	draw_rect(Rect2(0.0, top, half_width, 48.0), Color("#254538") if command_tab == 0 else Color("#12251f"))
+	draw_rect(Rect2(half_width, top, half_width, 48.0), Color("#254538") if command_tab == 1 else Color("#12251f"))
+	_draw_text("UNITS & STRIKES", Vector2(28.0, top + 32.0), 16, Color("#e8fff0"))
+	_draw_text("BUILD BASE", Vector2(half_width + 42.0, top + 32.0), 16, Color("#e8fff0"))
+	var choices: Array = UNIT_DEPLOYMENTS if command_tab == 0 else BASE_DEPLOYMENTS
+	var button_width := viewport_size.x / float(choices.size())
+	for i in range(choices.size()):
 		var x := float(i) * button_width
 		var selected := i == selected_deployment
-		var bg := Color("#254538") if selected else Color("#12251f")
-		draw_rect(Rect2(x + 3, BAR_TOP + 10, button_width - 6.0, 178), bg)
-		draw_rect(Rect2(x + 3, BAR_TOP + 10, button_width - 6.0, 178), Color("#72d69a") if selected else Color("#29443a"), false, 2.0)
-		var deployment: Dictionary = DEPLOYMENTS[i]
-		var title_color := Color("#e8fff0") if selected else Color("#b2c7bc")
-		_draw_text(str(deployment["name"]), Vector2(x + 6, BAR_TOP + 53), 12, title_color)
-		_draw_text(str(deployment["detail"]), Vector2(x + 6, BAR_TOP + 91), 11, Color("#f0cc77"))
-		var hint := "TAP MAP" if i != 3 else "TAP TARGET"
-		if i == 4:
-			hint = "TAP TO DROP"
-		elif i == 5:
-			hint = "TAP STREET"
-		_draw_text(hint, Vector2(x + 6, BAR_TOP + 133), 10, Color("#8da99a"))
+		draw_rect(Rect2(x + 3.0, top + 54.0, button_width - 6.0, 140.0), Color("#254538") if selected else Color("#12251f"))
+		draw_rect(Rect2(x + 3.0, top + 54.0, button_width - 6.0, 140.0), Color("#72d69a") if selected else Color("#29443a"), false, 2.0)
+		var deployment: Dictionary = choices[i]
+		_draw_text(str(deployment["name"]), Vector2(x + 8.0, top + 91.0), 13, Color("#e8fff0") if selected else Color("#b2c7bc"))
+		_draw_text(str(deployment["detail"]), Vector2(x + 8.0, top + 126.0), 12, Color("#f0cc77"))
+		_draw_text("TAP MAP", Vector2(x + 8.0, top + 163.0), 10, Color("#8da99a"))
 
 func _update_preview_position(position: Vector2) -> void:
-	preview_position = position
-	preview_active = selected_deployment >= 0 and selected_deployment < DEPLOYMENTS.size()
+	preview_position = _screen_to_world(position)
+	preview_active = true
 	queue_redraw()
 
 func _draw_placement_preview() -> void:
 	if not preview_active or game_state != "playing":
 		return
-	var deployment: Dictionary = DEPLOYMENTS[selected_deployment]
+	var choices: Array = UNIT_DEPLOYMENTS if command_tab == 0 else BASE_DEPLOYMENTS
+	if selected_deployment < 0 or selected_deployment >= choices.size():
+		return
+	var deployment: Dictionary = choices[selected_deployment]
 	var kind: String = str(deployment["kind"])
 	var radius := _deployment_range(kind)
 	var valid := _is_valid_street_position(preview_position) and funds >= int(deployment["cost"])
