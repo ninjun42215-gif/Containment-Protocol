@@ -111,6 +111,9 @@ var screen_font: Font
 var buildings: Array[Rect2] = []
 var building_archetypes: Array[Dictionary] = []
 var district_regions: Array[Rect2] = []
+var district_seed_points: Array[Vector2] = []
+var campaign_map_seed: int = 0
+var starting_district_index: int = 0
 var gates: Array[Dictionary] = []
 var warehouse_hold_timers: Dictionary = {}
 var outpost_placement_active := false
@@ -396,6 +399,32 @@ func _process(delta: float) -> void:
 			else:
 				zombie["medevac_cooldown"] = maxf(0.0, medevac_cooldown - sim_delta)
 		zpos = _move_circle_with_buildings(zpos, displacement, 10.0 if zombie_kind == "brute" else 7.0, sim_delta, target, zombie, true)
+		var contacted_building_index: int = _building_contact_index(zpos, 22.0)
+		if contacted_building_index >= 0 and float(zombie.get("building_attack_cooldown", 0.0)) <= 0.0:
+			var has_garrison := false
+			for garrison_unit in units:
+				if bool(garrison_unit.get("garrisoned", false)) and int(garrison_unit.get("garrison_building", -1)) == contacted_building_index:
+					has_garrison = true
+					break
+			if has_garrison:
+				var building_state: Dictionary = building_archetypes[contacted_building_index]
+				var damage: float = 72.0 if zombie_kind == "brute" else (24.0 if zombie_kind == "runner" else 36.0)
+				building_state["hp"] = maxf(0.0, float(building_state.get("hp", 900.0)) - damage)
+				zombie["building_attack_cooldown"] = 1.0
+				if float(building_state["hp"]) <= 0.0:
+					building_state["destroyed"] = true
+					building_state["secured"] = false
+					for garrison_index in range(units.size()):
+						var trapped: Dictionary = units[garrison_index]
+						if bool(trapped.get("garrisoned", false)) and int(trapped.get("garrison_building", -1)) == contacted_building_index:
+							trapped["garrisoned"] = false
+							trapped["garrison_building"] = -1
+							trapped["hp"] = maxf(1.0, float(trapped.get("hp", 100.0)) - 25.0)
+							trapped["pos"] = zpos + Vector2(randf_range(-36.0, 36.0), randf_range(-36.0, 36.0))
+							units[garrison_index] = trapped
+					message = "BUILDING BREACHED — GARRISON EXPOSED"
+					message_timer = 2.0
+				building_archetypes[contacted_building_index] = building_state
 
 		for wall_index in range(barricades.size() - 1, -1, -1):
 			var wall: Dictionary = barricades[wall_index]
@@ -529,7 +558,7 @@ func _process(delta: float) -> void:
 	for unit_index in range(units.size()):
 		var unit: Dictionary = units[unit_index]
 		var unit_move_target: Variant = unit.get("move_target", null)
-		if unit_move_target is Vector2:
+		if not bool(unit.get("garrisoned", false)) and unit_move_target is Vector2:
 			var unit_position: Vector2 = unit["pos"]
 			var unit_waypoint: Vector2 = _outpost_gate_waypoint(unit_position, unit_move_target)
 			if unit_position.distance_to(unit_waypoint) > 12.0:
@@ -548,6 +577,8 @@ func _process(delta: float) -> void:
 		var is_sniper: bool = unit_kind == "sniper"
 		var is_militia: bool = unit_kind == "militia"
 		var attack_range: float = 390.0 if is_sniper else (MILITIA_RANGE if is_militia else 205.0)
+		if bool(unit.get("garrisoned", false)):
+			attack_range *= 1.35
 		var target_index: int = _find_nearest_zombie(unit_pos, attack_range)
 		if target_index >= 0:
 			var target_pos: Vector2 = zombies[target_index]["pos"]
@@ -583,14 +614,14 @@ func _configure_sector(index: int) -> void:
 	match sector_index:
 		0:
 			sector_name = "Suburban Outskirts"
-			scenario_camera_target = Vector2(WORLD_SIZE.x * 0.5, WORLD_SIZE.y * 0.30)
 		1:
 			sector_name = "Medical & Urban Core"
-			scenario_camera_target = Vector2(WORLD_SIZE.x * 0.5, WORLD_SIZE.y * 0.10)
 		2:
 			sector_name = "Industrial Highway"
-			scenario_camera_target = Vector2(WORLD_SIZE.x * 0.5, WORLD_SIZE.y * 0.50)
 	_generate_state_map()
+	starting_district_index = randi_range(0, maxi(0, district_regions.size() - 1))
+	if starting_district_index < district_regions.size():
+		scenario_camera_target = district_regions[starting_district_index].get_center()
 
 func _scenario_civilian_count(district_index: int, base_count: int) -> int:
 	var multiplier: float = 1.0
@@ -618,29 +649,54 @@ func _generate_state_map() -> void:
 	building_archetypes.clear()
 	district_regions.clear()
 	spawn_districts.clear()
-	var band_height: float = WORLD_SIZE.y / 5.0
+	district_seed_points.clear()
+	campaign_map_seed = randi()
+	var map_rng := RandomNumberGenerator.new()
+	map_rng.seed = campaign_map_seed
 	for district_index in range(5):
-		var region := Rect2(0.0, float(district_index) * band_height, WORLD_SIZE.x, band_height)
+		var seed_point := Vector2(WORLD_SIZE.x * 0.5, WORLD_SIZE.y * 0.5)
+		var found_seed := false
+		for attempt in range(120):
+			var candidate := Vector2(map_rng.randf_range(650.0, WORLD_SIZE.x - 650.0), map_rng.randf_range(650.0, WORLD_SIZE.y - 650.0))
+			var spaced := true
+			for existing_seed in district_seed_points:
+				if candidate.distance_to(existing_seed) < 1450.0:
+					spaced = false
+					break
+			if spaced:
+				seed_point = candidate
+				found_seed = true
+				break
+		if not found_seed:
+			seed_point = Vector2(map_rng.randf_range(700.0, WORLD_SIZE.x - 700.0), map_rng.randf_range(700.0, WORLD_SIZE.y - 700.0))
+		district_seed_points.append(seed_point)
+		var region_size := Vector2(2050.0, 2200.0)
+		var region_position := seed_point - region_size * 0.5
+		region_position.x = clampf(region_position.x, 0.0, WORLD_SIZE.x - region_size.x)
+		region_position.y = clampf(region_position.y, 0.0, WORLD_SIZE.y - region_size.y)
+		var region := Rect2(region_position, region_size)
 		district_regions.append(region)
-		spawn_districts.append(region.grow(-120.0))
-		var cell_width: float = WORLD_SIZE.x / 10.0
-		var cell_height: float = (band_height - 180.0) / 3.0
+		spawn_districts.append(region.grow(-150.0))
+		var cell_width: float = region.size.x / 4.0
+		var cell_height: float = region.size.y / 3.0
 		for row in range(3):
-			for column in range(10):
-				if column == 4 or column == 5 or (row == 1 and column % 3 == 0):
-					continue
-				var width: float = randf_range(250.0, 390.0)
-				var height: float = randf_range(250.0, 390.0)
-				var x: float = float(column) * cell_width + randf_range(28.0, 75.0)
-				var y: float = region.position.y + 90.0 + float(row) * cell_height + randf_range(18.0, 55.0)
-				var rect := Rect2(x, y, minf(width, cell_width - 100.0), minf(height, cell_height - 50.0))
-				if rect.end.x >= WORLD_SIZE.x - 20.0 or rect.end.y >= region.end.y - 20.0:
+			for column in range(4):
+				if map_rng.randf() < 0.19:
 					continue
 				var archetype: String = _building_type_for_district(district_index, row, column)
+				var width: float = map_rng.randf_range(230.0, 345.0)
+				var height: float = map_rng.randf_range(230.0, 355.0)
 				if archetype == "HIGHRISE":
-					rect.size = Vector2(minf(440.0, cell_width - 90.0), minf(410.0, cell_height - 35.0))
+					width = map_rng.randf_range(340.0, 405.0)
+					height = map_rng.randf_range(350.0, 420.0)
+				var x: float = region.position.x + float(column) * cell_width + (cell_width - width) * 0.5 + map_rng.randf_range(-42.0, 42.0)
+				var y: float = region.position.y + float(row) * cell_height + (cell_height - height) * 0.5 + map_rng.randf_range(-48.0, 48.0)
+				var rect := Rect2(Vector2(x, y), Vector2(width, height))
+				rect.position.x = clampf(rect.position.x, region.position.x + 18.0, region.end.x - rect.size.x - 18.0)
+				rect.position.y = clampf(rect.position.y, region.position.y + 18.0, region.end.y - rect.size.y - 18.0)
+				var base_hp: float = 1800.0 if archetype == "HIGHRISE" else 900.0
 				buildings.append(rect)
-				building_archetypes.append({"type": archetype, "district": district_index, "cache_available": archetype == "WAREHOUSE", "cache_hold": 0.0})
+				building_archetypes.append({"type": archetype, "district": district_index, "cache_available": archetype == "WAREHOUSE", "cache_hold": 0.0, "hp": base_hp, "max_hp": base_hp, "destroyed": false, "fortified": false, "secured": false, "fortified_outpost_index": -1})
 
 func _building_type_for_district(district_index: int, row: int, column: int) -> String:
 	match district_index:
@@ -808,9 +864,16 @@ func _snap_outpost_size(size: Vector2) -> Vector2:
 func _outpost_rect_valid(rect: Rect2) -> bool:
 	if rect.position.x < 20.0 or rect.position.y < 20.0 or rect.end.x > WORLD_SIZE.x - 20.0 or rect.end.y > WORLD_SIZE.y - 20.0:
 		return false
-	for building in buildings:
-		if rect.intersects(building.grow(16.0)):
-			return false
+	var edge: float = OUTPOST_WALL_THICKNESS + 8.0
+	var edge_bands: Array[Rect2] = [Rect2(rect.position, Vector2(rect.size.x, edge)), Rect2(rect.position, Vector2(edge, rect.size.y)), Rect2(Vector2(rect.end.x - edge, rect.position.y), Vector2(edge, rect.size.y)), Rect2(Vector2(rect.position.x, rect.end.y - edge), Vector2(rect.size.x, edge))]
+	for index in range(buildings.size()):
+		var building: Rect2 = buildings[index]
+		if not rect.intersects(building) or rect.encloses(building):
+			continue
+		if _building_type_at(index) == "HIGHRISE":
+			for edge_band in edge_bands:
+				if edge_band.intersects(building):
+					return false
 	for outpost in outposts:
 		var other_rect: Rect2 = outpost.get("rect", Rect2(outpost["pos"] - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
 		if rect.intersects(other_rect.grow(40.0)):
@@ -867,14 +930,16 @@ func _confirm_outpost_placement() -> void:
 		evacuation_zones.clear()
 		evacuation_zones.append(center)
 		var hq_capacity: int = maxi(12, roundi(size.x * size.y / 18000.0))
-		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 300.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 1200.0, "max_hp": 1200.0, "level": 1, "capacity": hq_capacity, "sheltered": 0})
+		var hq_fortified_count: int = _fortify_enclosed_buildings(outpost_placement_rect, 0)
+		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 300.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 1200.0, "max_hp": 1200.0, "level": 1, "capacity": hq_capacity + hq_fortified_count * 8, "sheltered": 0, "fortified_buildings": []})
 		_create_outpost_perimeter(outpost_placement_rect, 0)
 		campaign_started = true
 		game_state = "playing"
 		wave_timer = 1.0
 	else:
 		var capacity: int = maxi(12, roundi(size.x * size.y / 18000.0))
-		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 260.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 900.0, "max_hp": 900.0, "level": 1, "capacity": capacity, "sheltered": 0})
+		var fortified_count: int = _fortify_enclosed_buildings(outpost_placement_rect, outposts.size())
+		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 260.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 900.0, "max_hp": 900.0, "level": 1, "capacity": capacity + fortified_count * 8, "sheltered": 0, "fortified_buildings": []})
 		_create_outpost_perimeter(outpost_placement_rect, outposts.size() - 1)
 	funds -= cost
 	outpost_placement_active = false
@@ -883,6 +948,26 @@ func _confirm_outpost_placement() -> void:
 	message_timer = 2.5
 	_save_operation()
 	queue_redraw()
+
+func _fortify_enclosed_buildings(rect: Rect2, outpost_index: int) -> int:
+	var count: int = 0
+	var indices: Array[int] = []
+	for building_index in range(buildings.size()):
+		if not rect.encloses(buildings[building_index]):
+			continue
+		var state: Dictionary = building_archetypes[building_index]
+		if bool(state.get("fortified", false)):
+			continue
+		state["fortified"] = true
+		state["secured"] = true
+		state["fortified_outpost_index"] = outpost_index
+		state["hp"] = float(state.get("max_hp", 900.0))
+		building_archetypes[building_index] = state
+		indices.append(building_index)
+		count += 1
+	if outpost_index >= 0 and outpost_index < outposts.size():
+		outposts[outpost_index]["fortified_buildings"] = indices
+	return count
 
 func _create_outpost_perimeter(rect: Rect2, outpost_index: int) -> void:
 	var thickness: float = OUTPOST_WALL_THICKNESS
@@ -1001,6 +1086,69 @@ func _find_nearest_entity(grid: Dictionary, positions: Array[Vector2], origin: V
 func _find_nearest_zombie(origin: Vector2, radius: float) -> int:
 	return _find_nearest_entity(zombie_grid, zombie_positions, origin, radius)
 
+func _building_index_at(position: Vector2) -> int:
+	for index in range(buildings.size()):
+		if bool(building_archetypes[index].get("destroyed", false)):
+			continue
+		if buildings[index].has_point(position):
+			return index
+	return -1
+
+func _garrison_unit(unit_index: int, building_index: int) -> void:
+	if unit_index < 0 or unit_index >= units.size() or building_index < 0 or building_index >= buildings.size():
+		return
+	var state: Dictionary = building_archetypes[building_index]
+	if bool(state.get("destroyed", false)):
+		message = "BUILDING DESTROYED — GARRISON UNAVAILABLE"
+		message_timer = 1.4
+		return
+	var unit: Dictionary = units[unit_index]
+	unit["garrisoned"] = true
+	unit["garrison_building"] = building_index
+	unit["pos"] = buildings[building_index].get_center()
+	unit.erase("move_target")
+	units[unit_index] = unit
+	selected_unit_index = unit_index
+	message = "UNIT GARRISONED — +35% RANGE / 360° FIRE"
+	message_timer = 1.8
+	queue_redraw()
+
+func _exit_unit_garrison(unit_index: int, destination: Vector2) -> void:
+	if unit_index < 0 or unit_index >= units.size():
+		return
+	var unit: Dictionary = units[unit_index]
+	var exit_position: Vector2 = destination
+	if bool(unit.get("garrisoned", false)) and not _is_valid_street_position(exit_position):
+		var building_index: int = int(unit.get("garrison_building", -1))
+		if building_index >= 0 and building_index < buildings.size():
+			var center: Vector2 = buildings[building_index].get_center()
+			var found := false
+			for radius in [48.0, 72.0, 100.0, 132.0]:
+				for angle_index in range(8):
+					var angle: float = TAU * float(angle_index) / 8.0
+					var candidate: Vector2 = center + Vector2(cos(angle), sin(angle)) * radius
+					if _is_valid_street_position(candidate):
+						exit_position = candidate
+						found = true
+						break
+				if found:
+					break
+	unit["garrisoned"] = false
+	unit["garrison_building"] = -1
+	unit["pos"] = exit_position
+	unit.erase("move_target")
+	units[unit_index] = unit
+
+func _building_contact_index(position: Vector2, distance_limit: float) -> int:
+	for index in range(buildings.size()):
+		if bool(building_archetypes[index].get("destroyed", false)):
+			continue
+		var building: Rect2 = buildings[index]
+		var nearest := Vector2(clampf(position.x, building.position.x, building.end.x), clampf(position.y, building.position.y, building.end.y))
+		if position.distance_to(nearest) <= distance_limit:
+			return index
+	return -1
+
 func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius: float, delta: float, target: Vector2 = Vector2.ZERO, steering: Dictionary = {}, block_gates_for_hostiles: bool = false) -> Vector2:
 	var position: Vector2 = origin
 	var remaining: Vector2 = displacement
@@ -1011,7 +1159,10 @@ func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius:
 		remaining = locked_tangent.normalized() * displacement.length()
 	for iteration in range(2):
 		var candidate: Vector2 = position + remaining
-		for building in buildings:
+		for building_index in range(buildings.size()):
+			if bool(building_archetypes[building_index].get("destroyed", false)):
+				continue
+			var building: Rect2 = buildings[building_index]
 			var closest: Vector2 = Vector2(
 				clampf(candidate.x, building.position.x, building.end.x),
 				clampf(candidate.y, building.position.y, building.end.y)
@@ -1151,43 +1302,57 @@ func _draw_buildings() -> void:
 		if not visible_rect.intersects(building):
 			continue
 		var archetype: String = _building_type_at(index)
-		var fill: Color = Color("#172b27")
-		var edge: Color = Color("#49645a")
+		var state: Dictionary = building_archetypes[index]
+		var fill: Color = Color("#263746")
+		var edge: Color = Color("#829db5")
+		var tag: String = "RES"
 		match archetype:
 			"HOSPITAL":
-				fill = Color("#203b3d")
-				edge = Color("#75d9df")
+				fill = Color("#40232b")
+				edge = Color("#e45b70")
+				tag = "HOSP"
 			"ARMORY":
-				fill = Color("#3a3020")
-				edge = Color("#e5bd65")
+				fill = Color("#40321d")
+				edge = Color("#e6b44e")
+				tag = "ARMORY"
 			"WAREHOUSE":
-				fill = Color("#30302a")
-				edge = Color("#c1a879")
+				fill = Color("#3b3025")
+				edge = Color("#c58b4d")
+				tag = "SUPPLY"
 			"HIGHRISE":
-				fill = Color("#252e3c")
-				edge = Color("#8ca8c8")
+				fill = Color("#1d2e3c")
+				edge = Color("#55c8d8")
+				tag = "TOWER"
+		if bool(state.get("destroyed", false)):
+			fill = Color("#171c20")
+			edge = Color("#596268")
 		draw_rect(building, fill)
 		draw_rect(building, edge, false, 5.0 if archetype == "HIGHRISE" else 3.0)
-		if archetype == "HOSPITAL":
+		if archetype == "HIGHRISE":
+			draw_rect(building.grow(-10.0), Color("#8be4ed", 0.72), false, 2.0)
+			for window_index in range(1, 4):
+				var window_x: float = building.position.x + building.size.x * float(window_index) / 4.0
+				draw_line(Vector2(window_x, building.position.y + 15.0), Vector2(window_x, building.end.y - 15.0), Color("#7189a5"), 2.0)
+		elif archetype == "HOSPITAL":
 			var center: Vector2 = building.get_center()
-			draw_rect(Rect2(center - Vector2(20.0, 6.0), Vector2(40.0, 12.0)), Color("#b8f5ef"))
-			draw_rect(Rect2(center - Vector2(6.0, 20.0), Vector2(12.0, 40.0)), Color("#b8f5ef"))
+			draw_rect(Rect2(center - Vector2(20.0, 6.0), Vector2(40.0, 12.0)), Color("#fff4f5"))
+			draw_rect(Rect2(center - Vector2(6.0, 20.0), Vector2(12.0, 40.0)), Color("#fff4f5"))
 		elif archetype == "ARMORY":
 			draw_line(building.position + Vector2(20.0, 20.0), building.end - Vector2(20.0, 20.0), edge, 5.0)
 		elif archetype == "WAREHOUSE":
 			for stripe in range(1, 4):
 				var stripe_x: float = building.position.x + building.size.x * float(stripe) / 4.0
 				draw_line(Vector2(stripe_x, building.position.y + 18.0), Vector2(stripe_x, building.end.y - 18.0), edge, 3.0)
-			if bool(building_archetypes[index].get("cache_available", false)):
+			if bool(state.get("cache_available", false)):
 				var cache_center: Vector2 = building.get_center()
 				draw_rect(Rect2(cache_center - Vector2(14.0, 14.0), Vector2(28.0, 28.0)), Color("#d8b65b"))
 				_draw_text("$100", cache_center + Vector2(-15.0, 5.0), 13, Color("#fff0b0"))
-		elif archetype == "HIGHRISE":
-			for window_index in range(1, 4):
-				var window_x: float = building.position.x + building.size.x * float(window_index) / 4.0
-				draw_line(Vector2(window_x, building.position.y + 15.0), Vector2(window_x, building.end.y - 15.0), Color("#7189a5"), 2.0)
-		else:
-			draw_line(building.position + Vector2(10.0, 14.0), building.position + Vector2(building.size.x - 10.0, 14.0), Color("#314a41"), 2.0)
+		var tag_size: int = 18 if building.size.x > 300.0 else 15
+		var tag_width: float = screen_font.get_string_size(tag, HORIZONTAL_ALIGNMENT_LEFT, -1.0, tag_size).x if screen_font != null else 70.0
+		if screen_font != null:
+			draw_string(screen_font, Vector2(building.get_center().x - tag_width * 0.5, building.get_center().y + 6.0), tag, HORIZONTAL_ALIGNMENT_LEFT, -1.0, tag_size, Color("#f5f8f2"))
+		if bool(state.get("fortified", false)):
+			draw_rect(building.grow(-7.0), Color("#53e89b"), false, 4.0)
 
 func _spawn_wave() -> void:
 	wave += 1
@@ -1500,6 +1665,27 @@ func _handle_tap(pos: Vector2) -> void:
 	if pos.y < safe_insets.y + 270.0:
 		return
 	var world_pos := _screen_to_world(pos)
+	var tapped_building: int = _building_index_at(world_pos)
+	if selected_unit_index >= 0 and selected_unit_index < units.size():
+		if tapped_building >= 0:
+			_garrison_unit(selected_unit_index, tapped_building)
+			return
+		if _is_valid_street_position(world_pos):
+			_exit_unit_garrison(selected_unit_index, world_pos)
+			units[selected_unit_index]["move_target"] = world_pos
+			message = "UNIT EXITED — MOVING TO ORDERED POSITION"
+			message_timer = 1.5
+			selected_unit_index = -1
+			queue_redraw()
+			return
+	if tapped_building >= 0:
+		for garrison_index in range(units.size()):
+			if bool(units[garrison_index].get("garrisoned", false)) and int(units[garrison_index].get("garrison_building", -1)) == tapped_building:
+				selected_unit_index = garrison_index
+				message = "GARRISON UNIT SELECTED — TAP STREET TO EXIT"
+				message_timer = 1.8
+				queue_redraw()
+				return
 	if _select_structure_at(world_pos):
 		message = "%s SELECTED" % selected_structure_type.to_upper()
 		message_timer = 1.2
@@ -1900,10 +2086,24 @@ func _draw_entities() -> void:
 	for turret in turrets:
 		if visible_rect.has_point(turret["pos"]):
 			draw_rect(Rect2(turret["pos"] - Vector2(11.0, 11.0), Vector2(22.0, 22.0)), Color("#e2bb63"))
+	for building_index in range(buildings.size()):
+		var state: Dictionary = building_archetypes[building_index]
+		if bool(state.get("destroyed", false)):
+			continue
+		var count: int = 0
+		for garrison_unit in units:
+			if bool(garrison_unit.get("garrisoned", false)) and int(garrison_unit.get("garrison_building", -1)) == building_index:
+				count += 1
+		if count > 0 and visible_rect.intersects(buildings[building_index]):
+			var roof: Rect2 = buildings[building_index]
+			draw_rect(roof.grow(-7.0), Color("#4de6a5"), false, 5.0)
+			var first_x: float = roof.get_center().x - float(count - 1) * 10.0
+			for pip in range(count):
+				draw_circle(Vector2(first_x + float(pip) * 20.0, roof.position.y + 30.0), 6.0, Color("#63f4cb"))
 	for unit_index in range(units.size()):
 		var unit: Dictionary = units[unit_index]
 		var p: Vector2 = unit["pos"]
-		if not visible_rect.has_point(p):
+		if bool(unit.get("garrisoned", false)) or not visible_rect.has_point(p):
 			continue
 		var unit_kind: String = str(unit["kind"])
 		var sniper: bool = unit_kind == "sniper"
@@ -2671,7 +2871,7 @@ func _save_operation() -> void:
 	# Never replace a prior valid campaign with an incomplete HQ-placement state.
 	if not campaign_started or game_state == "hq_placement":
 		return
-	var state: Dictionary = {"version": SAVE_VERSION, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "medevac": medevac, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer}
+	var state: Dictionary = {"version": SAVE_VERSION, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "medevac": medevac, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer}
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify(_save_variant(state)))
@@ -2690,6 +2890,10 @@ func _resume_operation() -> void:
 	var state: Dictionary = _restore_variant(parsed)
 	_configure_sector(int(state.get("sector_index", 0)))
 	sector_index = int(state.get("sector_index", 0))
+	campaign_map_seed = int(state.get("campaign_map_seed", campaign_map_seed))
+	starting_district_index = clampi(int(state.get("starting_district_index", starting_district_index)), 0, 4)
+	if state.has("district_seed_points"):
+		district_seed_points.assign(state["district_seed_points"])
 	wave = int(state.get("wave", 0))
 	funds = int(state.get("funds", 300))
 	saved_count = int(state.get("saved_count", 0))
@@ -2718,6 +2922,15 @@ func _resume_operation() -> void:
 		spawn_districts.assign(state["spawn_districts"])
 	if state.has("building_archetypes"):
 		building_archetypes.assign(state["building_archetypes"])
+	for building_index in range(building_archetypes.size()):
+		var building_state: Dictionary = building_archetypes[building_index]
+		var default_hp: float = 1800.0 if str(building_state.get("type", "")) == "HIGHRISE" else 900.0
+		building_state["hp"] = float(building_state.get("hp", default_hp))
+		building_state["max_hp"] = float(building_state.get("max_hp", default_hp))
+		building_state["destroyed"] = bool(building_state.get("destroyed", false))
+		building_state["fortified"] = bool(building_state.get("fortified", false))
+		building_state["secured"] = bool(building_state.get("secured", false))
+		building_archetypes[building_index] = building_state
 	if state.has("district_regions"):
 		district_regions.assign(state["district_regions"])
 	if state.has("gates"):
