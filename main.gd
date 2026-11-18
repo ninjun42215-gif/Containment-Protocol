@@ -1912,8 +1912,8 @@ func _update_vehicles(delta: float) -> void:
 		var helicopter: bool = str(vehicle.get("kind", "")) == "helicopter"
 		if not bool(vehicle.get("active", false)):
 			if bool(vehicle.get("salvage_started", false)):
-				var holding_unit: bool = false
-				var engineer_present: bool = false
+				var holding_unit := false
+				var engineer_present := false
 				for unit in units:
 					if bool(unit.get("garrisoned", false)) or unit["pos"].distance_to(position) > 75.0:
 						continue
@@ -1930,34 +1930,35 @@ func _update_vehicles(delta: float) -> void:
 						message_timer = 2.0
 						world_callouts.append({"pos": position, "text": "RESTORED", "life": 2.2})
 				else:
-					vehicle["salvage_timer"] = float(vehicle.get("salvage_duration", 4.0))
+					vehicle["salvage_timer"] = 4.0
 		else:
+			var speed: float = 280.0 if helicopter else 145.0
+			var moved := false
 			var target_value: Variant = vehicle.get("move_target", null)
-			if int(vehicle.get("onboard", 0)) > 0 and (not target_value is Vector2):
-				var nearest_outpost: int = _nearest_outpost_index(position)
-				if nearest_outpost >= 0:
-					vehicle["move_target"] = _nearest_outpost_gate_position(nearest_outpost, position)
+			if int(vehicle.get("onboard", 0)) > 0 and not (target_value is Vector2):
+				var destination_outpost: int = _nearest_outpost_index(position)
+				if destination_outpost >= 0:
+					vehicle["move_target"] = _nearest_outpost_gate_position(destination_outpost, position)
 					target_value = vehicle["move_target"]
 			if target_value is Vector2:
 				var target: Vector2 = target_value
-				var speed: float = 280.0 if helicopter else 145.0
-				var displacement: Vector2 = (target - position).normalized() * speed * delta
-				var next_position: Vector2 = position + displacement
+				var next_position: Vector2 = position.move_toward(target, speed * delta)
 				if helicopter or _is_valid_street_position(next_position):
+					moved = next_position.distance_squared_to(position) > 0.01
 					position = next_position
 					vehicle["pos"] = position
 				if position.distance_to(target) <= 24.0:
 					vehicle["move_target"] = null
 					if int(vehicle.get("onboard", 0)) > 0:
-						var nearest_outpost: int = _nearest_outpost_index(position)
-						if nearest_outpost >= 0 and position.distance_to(_nearest_outpost_gate_position(nearest_outpost, position)) <= 55.0:
-						var rescued: int = int(vehicle["onboard"])
-						vehicle["onboard"] = 0
-						saved_count += rescued
-						funds += rescued * 35
-						world_callouts.append({"pos": position, "text": "+$%d" % (rescued * 35), "life": 2.0})
-						message = "VEHICLE EVACUATION — %d CIVILIANS" % rescued
-						message_timer = 2.0
+						var arrival_outpost: int = _nearest_outpost_index(position)
+						if arrival_outpost >= 0 and position.distance_to(_nearest_outpost_gate_position(arrival_outpost, position)) <= 55.0:
+							var rescued: int = int(vehicle["onboard"])
+							vehicle["onboard"] = 0
+							saved_count += rescued
+							funds += rescued * 35
+							world_callouts.append({"pos": position, "text": "+$%d" % (rescued * 35), "life": 2.0})
+							message = "VEHICLE EVACUATION — %d CIVILIANS" % rescued
+							message_timer = 2.0
 			var pickup_count: int = int(vehicle.get("onboard", 0))
 			if pickup_count < 6:
 				for civilian_index in range(civilians.size() - 1, -1, -1):
@@ -1968,12 +1969,13 @@ func _update_vehicles(delta: float) -> void:
 						pickup_count += 1
 						if pickup_count >= 6:
 							break
-				vehicle["onboard"] = pickup_count
-			if not helicopter:
+			vehicle["onboard"] = pickup_count
+			if not helicopter and moved and speed >= 90.0:
 				for zombie_index in range(zombies.size() - 1, -1, -1):
-					if position.distance_to(zombies[zombie_index]["pos"]) <= 34.0 and speed >= 90.0:
+					if position.distance_to(zombies[zombie_index]["pos"]) <= 34.0:
 						var hit_zombie: Dictionary = zombies[zombie_index]
-						hit_zombie["pos"] = position + (hit_zombie["pos"] - position).normalized() * 46.0
+						var knockback: Vector2 = (hit_zombie["pos"] - position).normalized()
+						hit_zombie["pos"] = position + knockback * 46.0
 					hit_zombie["hp"] = float(hit_zombie.get("hp", 30.0)) - 45.0
 						if float(hit_zombie["hp"]) <= 0.0:
 							zombies.remove_at(zombie_index)
@@ -1991,46 +1993,8 @@ func _update_vehicles(delta: float) -> void:
 					_damage_zombie(target_zombie, 28.0 if helicopter else 32.0)
 					vehicle["cooldown"] = 0.28 if helicopter else 0.35
 		vehicles[index] = vehicle
+	_rebuild_zombie_spatial_grid()
 
-
-	for index in range(vehicles.size()):
-		var vehicle: Dictionary = vehicles[index]
-		var position: Vector2 = vehicle["pos"]
-		if not bool(vehicle.get("active", false)):
-			if bool(vehicle.get("salvage_started", false)):
-				var held: bool = false
-				for unit in units:
-					if not bool(unit.get("garrisoned", false)) and unit["pos"].distance_to(position) <= 75.0:
-						held = true
-						break
-				if held:
-					vehicle["salvage_timer"] = maxf(0.0, float(vehicle.get("salvage_timer", 4.0)) - delta)
-					if float(vehicle["salvage_timer"]) <= 0.0 and funds >= int(vehicle.get("salvage_cost", 0)):
-						funds -= int(vehicle.get("salvage_cost", 0))
-						vehicle["active"] = true
-						vehicle["salvage_started"] = false
-						message = "VEHICLE RESTORED — PLAYER CONTROL ENABLED"
-						message_timer = 2.0
-				else:
-					vehicle["salvage_timer"] = 4.0
-		else:
-			var target_value: Variant = vehicle.get("move_target", null)
-			if target_value is Vector2:
-				var target: Vector2 = target_value
-				var speed: float = 250.0 if str(vehicle.get("kind", "")) == "helicopter" else 145.0
-				var step: float = speed * delta
-				position = position.move_toward(target, step)
-				vehicle["pos"] = position
-				if position.distance_to(target) <= 8.0:
-					vehicle["move_target"] = null
-				vehicle["cooldown"] = maxf(0.0, float(vehicle.get("cooldown", 0.0)) - delta)
-				if float(vehicle["cooldown"]) <= 0.0:
-					var target_zombie: int = _find_nearest_zombie(position, 230.0)
-					if target_zombie >= 0:
-						_add_bullet_tracer(position, zombies[target_zombie]["pos"])
-						_damage_zombie(target_zombie, 24.0 if str(vehicle.get("kind", "")) == "helicopter" else 32.0)
-						vehicle["cooldown"] = 0.35
-		vehicles[index] = vehicle
 
 func _spawn_wave() -> void:
 	wave += 1
