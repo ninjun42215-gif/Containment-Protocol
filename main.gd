@@ -2526,8 +2526,55 @@ func _handle_tap(pos: Vector2) -> void:
 			message = "VEHICLE SELECTED — TAP DESTINATION"
 			message_timer = 1.6
 			return
+	for camp in raider_camps:
+		if world_pos.distance_squared_to(camp["pos"]) <= 70.0 * 70.0:
+			_interact_raider_camp(world_pos)
+			queue_redraw()
+			return
+	for tree_index in range(trees.size()):
+		if bool(trees[tree_index].get("alive", false)) and world_pos.distance_squared_to(trees[tree_index]["pos"]) <= 30.0 * 30.0:
+			var worker_index: int = selected_unit_index
+			if worker_index < 0 or worker_index >= units.size():
+				worker_index = 0 if not units.is_empty() else -1
+			if worker_index >= 0:
+				units[worker_index]["work_kind"] = "chop"
+				units[worker_index]["work_target_index"] = tree_index
+				units[worker_index]["work_timer"] = 3.0
+				units[worker_index]["move_target"] = trees[tree_index]["pos"]
+				units[worker_index]["manual_order"] = true
+				message = "TREE HARVEST ORDERED"
+			else:
+				message = "RECRUIT A SQUAD TO HARVEST TIMBER"
+			message_timer = 1.6
+			queue_redraw()
+			return
+	for animal_index in range(wildlife.size()):
+		if bool(wildlife[animal_index].get("alive", false)) and world_pos.distance_squared_to(wildlife[animal_index]["pos"]) <= 28.0 * 28.0:
+			var hunter_index: int = selected_unit_index
+			if hunter_index >= 0 and hunter_index < units.size() and (str(units[hunter_index].get("kind", "")) == "infantry" or str(units[hunter_index].get("kind", "")) == "sniper"):
+				units[hunter_index]["work_kind"] = "hunt"
+				units[hunter_index]["work_target_index"] = animal_index
+				units[hunter_index]["work_timer"] = 3.0
+				units[hunter_index]["move_target"] = wildlife[animal_index]["pos"]
+				units[hunter_index]["manual_order"] = true
+				message = "HUNT ORDERED"
+			else:
+				message = "SELECT INFANTRY OR SNIPER TO HUNT"
+			message_timer = 1.6
+			queue_redraw()
+			return
 	var tapped_building: int = _building_index_at(world_pos)
 	if selected_unit_index >= 0 and selected_unit_index < units.size():
+		if tapped_building >= 0 and str(units[selected_unit_index].get("kind", "")) == "engineer":
+			units[selected_unit_index]["work_kind"] = "demolish"
+			units[selected_unit_index]["work_target_index"] = tapped_building
+			units[selected_unit_index]["work_timer"] = 5.0
+			units[selected_unit_index]["move_target"] = buildings[tapped_building].get_center()
+			units[selected_unit_index]["manual_order"] = true
+			message = "ENGINEER ORDERED TO DEMOLISH — 5.0S"
+			message_timer = 2.0
+			queue_redraw()
+			return
 		if tapped_building >= 0:
 			_garrison_unit(selected_unit_index, tapped_building)
 			return
