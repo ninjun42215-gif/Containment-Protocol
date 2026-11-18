@@ -327,6 +327,7 @@ func _start_sector(index: int) -> void:
 				civilians.append(spawn_point)
 				civilian_steering.append({})
 	initial_civilian_count = civilians.size()
+	_populate_ecology()
 	for district_index in range(spawn_districts.size()):
 		var district: Rect2 = spawn_districts[district_index]
 		for outbreak_index in range(_scenario_initial_zombie_count(district_index)):
@@ -861,6 +862,31 @@ func _generate_state_map() -> void:
 		var medical_region: Rect2 = district_regions[3]
 		var helicopter_pos: Vector2 = _find_vehicle_spawn_position(map_rng, medical_region, 42.0, helicopter_index, "helicopter")
 		vehicles.append({"kind": "helicopter", "pos": helicopter_pos, "hp": 260.0, "max_hp": 260.0, "active": false, "salvage_timer": 4.0, "salvage_cost": 220, "move_target": null, "onboard": 0, "cooldown": 0.0, "salvage_started": false})
+
+func _populate_ecology() -> void:
+	var ecology_rng := RandomNumberGenerator.new()
+	ecology_rng.seed = abs(campaign_map_seed) + 12017
+	var tree_districts: Array[int] = [1, 4, 5, 7]
+	for tree_index in range(260):
+		var district_index: int = tree_districts[tree_index % tree_districts.size()]
+		if district_index >= spawn_districts.size():
+			continue
+		var region: Rect2 = spawn_districts[district_index]
+		var candidate := Vector2(ecology_rng.randf_range(region.position.x, region.end.x), ecology_rng.randf_range(region.position.y, region.end.y))
+		if _is_open_world_position(candidate, 20.0):
+			trees.append({"pos": candidate, "alive": true, "work_timer": 3.0})
+	for herd_index in range(14):
+		var district_index: int = 4 if herd_index % 2 == 0 else 7
+		var region: Rect2 = spawn_districts[district_index]
+		var center := Vector2(ecology_rng.randf_range(region.position.x, region.end.x), ecology_rng.randf_range(region.position.y, region.end.y))
+		for animal_index in range(ecology_rng.randi_range(2, 4)):
+			var animal_pos := center + Vector2(ecology_rng.randf_range(-70.0, 70.0), ecology_rng.randf_range(-70.0, 70.0))
+			wildlife.append({"pos": animal_pos, "kind": "boar" if ecology_rng.randf() < 0.28 else "deer", "alive": true})
+	for camp_index in range(3):
+		var district_index: int = 5 if camp_index % 2 == 0 else 7
+		var camp_region: Rect2 = spawn_districts[district_index]
+		var camp_pos := Vector2(ecology_rng.randf_range(camp_region.position.x, camp_region.end.x), ecology_rng.randf_range(camp_region.position.y, camp_region.end.y))
+		raider_camps.append({"pos": camp_pos, "raided": false, "food_stock": ecology_rng.randi_range(90, 160), "materials_stock": ecology_rng.randi_range(70, 130), "fuel_stock": ecology_rng.randi_range(35, 70)})
 
 func _find_vehicle_spawn_position(map_rng: RandomNumberGenerator, region: Rect2, margin: float, spawn_index: int, kind: String) -> Vector2:
 	for attempt in range(80):
@@ -1740,6 +1766,12 @@ func _update_auto_ops(delta: float) -> void:
 					unit["move_target"] = null
 					units[unit_index] = unit
 					continue
+		if task == "CHOP" or task == "HUNT":
+			unit["work_kind"] = "chop" if task == "CHOP" else "hunt"
+			unit["work_target_index"] = int(unit.get("ai_target_index", -1))
+			unit["work_timer"] = 3.0
+			units[unit_index] = unit
+			continue
 		if task == "SUPPLY":
 			var crate_index: int = int(unit.get("ai_target_index", -1))
 			if crate_index >= 0 and crate_index < supply_crates.size() and position.distance_to(supply_crates[crate_index]["pos"]) <= 30.0:
@@ -1787,6 +1819,18 @@ func _update_auto_ops(delta: float) -> void:
 				next_task = "SUPPLY"
 				unit["ai_target_index"] = crate_index
 				reserved_crates.append(crate_index)
+		if next_task.is_empty() and (str(unit.get("kind", "")) == "infantry" or str(unit.get("kind", "")) == "sniper"):
+			var animal_index: int = _nearest_wildlife(position, 500.0)
+			if animal_index >= 0:
+				next_target = wildlife[animal_index]["pos"]
+				next_task = "HUNT"
+				unit["ai_target_index"] = animal_index
+		if next_task.is_empty():
+			var tree_index: int = _nearest_tree(position, 500.0)
+			if tree_index >= 0:
+				next_target = trees[tree_index]["pos"]
+				next_task = "CHOP"
+				unit["ai_target_index"] = tree_index
 		if next_task.is_empty() and _zombies_nearby(position, 260.0):
 			var shelter_index: int = _nearest_intact_building(position, 180.0)
 			if shelter_index >= 0 and _building_garrison_count(shelter_index) < (8 if _building_type_at(shelter_index) == "HIGHRISE" else 4):
