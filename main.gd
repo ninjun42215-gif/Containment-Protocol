@@ -862,7 +862,7 @@ func _handle_tap(pos: Vector2) -> void:
 			outposts.append({"pos": world_pos, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": 175.0, "vision_radius": 260.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 500.0, "max_hp": 500.0, "level": 1, "capacity": 8, "safe_count": 0})
 			cost = outpost_cost
 		"turret":
-			turrets.append({"pos": world_pos, "hp": 250.0, "max_hp": 250.0, "cooldown": 0.1, "level": 1, "range": TURRET_RANGE, "damage": 22.0, "fire_interval": 0.18})
+			turrets.append({"pos": world_pos, "hp": 250.0, "max_hp": 250.0, "cooldown": 0.1, "level": 1, "range": TURRET_RANGE, "vision_radius": TURRET_RANGE, "damage": 22.0, "fire_interval": 0.18})
 		"wall":
 			barricades.append({"pos": world_pos, "hp": 400.0, "max_hp": 400.0})
 	funds -= cost
@@ -1076,7 +1076,7 @@ func _is_position_visible(world_position: Vector2) -> bool:
 		if world_position.distance_squared_to(outpost["pos"]) <= outpost_radius * outpost_radius:
 			return true
 	for turret in turrets:
-		var turret_radius := float(turret.get("range", TURRET_RANGE))
+		var turret_radius := float(turret.get("vision_radius", TURRET_RANGE))
 		if world_position.distance_squared_to(turret["pos"]) <= turret_radius * turret_radius:
 			return true
 	for flare in flares:
