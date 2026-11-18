@@ -292,7 +292,7 @@ func _process(delta: float) -> void:
 		var direction: Vector2 = (civilian_safe_target - civilian).normalized()
 		var displacement: Vector2 = direction * 43.0 * sim_delta
 		var civilian_steer: Dictionary = civilian_steering[i] if i < civilian_steering.size() else {}
-		civilian = _move_circle_with_buildings(civilian, displacement, 5.5, civilian_safe_target, civilian_steer)
+		civilian = _move_circle_with_buildings(civilian, displacement, 5.5, sim_delta, civilian_safe_target, civilian_steer)
 		if i < civilian_steering.size():
 			civilian_steering[i] = civilian_steer
 		civilians[i] = civilian
@@ -347,7 +347,7 @@ func _process(delta: float) -> void:
 					medevac.clear()
 			else:
 				zombie["medevac_cooldown"] = maxf(0.0, medevac_cooldown - sim_delta)
-		zpos = _move_circle_with_buildings(zpos, displacement, 10.0 if zombie_kind == "brute" else 7.0, target, zombie)
+		zpos = _move_circle_with_buildings(zpos, displacement, 10.0 if zombie_kind == "brute" else 7.0, sim_delta, target, zombie)
 
 		for wall_index in range(barricades.size() - 1, -1, -1):
 			var wall: Dictionary = barricades[wall_index]
@@ -551,10 +551,10 @@ func _find_nearest_entity(grid: Dictionary, positions: Array[Vector2], origin: V
 func _find_nearest_zombie(origin: Vector2, radius: float) -> int:
 	return _find_nearest_entity(zombie_grid, zombie_positions, origin, radius)
 
-func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius: float, target: Vector2 = Vector2.ZERO, steering: Dictionary = {}) -> Vector2:
+func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius: float, delta: float, target: Vector2 = Vector2.ZERO, steering: Dictionary = {}) -> Vector2:
 	var position: Vector2 = origin
 	var remaining: Vector2 = displacement
-	var lock_time: float = maxf(0.0, float(steering.get("lock_time", 0.0)) - get_process_delta_time())
+	var lock_time: float = maxf(0.0, float(steering.get("lock_time", 0.0)) - delta)
 	steering["lock_time"] = lock_time
 	var locked_tangent: Vector2 = steering.get("tangent", Vector2.ZERO)
 	if lock_time > 0.0 and locked_tangent.length_squared() > 0.001:
@@ -1840,7 +1840,22 @@ func _has_valid_save() -> bool:
 		return false
 	var parsed: Variant = JSON.parse_string(save_file.get_as_text())
 	save_file.close()
-	return parsed is Dictionary and int(parsed.get("version", 0)) == 1
+	if not parsed is Dictionary:
+		return false
+	var state: Dictionary = parsed
+	if int(state.get("version", 0)) != 1:
+		return false
+	if int(state.get("sector_index", -1)) < 0 or int(state.get("sector_index", -1)) > 2:
+		return false
+	if int(state.get("wave", -1)) < 0:
+		return false
+	var required_arrays: Array[String] = ["evacuation_zones", "civilians", "zombies", "units", "outposts", "turrets", "barricades"]
+	for key in required_arrays:
+		if not state.has(key) or not state[key] is Array:
+			return false
+	var saved_hq: Variant = state.get("primary_hq_position")
+	var saved_camera: Variant = state.get("camera_position")
+	return saved_hq is Dictionary and saved_hq.has("__vector2") and saved_camera is Dictionary and saved_camera.has("__vector2")
 
 func _save_operation() -> void:
 	if not campaign_started:
