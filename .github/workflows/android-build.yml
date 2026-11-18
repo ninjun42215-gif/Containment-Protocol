@@ -14,9 +14,15 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Android Templates
+        shell: bash
         run: |
-          mkdir -v -p ~/.local/share/godot/export_templates/
-          mv /root/.local/share/godot/export_templates/* ~/.local/share/godot/export_templates/
+          set -euo pipefail
+          mkdir -v -p "$HOME/.local/share/godot/export_templates/"
+          test -d /root/.local/share/godot/export_templates
+          cp -a /root/.local/share/godot/export_templates/. "$HOME/.local/share/godot/export_templates/"
+          echo "Installed Godot export template files:"
+          find "$HOME/.local/share/godot/export_templates" -maxdepth 3 -type f -print | sort
+          test -s "$HOME/.local/share/godot/export_templates/4.3.stable/android_source.zip"
 
       - name: Configure Java, Android SDK and export signing
         shell: bash
@@ -32,8 +38,7 @@ jobs:
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/cmdline-tools/bin/sdkmanager"
           test -x "$SDKMANAGER"
 
-          # Use process substitution so the 'yes' helper's expected SIGPIPE
-          # does not fail this step under Bash pipefail (Build #8 exit 141).
+          # Avoid the yes-helper SIGPIPE failure under pipefail.
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses < <(yes)
 
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
@@ -94,11 +99,17 @@ jobs:
           test -x "$ANDROID_HOME/platform-tools/adb"
           test -x "$ANDROID_HOME/build-tools/34.0.0/zipalign"
           test -s "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH"
-          find "$HOME/.local/share/godot/export_templates" -maxdepth 2 -type f \\( -name 'android_debug.apk' -o -name 'android_release.apk' -o -name 'android_source.zip' \\) -print
+          echo "Godot export templates:"
+          find "$HOME/.local/share/godot/export_templates" -maxdepth 3 -type f -print | sort
+          test -s "$HOME/.local/share/godot/export_templates/4.3.stable/android_source.zip"
 
           mkdir -v -p build/android
           godot --headless --verbose --path . --export-debug "Android" build/android/ContainmentProtocol.apk 2>&1 | tee build/android/export.log
           test -s build/android/ContainmentProtocol.apk
+          echo "APK size:"
+          ls -lh build/android/ContainmentProtocol.apk
+          echo "Export log tail:"
+          tail -n 80 build/android/export.log
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
