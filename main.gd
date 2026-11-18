@@ -1266,7 +1266,7 @@ func _input(event: InputEvent) -> void:
 			touch_points[touch.index] = touch.position
 			if touch_points.size() == 1:
 				var touch_world: Vector2 = _screen_to_world(touch.position)
-				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and touch.position.y < viewport_size.y - 270.0) or (game_state == "playing" and touch.position.y > 520.0 and touch.position.y < viewport_size.y - 270.0 and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
+				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and touch.position.y < _safe_bottom_y(150.0)) or (game_state == "playing" and touch.position.y > safe_insets.y + 520.0 and touch.position.y < _safe_bottom_y(260.0) and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
 				if can_start_placement:
 					_begin_outpost_placement(touch_world, "hq" if game_state == "hq_placement" else "outpost")
 				elif outpost_placement_active:
@@ -1339,7 +1339,7 @@ func _input(event: InputEvent) -> void:
 		if mouse.button_index == MOUSE_BUTTON_LEFT:
 			if mouse.pressed:
 				var mouse_world: Vector2 = _screen_to_world(mouse.position)
-				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and mouse.position.y < viewport_size.y - 270.0) or (game_state == "playing" and mouse.position.y > 520.0 and mouse.position.y < viewport_size.y - 270.0 and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
+				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and mouse.position.y < _safe_bottom_y(150.0)) or (game_state == "playing" and mouse.position.y > safe_insets.y + 520.0 and mouse.position.y < _safe_bottom_y(260.0) and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
 				if can_start_placement:
 					_begin_outpost_placement(mouse_world, "hq" if game_state == "hq_placement" else "outpost")
 				elif outpost_placement_active:
@@ -1387,7 +1387,7 @@ func _handle_tap(pos: Vector2) -> void:
 		return
 	if game_state == "hq_placement":
 		if outpost_placement_active and pos.y >= _safe_bottom_y(60.0) and pos.y <= viewport_size.y - safe_insets.w:
-			if pos.x < viewport_size.x * 0.5:
+			if pos.x < safe_insets.x + (viewport_size.x - safe_insets.x - safe_insets.z) * 0.5:
 				_confirm_outpost_placement()
 			else:
 				outpost_placement_active = false
@@ -1422,14 +1422,14 @@ func _handle_tap(pos: Vector2) -> void:
 	if game_state != "playing":
 		return
 	if outpost_placement_active and pos.y >= _safe_bottom_y(260.0) and pos.y <= _safe_bottom_y(206.0):
-		if pos.x < viewport_size.x * 0.5:
+		if pos.x < safe_insets.x + (viewport_size.x - safe_insets.x - safe_insets.z) * 0.5:
 			_confirm_outpost_placement()
 		else:
 			outpost_placement_active = false
 			outpost_placement_dragging = false
 		queue_redraw()
 		return
-	if pos.x >= safe_insets.x + 18.0 and pos.x <= safe_insets.x + 210.0 and pos.y >= safe_insets.y + 452.0 and pos.y <= safe_insets.y + 508.0:
+	if pos.x >= safe_insets.x + 18.0 and pos.x <= safe_insets.x + 210.0 and pos.y >= safe_insets.y + 434.0 and pos.y <= safe_insets.y + 490.0:
 		_call_to_arms()
 		queue_redraw()
 		return
@@ -1479,15 +1479,17 @@ func _handle_tap(pos: Vector2) -> void:
 			_upgrade_selected_structure()
 			return
 	var bar_top: float = _safe_bottom_y(200.0)
-	if pos.y >= bar_top:
+	var safe_left: float = safe_insets.x
+	var safe_width: float = viewport_size.x - safe_insets.x - safe_insets.z
+	if pos.y >= bar_top and pos.x >= safe_left and pos.x <= safe_left + safe_width:
 		if pos.y <= bar_top + 48.0:
 			command_tab = 1 - command_tab
 			selected_deployment = 0
 			queue_redraw()
 			return
 		var choices: Array = UNIT_DEPLOYMENTS if command_tab == 0 else BASE_DEPLOYMENTS
-		var button_width := viewport_size.x / float(choices.size())
-		selected_deployment = clampi(int(pos.x / button_width), 0, choices.size() - 1)
+		var button_width: float = safe_width / float(choices.size())
+		selected_deployment = clampi(int((pos.x - safe_left) / button_width), 0, choices.size() - 1)
 		message = str(choices[selected_deployment]["name"]) + " SELECTED"
 		message_timer = 1.2
 		queue_redraw()
@@ -1975,22 +1977,27 @@ func _draw_hud() -> void:
 	draw_rect(Rect2(hud_left, hud_top + 258.0, 172.0, 56.0), Color("#183329"))
 	draw_rect(Rect2(hud_left, hud_top + 258.0, 172.0, 56.0), Color("#6ccf91") if sfx_enabled else Color("#8b6262"), false, 2.0)
 	_draw_text("[SFX: ON]" if sfx_enabled else "[SFX: OFF]", Vector2(hud_left + 15.0, hud_top + 292.0), 16, Color("#e5f8eb"))
-	draw_rect(DIAGNOSTIC_BUTTON, Color("#183329"))
-	draw_rect(DIAGNOSTIC_BUTTON, Color("#6ccf91") if diagnostics_enabled else Color("#49645a"), false, 2.0)
-	_draw_text("DIAG", DIAGNOSTIC_BUTTON.position + Vector2(20.0, 32.0), 16, Color("#e5f8eb"))
+	var diagnostic_rect := Rect2(Vector2(safe_insets.x + DIAGNOSTIC_BUTTON.position.x, safe_insets.y + DIAGNOSTIC_BUTTON.position.y), DIAGNOSTIC_BUTTON.size)
+	draw_rect(diagnostic_rect, Color("#183329"))
+	draw_rect(diagnostic_rect, Color("#6ccf91") if diagnostics_enabled else Color("#49645a"), false, 2.0)
+	_draw_text("DIAG", diagnostic_rect.position + Vector2(20.0, 32.0), 16, Color("#e5f8eb"))
 	if diagnostics_enabled:
 		var entity_count := civilians.size() + zombies.size() + units.size() + barricades.size() + outposts.size() + turrets.size() + flares.size()
-		draw_rect(Rect2(210.0, 274.0, 210.0, 52.0), Color("#0b1b17", 0.94))
-		_draw_text("FPS %d | ENT %d" % [fps_sample_value, entity_count], Vector2(220.0, 306.0), 14, Color("#a9c8b7"))
+		draw_rect(Rect2(safe_insets.x + 210.0, safe_insets.y + 274.0, 210.0, 52.0), Color("#0b1b17", 0.94))
+		_draw_text("FPS %d | ENT %d" % [fps_sample_value, entity_count], Vector2(safe_insets.x + 220.0, safe_insets.y + 306.0), 14, Color("#a9c8b7"))
 
 func _draw_outpost_placement_hud(top: float) -> void:
 	var confirm_color: Color = Color("#245a3c") if outpost_placement_valid else Color("#5a292b")
-	draw_rect(Rect2(18.0, top, viewport_size.x * 0.5 - 27.0, 54.0), confirm_color)
-	draw_rect(Rect2(18.0, top, viewport_size.x * 0.5 - 27.0, 54.0), Color("#72d69a") if outpost_placement_valid else Color("#ff6868"), false, 2.0)
-	_draw_text("[CONFIRM BUILD ($%d)]" % _outpost_build_cost(outpost_placement_rect.size), Vector2(28.0, top + 33.0), 14, Color("#f0fff5"))
-	draw_rect(Rect2(viewport_size.x * 0.5 + 9.0, top, viewport_size.x * 0.5 - 27.0, 54.0), Color("#472a2a"))
-	draw_rect(Rect2(viewport_size.x * 0.5 + 9.0, top, viewport_size.x * 0.5 - 27.0, 54.0), Color("#d77b7b"), false, 2.0)
-	_draw_text("[CANCEL]", Vector2(viewport_size.x * 0.5 + 45.0, top + 33.0), 16, Color("#fff0f0"))
+	var safe_left: float = safe_insets.x + HUD_EDGE_PADDING
+	var safe_width: float = viewport_size.x - safe_insets.x - safe_insets.z - HUD_EDGE_PADDING * 2.0
+	var half_width: float = safe_width * 0.5
+	draw_rect(Rect2(safe_left, top, half_width - 6.0, 54.0), confirm_color)
+	draw_rect(Rect2(safe_left, top, half_width - 6.0, 54.0), Color("#72d69a") if outpost_placement_valid else Color("#ff6868"), false, 2.0)
+	_draw_text("[CONFIRM BUILD ($%d)]" % _outpost_build_cost(outpost_placement_rect.size), Vector2(safe_left + 10.0, top + 33.0), 14, Color("#f0fff5"))
+	var cancel_left: float = safe_left + half_width + 6.0
+	draw_rect(Rect2(cancel_left, top, half_width - 6.0, 54.0), Color("#472a2a"))
+	draw_rect(Rect2(cancel_left, top, half_width - 6.0, 54.0), Color("#d77b7b"), false, 2.0)
+	_draw_text("[CANCEL]", Vector2(cancel_left + 36.0, top + 33.0), 16, Color("#fff0f0"))
 
 func _draw_structure_actions() -> void:
 	if selected_structure_type.is_empty() or selected_structure_index < 0:
@@ -2039,17 +2046,19 @@ func _draw_structure_actions() -> void:
 
 func _draw_deployment_bar() -> void:
 	var top: float = _safe_bottom_y(200.0)
-	draw_rect(Rect2(0.0, top, viewport_size.x, 200.0), Color("#0b1715"))
-	draw_line(Vector2(0.0, top), Vector2(viewport_size.x, top), Color("#45665a"), 2.0)
-	var half_width := viewport_size.x * 0.5
-	draw_rect(Rect2(0.0, top, half_width, 48.0), Color("#254538") if command_tab == 0 else Color("#12251f"))
-	draw_rect(Rect2(half_width, top, half_width, 48.0), Color("#254538") if command_tab == 1 else Color("#12251f"))
-	_draw_text("UNITS & STRIKES", Vector2(28.0, top + 32.0), 16, Color("#e8fff0"))
-	_draw_text("BUILD BASE", Vector2(half_width + 42.0, top + 32.0), 16, Color("#e8fff0"))
+	var safe_left: float = safe_insets.x
+	var safe_width: float = viewport_size.x - safe_insets.x - safe_insets.z
+	draw_rect(Rect2(safe_left, top, safe_width, 200.0), Color("#0b1715"))
+	draw_line(Vector2(safe_left, top), Vector2(safe_left + safe_width, top), Color("#45665a"), 2.0)
+	var half_width: float = safe_width * 0.5
+	draw_rect(Rect2(safe_left, top, half_width, 48.0), Color("#254538") if command_tab == 0 else Color("#12251f"))
+	draw_rect(Rect2(safe_left + half_width, top, half_width, 48.0), Color("#254538") if command_tab == 1 else Color("#12251f"))
+	_draw_text("UNITS & STRIKES", Vector2(safe_left + 28.0, top + 32.0), 16, Color("#e8fff0"))
+	_draw_text("BUILD BASE", Vector2(safe_left + half_width + 42.0, top + 32.0), 16, Color("#e8fff0"))
 	var choices: Array = UNIT_DEPLOYMENTS if command_tab == 0 else BASE_DEPLOYMENTS
-	var button_width := viewport_size.x / float(choices.size())
+	var button_width: float = safe_width / float(choices.size())
 	for i in range(choices.size()):
-		var x := float(i) * button_width
+		var x: float = safe_left + float(i) * button_width
 		var selected := i == selected_deployment
 		draw_rect(Rect2(x + 3.0, top + 54.0, button_width - 6.0, 140.0), Color("#254538") if selected else Color("#12251f"))
 		draw_rect(Rect2(x + 3.0, top + 54.0, button_width - 6.0, 140.0), Color("#72d69a") if selected else Color("#29443a"), false, 2.0)
