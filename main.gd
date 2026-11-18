@@ -797,7 +797,7 @@ func _handle_tap(pos: Vector2) -> void:
 		queue_redraw()
 		return
 	if game_state == "hq_placement":
-		if pos.y >= viewport_size.y - 170.0 and primary_hq_position.x >= 0.0:
+		if pos.y >= viewport_size.y - 70.0 and pos.x >= 24.0 and pos.x <= viewport_size.x - 24.0 and primary_hq_position.x >= 0.0:
 			campaign_started = true
 			game_state = "playing"
 			wave_timer = 1.0
@@ -1127,7 +1127,8 @@ func _draw_evac_zone() -> void:
 		draw_circle(zone, EVAC_RADIUS, Color(0.05, 0.55, 0.25, 0.18))
 		draw_arc(zone, EVAC_RADIUS, 0.0, TAU, 48, Color("#48e58b"), 3.0)
 		draw_arc(zone, EVAC_RADIUS - 12.0, 0.0, TAU, 48, Color(0.28, 0.85, 0.55, 0.35), 1.0)
-		_draw_text("SAFE ZONE", zone + Vector2(-45.0, 5.0), 13, Color("#8cf5b5"))
+		var zone_label: String = "PRIMARY HQ" if zone.distance_squared_to(primary_hq_position) < 1.0 else "FORWARD SAFE ZONE"
+		_draw_text(zone_label, zone + Vector2(-45.0, 5.0), 13, Color("#8cf5b5"))
 	for outpost in outposts:
 		draw_circle(outpost["pos"], float(outpost["safe_radius"]), Color(0.10, 0.65, 0.32, 0.035))
 		draw_arc(outpost["pos"], float(outpost["vision_radius"]), 0.0, TAU, 48, Color(0.25, 0.85, 0.48, 0.16), 1.0)
@@ -1902,47 +1903,6 @@ func _draw_world_scene() -> void:
 	_draw_evac_zone()
 	_draw_entities()
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-
-
-func _on_viewport_size_changed() -> void:
-	viewport_size = get_viewport_rect().size
-	_clamp_camera()
-	queue_redraw()
-
-func _camera_view_rect() -> Rect2:
-	var size: Vector2 = viewport_size / maxf(camera_zoom, 0.01)
-	return Rect2(camera_position - size * 0.5, size)
-
-func _screen_to_world(screen_position: Vector2) -> Vector2:
-	return camera_position + (screen_position - viewport_size * 0.5) / maxf(camera_zoom, 0.01)
-
-func _clamp_camera() -> void:
-	var half_view: Vector2 = viewport_size / maxf(camera_zoom, 0.01) * 0.5
-	camera_position.x = clampf(camera_position.x, minf(half_view.x, WORLD_SIZE.x * 0.5), maxf(WORLD_SIZE.x - half_view.x, WORLD_SIZE.x * 0.5))
-	camera_position.y = clampf(camera_position.y, minf(half_view.y, WORLD_SIZE.y * 0.5), maxf(WORLD_SIZE.y - half_view.y, WORLD_SIZE.y * 0.5))
-
-func _zoom_camera(factor: float, screen_anchor: Vector2) -> void:
-	var before: Vector2 = _screen_to_world(screen_anchor)
-	camera_zoom = clampf(camera_zoom * factor, MIN_ZOOM, MAX_ZOOM)
-	var after: Vector2 = _screen_to_world(screen_anchor)
-	camera_position += before - after
-	_clamp_camera()
-	queue_redraw()
-
-func _nearest_evac_zone(position: Vector2) -> Vector2:
-	if evacuation_zones.is_empty():
-		return primary_hq_position if primary_hq_position.x >= 0.0 else WORLD_SIZE * 0.5
-	var nearest: Vector2 = evacuation_zones[0]
-	var nearest_distance: float = position.distance_squared_to(nearest)
-	for zone in evacuation_zones:
-		var distance: float = position.distance_squared_to(zone)
-		if distance < nearest_distance:
-			nearest = zone
-			nearest_distance = distance
-	return nearest
-
-func _night_vision_multiplier() -> float:
-	return 0.8 if day_phase == "NIGHT" else 1.0
 
 
 func _draw_text(value: String, position: Vector2, size: int, color: Color) -> void:
