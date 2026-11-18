@@ -411,7 +411,7 @@ func _process(delta: float) -> void:
 			civilians.remove_at(infected_index)
 			if infected_index < civilian_steering.size():
 				civilian_steering.remove_at(infected_index)
-			civilian_grid = _build_spatial_grid(civilians)
+			_rebuild_spatial_grid(civilian_grid, civilians)
 			lost_count += 1
 			zombies.append({"pos": infected_pos, "kind": "shambler", "hp": 30.0, "max_hp": 30.0})
 			message = "CIVILIAN LOST"
@@ -472,7 +472,7 @@ func _process(delta: float) -> void:
 			unit["cooldown"] = 1.05 if is_sniper else 0.62
 			muzzle_flashes.append({"pos": unit_pos, "life": 0.10, "max_life": 0.10})
 			_queue_sfx("gunfire")
-			zombie_grid = _build_zombie_spatial_grid()
+			_rebuild_zombie_spatial_grid()
 		units[unit_index] = unit
 
 	if wave >= 30 and zombies.is_empty() and civilians.is_empty() and medevac.is_empty() and _total_sheltered_civilians() == 0 and not endless_containment:
@@ -518,7 +518,8 @@ func _rebuild_spatial_grid(grid: Dictionary, positions: Array[Vector2]) -> void:
 	for index in range(positions.size()):
 		var cell: Vector2i = _cell_for(positions[index])
 		if not grid.has(cell):
-			grid[cell] = [] as Array[int]
+			var new_bucket: Array[int] = []
+			grid[cell] = new_bucket
 		var entries: Array = grid[cell]
 		entries.append(index)
 
