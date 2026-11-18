@@ -148,9 +148,32 @@ jobs:
           ls -lh build/android/ContainmentProtocol.apk
           tail -n 100 build/android/export.log
 
+      - name: Verify APK v1/v2/v3 signatures and record SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="build/android/ContainmentProtocol.apk"
+          APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
+          "$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1 | tee build/android/signature-verification.log
+          grep -F "Verified using v1 scheme (JAR signing): true" build/android/signature-verification.log
+          grep -F "Verified using v2 scheme (APK Signature Scheme v2): true" build/android/signature-verification.log
+          grep -F "Verified using v3 scheme (APK Signature Scheme v3): true" build/android/signature-verification.log
+          sha256sum "$APK" | tee build/android/ContainmentProtocol.apk.sha256
+          APK_BYTES="$(stat -c '%s' "$APK")"
+          APK_SHA256="$(sha256sum "$APK" | awk '{print $1}')"
+          {
+            echo "## Android APK"
+            echo "- File: ContainmentProtocol.apk"
+            echo "- Size: $APK_BYTES bytes"
+            echo "- SHA-256: `$APK_SHA256`"
+            echo "- Signing: v1, v2, and v3 verified"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ContainmentProtocol-APK
-          path: build/android/ContainmentProtocol.apk
+          path: |
+            build/android/ContainmentProtocol.apk
+            build/android/ContainmentProtocol.apk.sha256
           if-no-files-found: error
