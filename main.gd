@@ -296,6 +296,10 @@ func _process(delta: float) -> void:
 			fps_frame_count = 0
 			fps_sample_timer = 0.0
 	_update_combat_effects(delta)
+	for callout_index in range(world_callouts.size() - 1, -1, -1):
+		world_callouts[callout_index]["life"] = float(world_callouts[callout_index].get("life", 0.0)) - delta
+		if float(world_callouts[callout_index]["life"]) <= 0.0:
+			world_callouts.remove_at(callout_index)
 	if game_state != "playing":
 		queue_redraw()
 		return
@@ -310,7 +314,6 @@ func _process(delta: float) -> void:
 		return
 
 	elapsed += sim_delta
-	_update_medevac(sim_delta)
 	_update_vehicles(sim_delta)
 	_update_auto_ops(sim_delta)
 	message_timer = maxf(0.0, message_timer - sim_delta)
@@ -1216,7 +1219,7 @@ func _building_index_at(position: Vector2) -> int:
 			return index
 	return -1
 
-func _garrison_unit(unit_index: int, building_index: int) -> void:
+func _garrison_unit(unit_index: int, building_index: int, manual_order: bool = true) -> void:
 	if unit_index < 0 or unit_index >= units.size() or building_index < 0 or building_index >= buildings.size():
 		return
 	var state: Dictionary = building_archetypes[building_index]
@@ -1236,6 +1239,8 @@ func _garrison_unit(unit_index: int, building_index: int) -> void:
 	var unit: Dictionary = units[unit_index]
 	unit["garrisoned"] = true
 	unit["garrison_building"] = building_index
+	unit["manual_order"] = manual_order
+	unit["ai_task"] = "GARRISON"
 	unit["pos"] = buildings[building_index].get_center()
 	unit.erase("move_target")
 	units[unit_index] = unit
@@ -1478,6 +1483,16 @@ func _draw_buildings() -> void:
 				var cache_center: Vector2 = building.get_center()
 				draw_rect(Rect2(cache_center - Vector2(14.0, 14.0), Vector2(28.0, 28.0)), Color("#d8b65b"))
 				_draw_text("$100", cache_center + Vector2(-15.0, 5.0), 13, Color("#fff0b0"))
+		if archetype != "HOSPITAL":
+			for vent_index in range(3):
+				var vent_pos: Vector2 = building.position + Vector2(26.0 + float(vent_index) * 34.0, 30.0)
+				draw_rect(Rect2(vent_pos, Vector2(16.0, 12.0)), Color("#17221f"))
+				draw_rect(Rect2(vent_pos, Vector2(16.0, 12.0)), edge, false, 1.5)
+		if archetype == "HOSPITAL":
+			var pad_center: Vector2 = building.get_center() + Vector2(building.size.x * 0.25, building.size.y * 0.24)
+			draw_circle(pad_center, 30.0, Color("#283a3a"))
+			draw_circle(pad_center, 30.0, Color("#b6d7d2"), false, 2.0)
+			_draw_text("H", pad_center + Vector2(-9.0, 9.0), 24, Color("#e8f7f2"))
 		var tag_size: int = 18 if building.size.x > 300.0 else 15
 		var tag_width: float = screen_font.get_string_size(tag, HORIZONTAL_ALIGNMENT_LEFT, -1.0, tag_size).x if screen_font != null else 70.0
 		if screen_font != null:
@@ -1674,7 +1689,7 @@ func _update_auto_ops(delta: float) -> void:
 		if next_task.is_empty() and _zombies_nearby(position, 260.0):
 			var shelter_index: int = _nearest_intact_building(position, 180.0)
 			if shelter_index >= 0 and _building_garrison_count(shelter_index) < (8 if _building_type_at(shelter_index) == "HIGHRISE" else 4):
-				_garrison_unit(unit_index, shelter_index)
+				_garrison_unit(unit_index, shelter_index, false)
 				continue
 		if not next_task.is_empty() and position.distance_to(next_target) > 24.0:
 			unit["move_target"] = next_target
@@ -1903,10 +1918,13 @@ func _salvage_nearest_vehicle() -> void:
 		message = "SALVAGE REQUIRES $%d" % int(vehicle.get("salvage_cost", 0))
 		message_timer = 1.5
 		return
+	var engineer_salvage: bool = _unit_near_vehicle_kind(vehicle["pos"], "engineer", 75.0)
+	var salvage_duration: float = 2.0 if engineer_salvage else 4.0
 	vehicle["salvage_started"] = true
-	vehicle["salvage_timer"] = 4.0
+	vehicle["salvage_duration"] = salvage_duration
+	vehicle["salvage_timer"] = salvage_duration
 	vehicles[best_index] = vehicle
-	message = "SALVAGE CREW DEPLOYED — HOLD 4.0S"
+	message = "ENGINEER SALVAGE — HOLD 2.0S" if engineer_salvage else "SALVAGE CREW DEPLOYED — HOLD 4.0S"
 	message_timer = 1.8
 
 func _update_vehicles(delta: float) -> void:
@@ -2597,6 +2615,7 @@ func _draw() -> void:
 	draw_set_transform(world_transform_origin, 0.0, Vector2(camera_zoom, camera_zoom))
 	draw_rect(Rect2(Vector2.ZERO, WORLD_SIZE), Color("#07110f"))
 	_draw_grid()
+	_draw_roads()
 	_draw_evac_zone()
 	_draw_buildings()
 	for district_index in range(district_regions.size()):
@@ -2607,7 +2626,6 @@ func _draw() -> void:
 			_draw_text(district_label, Vector2(70.0, district_rect.position.y + 62.0), 24, Color(0.45, 0.75, 0.62, 0.6))
 	_draw_fog()
 	_draw_entities()
-	_draw_medevac()
 	_draw_placement_preview()
 	var visible_effect_rect := _camera_view_rect().grow(220.0)
 	for flare in flares:
@@ -2652,6 +2670,36 @@ func _draw_grid() -> void:
 		draw_line(Vector2(x, start_y), Vector2(x, end_y), Color(0.12, 0.23, 0.19, 0.32), 1.0)
 	for y in range(start_y, end_y + 1, 80):
 		draw_line(Vector2(start_x, y), Vector2(end_x, y), Color(0.12, 0.23, 0.19, 0.32), 1.0)
+
+func _draw_roads() -> void:
+	var visible_rect: Rect2 = _camera_view_rect().grow(100.0)
+	for segment in highway_segments:
+		var road_from: Vector2 = segment["from"]
+		var road_to: Vector2 = segment["to"]
+		var width: float = float(segment.get("width", 64.0))
+		var bounds := Rect2(Vector2(minf(road_from.x, road_to.x), minf(road_from.y, road_to.y)), Vector2(absf(road_to.x - road_from.x), absf(road_to.y - road_from.y))).grow(width * 0.5)
+		if not visible_rect.intersects(bounds):
+			continue
+		draw_line(road_from, road_to, Color("#182522"), width + 10.0)
+		draw_line(road_from, road_to, Color("#303a37"), width)
+		if absf(road_to.x - road_from.x) > absf(road_to.y - road_from.y):
+			var line_y1: float = road_from.y - 7.0
+			var line_y2: float = road_from.y + 7.0
+			draw_line(Vector2(road_from.x, line_y1), Vector2(road_to.x, line_y1), Color("#d8bd63"), 2.0)
+			draw_line(Vector2(road_from.x, line_y2), Vector2(road_to.x, line_y2), Color("#d8bd63"), 2.0)
+		else:
+			var line_x1: float = road_from.x - 7.0
+			var line_x2: float = road_from.x + 7.0
+			draw_line(Vector2(line_x1, road_from.y), Vector2(line_x1, road_to.y), Color("#d8bd63"), 2.0)
+			draw_line(Vector2(line_x2, road_from.y), Vector2(line_x2, road_to.y), Color("#d8bd63"), 2.0)
+	for segment in secondary_road_segments:
+		var road_from: Vector2 = segment["from"]
+		var road_to: Vector2 = segment["to"]
+		var width: float = float(segment.get("width", 24.0))
+		var bounds := Rect2(Vector2(minf(road_from.x, road_to.x), minf(road_from.y, road_to.y)), Vector2(absf(road_to.x - road_from.x), absf(road_to.y - road_from.y))).grow(width * 0.5)
+		if visible_rect.intersects(bounds):
+			draw_line(road_from, road_to, Color("#222e2a"), width + 5.0)
+			draw_line(road_from, road_to, Color("#3a4640"), width)
 
 func _draw_dashed_circle(center: Vector2, radius: float, tint: Color, segments: int) -> void:
 	for segment in range(0, segments, 2):
@@ -2875,6 +2923,10 @@ func _draw_entities() -> void:
 			continue
 		var alpha: float = clampf(float(tracer["life"]) / float(tracer["max_life"]), 0.0, 1.0)
 		draw_line(tracer["from"], tracer["to"], Color(1.0, 0.88, 0.48, alpha), 2.0)
+	for callout_index in range(world_callouts.size() - 1, -1, -1):
+		var callout: Dictionary = world_callouts[callout_index]
+		if visible_rect.has_point(callout["pos"]):
+			_draw_text(str(callout["text"]), callout["pos"] + Vector2(-24.0, -38.0), 14, Color("#ffe28a"))
 	for flash in muzzle_flashes:
 		if not visible_rect.has_point(flash["pos"]):
 			continue
@@ -3644,7 +3696,7 @@ func _save_operation() -> void:
 	# Never replace a prior valid campaign with an incomplete HQ-placement state.
 	if not campaign_started or game_state == "hq_placement":
 		return
-	var state: Dictionary = {"version": SAVE_VERSION, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "medevac": medevac, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer}
+	var state: Dictionary = {"version": SAVE_VERSION, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "medevac": medevac, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer}
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify(_save_variant(state)))
@@ -3677,6 +3729,9 @@ func _resume_operation() -> void:
 	zombies.assign(state.get("zombies", []))
 	units.assign(state.get("units", []))
 	vehicles.assign(state.get("vehicles", []))
+	highway_segments.assign(state.get("highway_segments", []))
+	secondary_road_segments.assign(state.get("secondary_road_segments", []))
+	world_callouts.assign(state.get("world_callouts", []))
 	if int(state.get("version", SAVE_VERSION)) == 2:
 		vehicles.clear()
 		for unit_index in range(units.size()):
@@ -3749,6 +3804,7 @@ func _draw_world_scene() -> void:
 	draw_set_transform(origin, 0.0, Vector2(camera_zoom, camera_zoom))
 	draw_rect(Rect2(Vector2.ZERO, WORLD_SIZE), Color("#07110f"))
 	_draw_grid()
+	_draw_roads()
 	_draw_buildings()
 	for district_index in range(district_regions.size()):
 		var district_rect: Rect2 = district_regions[district_index]
