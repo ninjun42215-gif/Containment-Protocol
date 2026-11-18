@@ -936,9 +936,11 @@ func _draw() -> void:
 	_draw_grid()
 	_draw_evac_zone()
 	_draw_buildings()
+	_draw_fog()
 	_draw_entities()
 	_draw_medevac()
 	_draw_placement_preview()
+	var visible_effect_rect := _camera_view_rect().grow(220.0)
 	for flare in flares:
 		var flare_pos: Vector2 = flare["pos"]
 		if not visible_effect_rect.has_point(flare_pos):
@@ -947,7 +949,6 @@ func _draw() -> void:
 		draw_circle(flare_pos, 11.0 * pulse, Color(1.0, 0.78, 0.12, 0.18))
 		draw_circle(flare_pos, 5.0 * pulse, Color("#ffe45c"))
 		draw_arc(flare_pos, 18.0 * pulse, 0.0, TAU, 32, Color(1.0, 0.82, 0.22, 0.8), 2.0)
-	var visible_effect_rect := _camera_view_rect().grow(220.0)
 	for wave_effect in shockwaves:
 		if not visible_effect_rect.has_point(wave_effect["pos"]):
 			continue
@@ -958,6 +959,7 @@ func _draw() -> void:
 		draw_arc(airstrike_marker, 112.0, 0.0, TAU, 48, Color(1.0, 0.42, 0.12, airstrike_timer), 4.0)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	_draw_hud()
+	_draw_structure_actions()
 	_draw_minimap()
 	_draw_deployment_bar()
 	if manual_paused or lifecycle_paused:
@@ -1034,6 +1036,40 @@ func _draw_medevac() -> void:
 		draw_rect(Rect2(position + Vector2(-28.0, 25.0), Vector2(56.0 * hp_ratio, 5.0)), Color("#65ee96"))
 		_draw_text("ONBOARD %d/8" % int(medevac.get("onboard", 0)), position + Vector2(-40.0, 48.0), 11, Color("#aaffc5"))
 
+func _is_position_visible(world_position: Vector2) -> bool:
+	for zone in evacuation_zones:
+		if world_position.distance_squared_to(zone) <= 250.0 * 250.0:
+			return true
+	for unit in units:
+		var unit_radius := 390.0 if str(unit["kind"]) == "sniper" else 205.0
+		if world_position.distance_squared_to(unit["pos"]) <= unit_radius * unit_radius:
+			return true
+	for outpost in outposts:
+		var outpost_radius := float(outpost.get("vision_radius", 260.0))
+		if world_position.distance_squared_to(outpost["pos"]) <= outpost_radius * outpost_radius:
+			return true
+	for turret in turrets:
+		var turret_radius := float(turret.get("range", TURRET_RANGE))
+		if world_position.distance_squared_to(turret["pos"]) <= turret_radius * turret_radius:
+			return true
+	for flare in flares:
+		if world_position.distance_squared_to(flare["pos"]) <= 260.0 * 260.0:
+			return true
+	return false
+
+func _draw_fog() -> void:
+	var visible_rect := _camera_view_rect()
+	var tile_size := 80.0
+	var start_x := maxi(0, floori(visible_rect.position.x / tile_size) * int(tile_size))
+	var end_x := mini(int(WORLD_SIZE.x), ceili(visible_rect.end.x / tile_size) * int(tile_size))
+	var start_y := maxi(0, floori(visible_rect.position.y / tile_size) * int(tile_size))
+	var end_y := mini(int(WORLD_SIZE.y), ceili(visible_rect.end.y / tile_size) * int(tile_size))
+	for tile_y in range(start_y, end_y, int(tile_size)):
+		for tile_x in range(start_x, end_x, int(tile_size)):
+			var tile_center := Vector2(float(tile_x) + tile_size * 0.5, float(tile_y) + tile_size * 0.5)
+			if not _is_position_visible(tile_center):
+				draw_rect(Rect2(Vector2(tile_x, tile_y), Vector2(tile_size, tile_size)), Color(0.008, 0.022, 0.019, 0.82))
+
 func _draw_entities() -> void:
 	var visible_rect := _camera_view_rect().grow(80.0)
 	for civilian in civilians:
@@ -1043,7 +1079,7 @@ func _draw_entities() -> void:
 		draw_circle(civilian, 2.0, Color("#e3f8ff"))
 	for zombie in zombies:
 		var p: Vector2 = zombie["pos"]
-		if not visible_rect.has_point(p):
+		if not visible_rect.has_point(p) or not _is_position_visible(p):
 			continue
 		var kind: String = str(zombie["kind"])
 		if kind == "runner":
@@ -1104,7 +1140,8 @@ func _draw_minimap() -> void:
 		draw_circle(minimap_rect.position + civilian / WORLD_SIZE * minimap_rect.size, 1.5, Color("#65cfff"))
 	for zombie in zombies:
 		var zombie_pos: Vector2 = zombie["pos"]
-		draw_circle(minimap_rect.position + zombie_pos / WORLD_SIZE * minimap_rect.size, 1.9, Color("#f34d58", 0.78))
+		if _is_position_visible(zombie_pos):
+			draw_circle(minimap_rect.position + zombie_pos / WORLD_SIZE * minimap_rect.size, 1.9, Color("#f34d58", 0.78))
 	for outpost in outposts:
 		draw_rect(Rect2(minimap_rect.position + outpost["pos"] / WORLD_SIZE * minimap_rect.size - Vector2(2.0, 2.0), Vector2(4.0, 4.0)), Color("#55f08b"))
 	for turret in turrets:
@@ -1134,6 +1171,57 @@ func _draw_hud() -> void:
 	draw_rect(Rect2(18.0, 274.0, 172.0, 52.0), Color("#183329"))
 	draw_rect(Rect2(18.0, 274.0, 172.0, 52.0), Color("#6ccf91") if sfx_enabled else Color("#8b6262"), false, 2.0)
 	_draw_text("[SFX: ON]" if sfx_enabled else "[SFX: OFF]", Vector2(33.0, 307.0), 16, Color("#e5f8eb"))
+	draw_rect(DIAGNOSTIC_BUTTON, Color("#183329"))
+	draw_rect(DIAGNOSTIC_BUTTON, Color("#6ccf91") if diagnostics_enabled else Color("#49645a"), false, 2.0)
+	_draw_text("DIAG", DIAGNOSTIC_BUTTON.position + Vector2(20.0, 32.0), 16, Color("#e5f8eb"))
+	if diagnostics_enabled:
+		var entity_count := civilians.size() + zombies.size() + units.size() + barricades.size() + outposts.size() + turrets.size() + flares.size()
+		draw_rect(Rect2(210.0, 274.0, 210.0, 52.0), Color("#0b1b17", 0.94))
+		_draw_text("FPS %d | ENT %d" % [fps_sample_value, entity_count], Vector2(220.0, 306.0), 14, Color("#a9c8b7"))
+
+func _draw_structure_actions() -> void:
+	if selected_structure_type.is_empty() or selected_structure_index < 0:
+		return
+	var structure_label := selected_structure_type.to_upper()
+	var can_upgrade := selected_structure_type == "outpost" or selected_structure_type == "turret"
+	var structure_hp := 0.0
+	var structure_max_hp := 1.0
+	match selected_structure_type:
+		"outpost":
+			if selected_structure_index >= outposts.size():
+				return
+			structure_hp = float(outposts[selected_structure_index]["hp"])
+			structure_max_hp = float(outposts[selected_structure_index]["max_hp"])
+			structure_label = "OUTPOST  LV.%d" % int(outposts[selected_structure_index].get("level", 1))
+		"turret":
+			if selected_structure_index >= turrets.size():
+				return
+			structure_hp = float(turrets[selected_structure_index]["hp"])
+			structure_max_hp = float(turrets[selected_structure_index]["max_hp"])
+			structure_label = "SENTRY  LV.%d" % int(turrets[selected_structure_index].get("level", 1))
+		"wall":
+			if selected_structure_index >= barricades.size():
+				return
+			structure_hp = float(barricades[selected_structure_index]["hp"])
+			structure_max_hp = float(barricades[selected_structure_index]["max_hp"])
+			structure_label = "REINFORCED WALL"
+		_:
+			return
+	draw_rect(Rect2(18.0, STRUCTURE_ACTION_TOP, 380.0, 94.0), Color("#0b1b17", 0.96))
+	_draw_text("%s  HP %d/%d" % [structure_label, roundi(structure_hp), roundi(structure_max_hp)], Vector2(30.0, STRUCTURE_ACTION_TOP + 24.0), 14, Color("#dcefe4"))
+	draw_rect(Rect2(24.0, STRUCTURE_ACTION_TOP + 34.0, 166.0, 50.0), Color("#254538"))
+	draw_rect(Rect2(24.0, STRUCTURE_ACTION_TOP + 34.0, 166.0, 50.0), Color("#72d69a"), false, 2.0)
+	_draw_text("REPAIR $40", Vector2(40.0, STRUCTURE_ACTION_TOP + 65.0), 16, Color("#f0fff5"))
+	if can_upgrade:
+		var level := 1
+		if selected_structure_type == "outpost":
+			level = int(outposts[selected_structure_index].get("level", 1))
+		else:
+			level = int(turrets[selected_structure_index].get("level", 1))
+		if level < 2:
+			draw_rect(Rect2(204.0, STRUCTURE_ACTION_TOP + 34.0, 166.0, 50.0), Color("#3a3420"))
+			draw_rect(Rect2(204.0, STRUCTURE_ACTION_TOP + 34.0, 166.0, 50.0), Color("#e4c66d"), false, 2.0)
+			_draw_text("UPGRADE $150", Vector2(213.0, STRUCTURE_ACTION_TOP + 65.0), 15, Color("#fff4c7"))
 
 func _draw_deployment_bar() -> void:
 	var top := viewport_size.y - 200.0
@@ -1155,6 +1243,94 @@ func _draw_deployment_bar() -> void:
 		_draw_text(str(deployment["name"]), Vector2(x + 8.0, top + 91.0), 13, Color("#e8fff0") if selected else Color("#b2c7bc"))
 		_draw_text(str(deployment["detail"]), Vector2(x + 8.0, top + 126.0), 12, Color("#f0cc77"))
 		_draw_text("TAP MAP", Vector2(x + 8.0, top + 163.0), 10, Color("#8da99a"))
+
+func _select_structure_at(world_position: Vector2) -> bool:
+	for index in range(outposts.size() - 1, -1, -1):
+		if world_position.distance_to(outposts[index]["pos"]) <= 28.0:
+			selected_structure_type = "outpost"
+			selected_structure_index = index
+			selected_unit_index = -1
+			return true
+	for index in range(turrets.size() - 1, -1, -1):
+		if world_position.distance_to(turrets[index]["pos"]) <= 24.0:
+			selected_structure_type = "turret"
+			selected_structure_index = index
+			selected_unit_index = -1
+			return true
+	for index in range(barricades.size() - 1, -1, -1):
+		if world_position.distance_to(barricades[index]["pos"]) <= 26.0:
+			selected_structure_type = "wall"
+			selected_structure_index = index
+			selected_unit_index = -1
+			return true
+	return false
+
+func _repair_selected_structure() -> void:
+	if funds < STRUCTURE_REPAIR_COST:
+		message = "REPAIR REQUIRES $40"
+		message_timer = 1.2
+		return
+	var repaired := false
+	match selected_structure_type:
+		"outpost":
+			if selected_structure_index < outposts.size():
+				var structure: Dictionary = outposts[selected_structure_index]
+				var old_hp := float(structure["hp"])
+				structure["hp"] = minf(float(structure["max_hp"]), old_hp + 100.0)
+				outposts[selected_structure_index] = structure
+				repaired = float(structure["hp"]) > old_hp
+		"turret":
+			if selected_structure_index < turrets.size():
+				var structure: Dictionary = turrets[selected_structure_index]
+				var old_hp := float(structure["hp"])
+				structure["hp"] = minf(float(structure["max_hp"]), old_hp + 100.0)
+				turrets[selected_structure_index] = structure
+				repaired = float(structure["hp"]) > old_hp
+		"wall":
+			if selected_structure_index < barricades.size():
+				var structure: Dictionary = barricades[selected_structure_index]
+				var old_hp := float(structure["hp"])
+				structure["hp"] = minf(float(structure["max_hp"]), old_hp + 100.0)
+				barricades[selected_structure_index] = structure
+				repaired = float(structure["hp"]) > old_hp
+	if repaired:
+		funds -= STRUCTURE_REPAIR_COST
+		message = "STRUCTURE REPAIRED +100 HP"
+	else:
+		message = "STRUCTURE ALREADY AT FULL HP"
+	message_timer = 1.3
+	queue_redraw()
+
+func _upgrade_selected_structure() -> void:
+	if funds < STRUCTURE_UPGRADE_COST:
+		message = "UPGRADE REQUIRES $150"
+		message_timer = 1.2
+		return
+	var upgraded := false
+	if selected_structure_type == "turret" and selected_structure_index < turrets.size():
+		var turret: Dictionary = turrets[selected_structure_index]
+		if int(turret.get("level", 1)) < 2:
+			turret["level"] = 2
+			turret["range"] = 280.0
+			turret["damage"] = 32.0
+			turret["fire_interval"] = 0.15
+			turrets[selected_structure_index] = turret
+			upgraded = true
+	elif selected_structure_type == "outpost" and selected_structure_index < outposts.size():
+		var outpost: Dictionary = outposts[selected_structure_index]
+		if int(outpost.get("level", 1)) < 2:
+			outpost["level"] = 2
+			outpost["safe_radius"] = 230.0
+			outpost["capacity"] = 20
+			outposts[selected_structure_index] = outpost
+			upgraded = true
+	if upgraded:
+		funds -= STRUCTURE_UPGRADE_COST
+		message = "STRUCTURE UPGRADED TO LEVEL 2"
+	else:
+		message = "NO AVAILABLE UPGRADE"
+	message_timer = 1.5
+	queue_redraw()
 
 func _update_preview_position(position: Vector2) -> void:
 	preview_position = _screen_to_world(position)
