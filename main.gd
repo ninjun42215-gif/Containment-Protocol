@@ -768,6 +768,17 @@ func _handle_tap(pos: Vector2) -> void:
 			audio_effect = ""
 		queue_redraw()
 		return
+	if DIAGNOSTIC_BUTTON.has_point(pos):
+		diagnostics_enabled = not diagnostics_enabled
+		queue_redraw()
+		return
+	if not selected_structure_type.is_empty() and pos.y >= STRUCTURE_ACTION_TOP + 34.0 and pos.y <= STRUCTURE_ACTION_TOP + 84.0:
+		if pos.x >= 24.0 and pos.x <= 190.0:
+			_repair_selected_structure()
+			return
+		if pos.x >= 204.0 and pos.x <= 370.0:
+			_upgrade_selected_structure()
+			return
 	var bar_top := viewport_size.y - 200.0
 	if pos.y >= bar_top:
 		if pos.y <= bar_top + 48.0:
@@ -785,6 +796,13 @@ func _handle_tap(pos: Vector2) -> void:
 	if pos.y < 270.0:
 		return
 	var world_pos := _screen_to_world(pos)
+	if _select_structure_at(world_pos):
+		message = "%s SELECTED" % selected_structure_type.to_upper()
+		message_timer = 1.2
+		queue_redraw()
+		return
+	selected_structure_type = ""
+	selected_structure_index = -1
 	for squad_index in range(units.size() - 1, -1, -1):
 		if world_pos.distance_to(units[squad_index]["pos"]) <= UNIT_SELECT_RADIUS:
 			selected_unit_index = squad_index
@@ -978,6 +996,14 @@ func _draw_grid() -> void:
 	for y in range(start_y, end_y + 1, 80):
 		draw_line(Vector2(start_x, y), Vector2(end_x, y), Color(0.12, 0.23, 0.19, 0.32), 1.0)
 
+func _draw_dashed_circle(center: Vector2, radius: float, tint: Color, segments: int) -> void:
+	for segment in range(0, segments, 2):
+		var start_angle := TAU * float(segment) / float(segments)
+		var end_angle := TAU * float(segment + 1) / float(segments)
+		var start_point := center + Vector2(cos(start_angle), sin(start_angle)) * radius
+		var end_point := center + Vector2(cos(end_angle), sin(end_angle)) * radius
+		draw_line(start_point, end_point, tint, 2.0)
+
 func _draw_evac_zone() -> void:
 	for zone in evacuation_zones:
 		draw_circle(zone, EVAC_RADIUS, Color(0.05, 0.55, 0.25, 0.18))
@@ -987,6 +1013,7 @@ func _draw_evac_zone() -> void:
 	for outpost in outposts:
 		draw_circle(outpost["pos"], float(outpost["safe_radius"]), Color(0.10, 0.65, 0.32, 0.035))
 		draw_arc(outpost["pos"], float(outpost["vision_radius"]), 0.0, TAU, 48, Color(0.25, 0.85, 0.48, 0.16), 1.0)
+		_draw_dashed_circle(outpost["pos"], OUTPOST_COMMAND_RADIUS, Color(0.35, 0.88, 0.55, 0.34), 48)
 
 func _draw_title_screen() -> void:
 	draw_rect(Rect2(viewport_size.x * 0.06, viewport_size.y * 0.16, viewport_size.x * 0.88, viewport_size.y * 0.68), Color(0.02, 0.07, 0.055, 0.96))
@@ -1241,7 +1268,10 @@ func _draw_deployment_bar() -> void:
 		draw_rect(Rect2(x + 3.0, top + 54.0, button_width - 6.0, 140.0), Color("#72d69a") if selected else Color("#29443a"), false, 2.0)
 		var deployment: Dictionary = choices[i]
 		_draw_text(str(deployment["name"]), Vector2(x + 8.0, top + 91.0), 13, Color("#e8fff0") if selected else Color("#b2c7bc"))
-		_draw_text(str(deployment["detail"]), Vector2(x + 8.0, top + 126.0), 12, Color("#f0cc77"))
+		var detail := str(deployment["detail"])
+		if str(deployment["kind"]) == "outpost":
+			detail = "$%d" % _deployment_cost("outpost")
+		_draw_text(detail, Vector2(x + 8.0, top + 126.0), 12, Color("#f0cc77"))
 		_draw_text("TAP MAP", Vector2(x + 8.0, top + 163.0), 10, Color("#8da99a"))
 
 func _select_structure_at(world_position: Vector2) -> bool:
@@ -1346,7 +1376,10 @@ func _draw_placement_preview() -> void:
 	var deployment: Dictionary = choices[selected_deployment]
 	var kind: String = str(deployment["kind"])
 	var radius := _deployment_range(kind)
-	var valid := _is_valid_street_position(preview_position) and funds >= int(deployment["cost"])
+	var deployment_cost := _deployment_cost(kind)
+	var valid := _is_valid_street_position(preview_position) and funds >= deployment_cost
+	if kind == "outpost" and outposts.size() >= OUTPOST_MAX_COUNT:
+		valid = false
 	if kind == "medevac" and not medevac.is_empty():
 		valid = false
 	var tint := Color(0.2, 1.0, 0.48, 0.18) if valid else Color(1.0, 0.18, 0.2, 0.20)
@@ -1354,6 +1387,11 @@ func _draw_placement_preview() -> void:
 	draw_circle(preview_position, radius, tint)
 	draw_arc(preview_position, radius, 0.0, TAU, 56, line_tint, 2.5)
 	draw_circle(preview_position, 5.0, Color(line_tint.r, line_tint.g, line_tint.b, 0.8))
+
+func _deployment_cost(kind: String) -> int:
+	if kind == "outpost":
+		return OUTPOST_COST + outposts.size() * OUTPOST_COST_STEP
+	return OUTPOST_COST if kind == "outpost" else int((UNIT_DEPLOYMENTS if command_tab == 0 else BASE_DEPLOYMENTS)[selected_deployment]["cost"])
 
 func _deployment_range(kind: String) -> float:
 	match kind:
