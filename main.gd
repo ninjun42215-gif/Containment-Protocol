@@ -801,8 +801,40 @@ func _try_place_gate(position: Vector2) -> bool:
 	for outpost_index in range(outposts.size()):
 		var rect: Rect2 = outposts[outpost_index]["rect"]
 		var nearest := Vector2(clampf(position.x, rect.position.x, rect.end.x), clampf(position.y, rect.position.y, rect.end.y))
-		if nearest.distance_to(position) <= 32.0:
-			var gate_rect := Rect2(nearest - Vector2(30.0, 9.0), Vector2(60.0, 18.0))
+		if nearest.distance_to(position) > 32.0:
+			continue
+		for wall_index in range(barricades.size() - 1, -1, -1):
+			var wall: Dictionary = barricades[wall_index]
+			if int(wall.get("outpost_index", -1)) != outpost_index:
+				continue
+			var wall_rect: Rect2 = wall.get("rect", Rect2(wall["pos"] - Vector2(15.0, 15.0), Vector2(30.0, 30.0)))
+			var wall_point := Vector2(clampf(nearest.x, wall_rect.position.x, wall_rect.end.x), clampf(nearest.y, wall_rect.position.y, wall_rect.end.y))
+			if wall_point.distance_to(nearest) > 24.0:
+				continue
+			barricades.remove_at(wall_index)
+			var gate_rect: Rect2
+			if wall_rect.size.x >= wall_rect.size.y:
+				gate_rect = Rect2(Vector2(nearest.x - 30.0, wall_rect.position.y), Vector2(60.0, wall_rect.size.y))
+				var left_width: float = gate_rect.position.x - wall_rect.position.x
+				var right_start: float = gate_rect.end.x
+				var right_width: float = wall_rect.end.x - right_start
+				if left_width > 8.0:
+					var left_rect := Rect2(wall_rect.position, Vector2(left_width, wall_rect.size.y))
+					barricades.append({"pos": left_rect.get_center(), "rect": left_rect, "hp": float(wall["hp"]), "max_hp": float(wall["max_hp"]), "kind": "perimeter", "outpost_index": outpost_index})
+				if right_width > 8.0:
+					var right_rect := Rect2(Vector2(right_start, wall_rect.position.y), Vector2(right_width, wall_rect.size.y))
+					barricades.append({"pos": right_rect.get_center(), "rect": right_rect, "hp": float(wall["hp"]), "max_hp": float(wall["max_hp"]), "kind": "perimeter", "outpost_index": outpost_index})
+			else:
+				gate_rect = Rect2(Vector2(wall_rect.position.x, nearest.y - 30.0), Vector2(wall_rect.size.x, 60.0))
+				var top_height: float = gate_rect.position.y - wall_rect.position.y
+				var bottom_start: float = gate_rect.end.y
+				var bottom_height: float = wall_rect.end.y - bottom_start
+				if top_height > 8.0:
+					var top_rect := Rect2(wall_rect.position, Vector2(wall_rect.size.x, top_height))
+					barricades.append({"pos": top_rect.get_center(), "rect": top_rect, "hp": float(wall["hp"]), "max_hp": float(wall["max_hp"]), "kind": "perimeter", "outpost_index": outpost_index})
+				if bottom_height > 8.0:
+					var bottom_rect := Rect2(Vector2(wall_rect.position.x, bottom_start), Vector2(wall_rect.size.x, bottom_height))
+					barricades.append({"pos": bottom_rect.get_center(), "rect": bottom_rect, "hp": float(wall["hp"]), "max_hp": float(wall["max_hp"]), "kind": "perimeter", "outpost_index": outpost_index})
 			gates.append({"pos": gate_rect.get_center(), "rect": gate_rect, "hp": 500.0, "max_hp": 500.0, "open": false, "outpost_index": outpost_index})
 			funds -= GATE_COST
 			return true
@@ -1368,7 +1400,7 @@ func _handle_tap(pos: Vector2) -> void:
 				return
 			medevac = {"pos": Vector2(-90.0, world_pos.y), "target": world_pos, "phase": "inbound", "hp": MEDEVAC_HP, "landing_timer": MEDEVAC_LANDING_TIME, "onboard": 0, "attack_flash": 0.0}
 		"infantry", "sniper":
-			units.append({"pos": world_pos, "kind": kind, "cooldown": 0.1})
+			units.append({"pos": world_pos, "kind": kind, "cooldown": 0.1, "hp": 100.0, "max_hp": 100.0})
 		"turret":
 			world_pos = _snap_turret_to_outpost(world_pos)
 			turrets.append({"pos": world_pos, "hp": 250.0, "max_hp": 250.0, "cooldown": 0.1, "level": 1, "range": TURRET_RANGE, "vision_radius": TURRET_RANGE, "damage": 22.0, "fire_interval": 0.18})
@@ -1927,7 +1959,7 @@ func _upgrade_selected_structure() -> void:
 		if int(outpost.get("level", 1)) < 2:
 			outpost["level"] = 2
 			outpost["safe_radius"] = 230.0
-			outpost["capacity"] = 20
+			outpost["capacity"] = maxi(20, int(outpost.get("capacity", 12)))
 			outposts[selected_structure_index] = outpost
 			upgraded = true
 	if upgraded:
@@ -2199,6 +2231,14 @@ func _update_outpost_damage(delta: float) -> void:
 					if int(gates[gate_index].get("outpost_index", -1)) == outpost_index:
 						gates.remove_at(gate_index)
 				outposts.remove_at(outpost_index)
+				for remaining_wall in barricades:
+					var wall_outpost_index: int = int(remaining_wall.get("outpost_index", -1))
+					if wall_outpost_index > outpost_index:
+						remaining_wall["outpost_index"] = wall_outpost_index - 1
+				for remaining_gate in gates:
+					var gate_outpost_index: int = int(remaining_gate.get("outpost_index", -1))
+					if gate_outpost_index > outpost_index:
+						remaining_gate["outpost_index"] = gate_outpost_index - 1
 				message = "FORWARD OUTPOST DESTROYED — SHELTER EVACUATED"
 			else:
 				outposts[outpost_index] = outpost
@@ -2368,8 +2408,10 @@ func _has_valid_save() -> bool:
 func _serialize_spatial_grid(grid: Dictionary) -> Array[Dictionary]:
 	var serialized: Array[Dictionary] = []
 	for key in grid.keys():
-		var cell: Vector2i = key
 		var bucket: Array = grid[key]
+		if bucket.is_empty():
+			continue
+		var cell: Vector2i = key
 		serialized.append({"cell": cell, "indices": bucket.duplicate()})
 	return serialized
 
