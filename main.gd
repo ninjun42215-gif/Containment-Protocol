@@ -1970,6 +1970,7 @@ func _update_vehicles(delta: float) -> void:
 					vehicle["salvage_timer"] = maxf(0.0, float(vehicle.get("salvage_timer", 4.0)) - delta * (2.0 if engineer_present else 1.0))
 					if float(vehicle["salvage_timer"]) <= 0.0 and funds >= int(vehicle.get("salvage_cost", 0)):
 						funds -= int(vehicle.get("salvage_cost", 0))
+						scrap += 15
 						vehicle["active"] = true
 						vehicle["salvage_started"] = false
 						message = "VEHICLE RESTORED"
@@ -2064,7 +2065,7 @@ func _spawn_wave() -> void:
 	var escalation_phase: int = int(float(wave - 1) / 6.0) + 1
 	var phase_multiplier: float = minf(1.0 + float(escalation_phase - 1) * 0.25, 3.0)
 	var day_multiplier: float = minf(1.0 + float(survival_day - 1) * 0.12, 3.0)
-	var night_multiplier: float = 1.4 if day_phase == "NIGHT" else 1.0
+	var night_multiplier: float = (1.4 + minf(float(survival_day - 1) * 0.02, 0.6)) if day_phase == "NIGHT" else 1.0
 	var relief_multiplier: float = 0.88 if recent_outpost_loss_timer > 0.0 else 1.0
 	var count: int = mini(roundi(float(18 + wave * 8) * phase_multiplier * day_multiplier * night_multiplier * relief_multiplier), 900)
 	pending_wave_spawns += count
