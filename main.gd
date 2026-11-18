@@ -1788,46 +1788,6 @@ func _nearest_damaged_structure(position: Vector2, radius: float) -> Vector2:
 	return best_position
 
 
-	if delta <= 0.0 or not auto_ops_enabled:
-		return
-	for unit_index in range(units.size()):
-		var unit: Dictionary = units[unit_index]
-		if bool(unit.get("garrisoned", false)) or bool(unit.get("manual_order", false)):
-			continue
-		var current_target: Variant = unit.get("move_target", null)
-		if current_target is Vector2:
-			if unit["pos"].distance_to(current_target) > 20.0:
-				continue
-			unit["move_target"] = null
-			unit["ai_task"] = ""
-		var position: Vector2 = unit["pos"]
-		var task: String = ""
-		var target: Vector2 = position
-		if str(unit.get("kind", "")) == "infantry" and float(unit.get("hp", 100.0)) / maxf(float(unit.get("max_hp", 100.0)), 1.0) < 0.25:
-			var retreat_index: int = _nearest_outpost_index(position)
-			if retreat_index >= 0:
-				target = outposts[retreat_index]["pos"]
-				task = "RETREAT"
-		if task.is_empty():
-			var rescue_index: int = _nearest_unescorted_civilian(position, 500.0)
-			var safe_outpost_index: int = _nearest_outpost_index(position)
-			if rescue_index >= 0 and safe_outpost_index >= 0:
-				target = civilians[rescue_index]
-				task = "RESCUE"
-		if task.is_empty():
-			var crate_index: int = _nearest_supply_crate(position, 420.0)
-			if crate_index >= 0:
-				target = supply_crates[crate_index]["pos"]
-				task = "SCAVENGE"
-		if task.is_empty() and _zombies_nearby(position, 260.0):
-			var shelter_index: int = _nearest_intact_building(position, 180.0)
-			if shelter_index >= 0 and _building_garrison_count(shelter_index) < (8 if _building_type_at(shelter_index) == "HIGHRISE" else 4):
-				_garrison_unit(unit_index, shelter_index)
-				continue
-		if not task.is_empty() and position.distance_to(target) > 24.0:
-			unit["move_target"] = target
-			unit["ai_task"] = task
-			units[unit_index] = unit
 
 func _nearest_outpost_index(position: Vector2) -> int:
 	var best: int = -1
@@ -2843,6 +2803,8 @@ func _draw_entities() -> void:
 		var aircraft: bool = str(vehicle.get("kind", "")) == "helicopter"
 		var vehicle_color := Color("#73c9d6") if aircraft else Color("#b6a36a")
 		if aircraft:
+			draw_circle(vehicle_pos + Vector2(0.0, 12.0), 48.0, Color("#8edce5", 0.07))
+			draw_arc(vehicle_pos + Vector2(0.0, 12.0), 48.0, 0.0, TAU, 36, Color("#8edce5", 0.24), 2.0)
 			draw_line(vehicle_pos + Vector2(-28.0, -24.0), vehicle_pos + Vector2(28.0, 24.0), vehicle_color, 4.0)
 			draw_line(vehicle_pos + Vector2(-28.0, 24.0), vehicle_pos + Vector2(28.0, -24.0), vehicle_color, 4.0)
 			draw_line(vehicle_pos + Vector2(-42.0, 0.0), vehicle_pos + Vector2(42.0, 0.0), Color("#d6f6f7"), 3.0)
