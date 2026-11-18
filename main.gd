@@ -1267,7 +1267,7 @@ func _input(event: InputEvent) -> void:
 			touch_points[touch.index] = touch.position
 			if touch_points.size() == 1:
 				var touch_world: Vector2 = _screen_to_world(touch.position)
-						var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and touch.position.y < _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and touch.position.y > safe_insets.y + 520.0 and touch.position.y < _safe_bottom_y(260.0) and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
+				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and touch.position.y < _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and touch.position.y > safe_insets.y + 520.0 and touch.position.y < _safe_bottom_y(260.0) and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
 				if can_start_placement:
 					_begin_outpost_placement(touch_world, "hq" if game_state == "hq_placement" else "outpost")
 				elif outpost_placement_active:
@@ -1430,7 +1430,7 @@ func _handle_tap(pos: Vector2) -> void:
 			outpost_placement_dragging = false
 		queue_redraw()
 		return
-	if pos.x >= safe_insets.x + 18.0 and pos.x <= safe_insets.x + 210.0 and pos.y >= safe_insets.y + 434.0 and pos.y <= safe_insets.y + 434.0 + touch_target_size:
+	if pos.x >= safe_insets.x + 18.0 and pos.x <= safe_insets.x + 210.0 and pos.y >= safe_insets.y + HUD_EDGE_PADDING + 434.0 and pos.y <= safe_insets.y + HUD_EDGE_PADDING + 434.0 + touch_target_size:
 		_call_to_arms()
 		queue_redraw()
 		return
