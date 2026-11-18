@@ -568,10 +568,10 @@ func _configure_sector(index: int) -> void:
 			scenario_camera_target = Vector2(WORLD_SIZE.x * 0.5, WORLD_SIZE.y * 0.30)
 		1:
 			sector_name = "Medical & Urban Core"
-			scenario_camera_target = Vector2(WORLD_SIZE.x * 0.5, WORLD_SIZE.y * 0.30)
+			scenario_camera_target = Vector2(WORLD_SIZE.x * 0.5, WORLD_SIZE.y * 0.10)
 		2:
 			sector_name = "Industrial Highway"
-			scenario_camera_target = Vector2(WORLD_SIZE.x * 0.5, WORLD_SIZE.y * 0.60)
+			scenario_camera_target = Vector2(WORLD_SIZE.x * 0.5, WORLD_SIZE.y * 0.50)
 	_generate_state_map()
 
 func _scenario_civilian_count(district_index: int, base_count: int) -> int:
