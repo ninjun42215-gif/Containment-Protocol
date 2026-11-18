@@ -11,6 +11,8 @@ const MIN_ZOOM := 0.45
 const MAX_ZOOM := 1.4
 const CAMERA_DRAG_THRESHOLD := 14.0
 const MINIMAP_SIZE := Vector2(154.0, 190.0)
+const MIN_TOUCH_TARGET := 48.0
+const HUD_EDGE_PADDING := 18.0
 const OUTPOST_COST := 220
 const TURRET_COST := 140
 const WALL_COST := 75
@@ -149,6 +151,8 @@ var multi_touch_gesture := false
 var previous_pinch_center := Vector2.ZERO
 var command_tab := 0
 var viewport_size := VIEW_SIZE
+var safe_insets := Vector4.ZERO
+var safe_area_rect := Rect2(Vector2.ZERO, VIEW_SIZE)
 var selected_structure_type := ""
 var selected_structure_index := -1
 var diagnostics_enabled := false
@@ -160,6 +164,7 @@ func _ready() -> void:
 	randomize()
 	screen_font = ThemeDB.fallback_font
 	viewport_size = get_viewport_rect().size
+	_refresh_safe_area()
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 	_configure_sector(0)
 	_setup_audio()
@@ -1942,24 +1947,26 @@ func _draw_minimap() -> void:
 	_draw_text("ZOOM -", Vector2(zoom_x + 11.0, zoom_top + 86.0), 14, Color("#e5f8eb"))
 
 func _draw_hud() -> void:
-	draw_rect(Rect2(18.0, 18.0, 390.0, 126.0), Color("#0b1b17", 0.94))
-	_draw_text("CONTAINMENT PROTOCOL", Vector2(34.0, 52.0), 22, Color("#e2f4e9"))
-	_draw_text("FUNDS  $%d" % funds, Vector2(34.0, 88.0), 21, Color("#f4d77b"))
-	_draw_text("SECTOR %02d  WAVE %d/%d" % [sector_index + 1, wave, sector_wave_limit], Vector2(34.0, 122.0), 15, Color("#ffad62"))
-	_draw_text("SAVED %d  LOST %d  HORDE %d/%d" % [saved_count, lost_count, zombies.size(), MAX_ACTIVE_ZOMBIES], Vector2(34.0, 142.0), 13, Color("#9cbcaf"))
-	draw_rect(Rect2(18.0, 452.0, 192.0, 48.0), Color("#33422a"))
-	draw_rect(Rect2(18.0, 452.0, 192.0, 48.0), Color("#d5c36b"), false, 2.0)
+	var hud_left: float = safe_insets.x + HUD_EDGE_PADDING
+	var hud_top: float = safe_insets.y + HUD_EDGE_PADDING
+	draw_rect(Rect2(hud_left, hud_top, 390.0, 160.0), Color("#0b1b17", 0.94))
+	_draw_text("CONTAINMENT PROTOCOL", Vector2(hud_left + 16.0, hud_top + 34.0), 22, Color("#e2f4e9"))
+	_draw_text("FUNDS  $%d" % funds, Vector2(hud_left + 16.0, hud_top + 70.0), 21, Color("#f4d77b"))
+	_draw_text("SECTOR %02d  WAVE %d/%d" % [sector_index + 1, wave, sector_wave_limit], Vector2(hud_left + 16.0, hud_top + 104.0), 15, Color("#ffad62"))
+	_draw_text("SAVED %d  LOST %d  HORDE %d/%d" % [saved_count, lost_count, zombies.size(), MAX_ACTIVE_ZOMBIES], Vector2(hud_left + 16.0, hud_top + 124.0), 13, Color("#9cbcaf"))
+	draw_rect(Rect2(hud_left, hud_top + 434.0, 192.0, 56.0), Color("#33422a"))
+	draw_rect(Rect2(hud_left, hud_top + 434.0, 192.0, 56.0), Color("#d5c36b"), false, 2.0)
 	var militia_cost: int = _call_to_arms_cost()
-	_draw_text("CALL TO ARMS $%d" % militia_cost, Vector2(28.0, 482.0), 14, Color("#fff4c7"))
-	_draw_text("%s  |  %s" % [day_phase, "ENDLESS" if endless_containment else "CAMPAIGN"], Vector2(34.0, 162.0), 12, Color("#a9c8b7"))
+	_draw_text("CALL TO ARMS $%d" % militia_cost, Vector2(hud_left + 10.0, hud_top + 468.0), 14, Color("#fff4c7"))
+	_draw_text("%s  |  %s" % [day_phase, "ENDLESS" if endless_containment else "CAMPAIGN"], Vector2(hud_left + 16.0, hud_top + 144.0), 12, Color("#a9c8b7"))
 	if message_timer > 0.0:
-		_draw_text(message, Vector2(34.0, 177.0), 14, Color("#ffbd76"))
-	draw_rect(Rect2(18.0, 214.0, 172.0, 52.0), Color("#183329"))
-	draw_rect(Rect2(18.0, 214.0, 172.0, 52.0), Color("#6ccf91"), false, 2.0)
-	_draw_text("TIME  " + TIME_LABELS[time_scale_index], Vector2(33.0, 247.0), 17, Color("#e5f8eb"))
-	draw_rect(Rect2(18.0, 274.0, 172.0, 52.0), Color("#183329"))
-	draw_rect(Rect2(18.0, 274.0, 172.0, 52.0), Color("#6ccf91") if sfx_enabled else Color("#8b6262"), false, 2.0)
-	_draw_text("[SFX: ON]" if sfx_enabled else "[SFX: OFF]", Vector2(33.0, 307.0), 16, Color("#e5f8eb"))
+		_draw_text(message, Vector2(hud_left + 16.0, hud_top + 164.0), 14, Color("#ffbd76"))
+	draw_rect(Rect2(hud_left, hud_top + 196.0, 172.0, 56.0), Color("#183329"))
+	draw_rect(Rect2(hud_left, hud_top + 196.0, 172.0, 56.0), Color("#6ccf91"), false, 2.0)
+	_draw_text("TIME  " + TIME_LABELS[time_scale_index], Vector2(hud_left + 15.0, hud_top + 230.0), 17, Color("#e5f8eb"))
+	draw_rect(Rect2(hud_left, hud_top + 258.0, 172.0, 56.0), Color("#183329"))
+	draw_rect(Rect2(hud_left, hud_top + 258.0, 172.0, 56.0), Color("#6ccf91") if sfx_enabled else Color("#8b6262"), false, 2.0)
+	_draw_text("[SFX: ON]" if sfx_enabled else "[SFX: OFF]", Vector2(hud_left + 15.0, hud_top + 292.0), 16, Color("#e5f8eb"))
 	draw_rect(DIAGNOSTIC_BUTTON, Color("#183329"))
 	draw_rect(DIAGNOSTIC_BUTTON, Color("#6ccf91") if diagnostics_enabled else Color("#49645a"), false, 2.0)
 	_draw_text("DIAG", DIAGNOSTIC_BUTTON.position + Vector2(20.0, 32.0), 16, Color("#e5f8eb"))
@@ -2005,11 +2012,12 @@ func _draw_structure_actions() -> void:
 			structure_label = "REINFORCED WALL"
 		_:
 			return
-	draw_rect(Rect2(18.0, STRUCTURE_ACTION_TOP, 380.0, 94.0), Color("#0b1b17", 0.96))
-	_draw_text("%s  HP %d/%d" % [structure_label, roundi(structure_hp), roundi(structure_max_hp)], Vector2(30.0, STRUCTURE_ACTION_TOP + 24.0), 14, Color("#dcefe4"))
-	draw_rect(Rect2(24.0, STRUCTURE_ACTION_TOP + 34.0, 166.0, 50.0), Color("#254538"))
-	draw_rect(Rect2(24.0, STRUCTURE_ACTION_TOP + 34.0, 166.0, 50.0), Color("#72d69a"), false, 2.0)
-	_draw_text("REPAIR $40", Vector2(40.0, STRUCTURE_ACTION_TOP + 65.0), 16, Color("#f0fff5"))
+	var action_top: float = STRUCTURE_ACTION_TOP + safe_insets.y
+	draw_rect(Rect2(safe_insets.x + 18.0, action_top, 380.0, 94.0), Color("#0b1b17", 0.96))
+	_draw_text("%s  HP %d/%d" % [structure_label, roundi(structure_hp), roundi(structure_max_hp)], Vector2(safe_insets.x + 30.0, action_top + 24.0), 14, Color("#dcefe4"))
+	draw_rect(Rect2(safe_insets.x + 24.0, action_top + 34.0, 166.0, 50.0), Color("#254538"))
+	draw_rect(Rect2(safe_insets.x + 24.0, action_top + 34.0, 166.0, 50.0), Color("#72d69a"), false, 2.0)
+	_draw_text("REPAIR $40", Vector2(safe_insets.x + 40.0, action_top + 65.0), 16, Color("#f0fff5"))
 	if can_upgrade:
 		var level := 1
 		if selected_structure_type == "outpost":
@@ -2017,12 +2025,12 @@ func _draw_structure_actions() -> void:
 		else:
 			level = int(turrets[selected_structure_index].get("level", 1))
 		if level < 2:
-			draw_rect(Rect2(204.0, STRUCTURE_ACTION_TOP + 34.0, 166.0, 50.0), Color("#3a3420"))
-			draw_rect(Rect2(204.0, STRUCTURE_ACTION_TOP + 34.0, 166.0, 50.0), Color("#e4c66d"), false, 2.0)
-			_draw_text("UPGRADE $150", Vector2(213.0, STRUCTURE_ACTION_TOP + 65.0), 15, Color("#fff4c7"))
+			draw_rect(Rect2(safe_insets.x + 204.0, action_top + 34.0, 166.0, 50.0), Color("#3a3420"))
+			draw_rect(Rect2(safe_insets.x + 204.0, action_top + 34.0, 166.0, 50.0), Color("#e4c66d"), false, 2.0)
+			_draw_text("UPGRADE $150", Vector2(safe_insets.x + 213.0, action_top + 65.0), 15, Color("#fff4c7"))
 
 func _draw_deployment_bar() -> void:
-	var top := viewport_size.y - 200.0
+	var top: float = _safe_bottom_y(200.0)
 	draw_rect(Rect2(0.0, top, viewport_size.x, 200.0), Color("#0b1715"))
 	draw_line(Vector2(0.0, top), Vector2(viewport_size.x, top), Color("#45665a"), 2.0)
 	var half_width := viewport_size.x * 0.5
@@ -2328,8 +2336,36 @@ func _draw_end_screen() -> void:
 
 func _on_viewport_size_changed() -> void:
 	viewport_size = get_viewport_rect().size
+	_refresh_safe_area()
 	_clamp_camera()
 	queue_redraw()
+
+func _refresh_safe_area() -> void:
+	var screen_size: Vector2i = DisplayServer.screen_get_size()
+	var display_safe_area: Rect2i = DisplayServer.get_display_safe_area()
+	if DisplayServer.get_name() == "headless" or screen_size.x <= 0 or screen_size.y <= 0 or display_safe_area.size.x <= 0 or display_safe_area.size.y <= 0:
+		safe_insets = Vector4.ZERO
+		safe_area_rect = Rect2(Vector2.ZERO, viewport_size)
+		return
+	var safe_left_px: int = clampi(display_safe_area.position.x, 0, screen_size.x)
+	var safe_top_px: int = clampi(display_safe_area.position.y, 0, screen_size.y)
+	var safe_right_px: int = clampi(screen_size.x - display_safe_area.end.x, 0, screen_size.x)
+	var safe_bottom_px: int = clampi(screen_size.y - display_safe_area.end.y, 0, screen_size.y)
+	var viewport_scale: Vector2 = viewport_size / Vector2(screen_size)
+	safe_insets = Vector4(float(safe_left_px) * viewport_scale.x, float(safe_top_px) * viewport_scale.y, float(safe_right_px) * viewport_scale.x, float(safe_bottom_px) * viewport_scale.y)
+	var max_horizontal_inset: float = viewport_size.x * 0.20
+	var max_vertical_inset: float = viewport_size.y * 0.20
+	safe_insets.x = minf(safe_insets.x, max_horizontal_inset)
+	safe_insets.y = minf(safe_insets.y, max_vertical_inset)
+	safe_insets.z = minf(safe_insets.z, max_horizontal_inset)
+	safe_insets.w = minf(safe_insets.w, max_vertical_inset)
+	safe_area_rect = Rect2(Vector2(safe_insets.x, safe_insets.y), Vector2(maxf(1.0, viewport_size.x - safe_insets.x - safe_insets.z), maxf(1.0, viewport_size.y - safe_insets.y - safe_insets.w)))
+
+func _safe_viewport_size() -> Vector2:
+	return safe_area_rect.size
+
+func _safe_bottom_y(panel_height: float) -> float:
+	return maxf(safe_insets.y, viewport_size.y - safe_insets.w - panel_height)
 
 func _camera_view_rect() -> Rect2:
 	var size: Vector2 = viewport_size / maxf(camera_zoom, 0.01)
