@@ -989,6 +989,10 @@ func _update_building_effects(delta: float) -> void:
 		var max_hp: float = float(unit.get("max_hp", 100.0))
 		if food > 0 and _is_near_building_type(unit["pos"], "HOSPITAL", HOSPITAL_REGEN_RADIUS):
 			unit["hp"] = minf(max_hp, float(unit.get("hp", max_hp)) + 2.0 * delta)
+		if food > 0:
+			for clinic in constructed_buildings:
+				if str(clinic.get("kind", "")) == "clinic" and unit["pos"].distance_squared_to(clinic["pos"]) <= 150.0 * 150.0:
+					unit["hp"] = minf(max_hp, float(unit.get("hp", max_hp)) + 4.0 * delta)
 		if str(unit.get("kind", "")) == "medic" and not bool(unit.get("garrisoned", false)):
 			for ally_index in range(units.size()):
 				if ally_index == unit_index:
@@ -3111,7 +3115,9 @@ func _draw_entities() -> void:
 		var sniper: bool = unit_kind == "sniper"
 		var engineer: bool = unit_kind == "engineer"
 		var militia: bool = unit_kind == "militia"
-		var tint := Color("#e0b66c") if engineer else (Color("#c6d46b") if militia else (Color("#6bdc9a") if not sniper else Color("#8ab6ff")))
+		var medic: bool = unit_kind == "medic"
+		var heavy: bool = unit_kind == "heavy"
+		var tint := Color("#e0b66c") if engineer else (Color("#79d4e6") if medic else (Color("#cf6d58") if heavy else (Color("#c6d46b") if militia else (Color("#6bdc9a") if not sniper else Color("#8ab6ff"))))
 		draw_rect(Rect2(p - Vector2(9, 9), Vector2(18, 18)), tint)
 		var veteran_rank: int = clampi(int(unit.get("rank", 0)), 0, 3)
 		for chevron in range(veteran_rank):
@@ -3126,6 +3132,10 @@ func _draw_entities() -> void:
 			_draw_text("M", p + Vector2(-4.0, 4.0), 11, Color("#1b2410"))
 		elif engineer:
 			_draw_text("E", p + Vector2(-4.0, 4.0), 11, Color("#1b2410"))
+		elif medic:
+			_draw_text("+", p + Vector2(-4.0, 4.0), 11, Color("#10252a"))
+		elif heavy:
+			_draw_text("H", p + Vector2(-4.0, 4.0), 11, Color("#2a1511"))
 		var task_label: String = str(unit.get("ai_task", ""))
 		if not task_label.is_empty():
 			_draw_text(task_label, p + Vector2(-25.0, -15.0), 9, Color("#b5f3d2"))
