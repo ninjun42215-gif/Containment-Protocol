@@ -669,11 +669,11 @@ func _handle_tap(pos: Vector2) -> void:
 	if pos.x >= viewport_size.x - 112.0 and pos.y >= 282.0 and pos.y <= 338.0:
 		_zoom_camera(0.85, viewport_size * 0.5)
 		return
-	if pos.x >= viewport_size.x - 190.0 and pos.y >= 145.0 and pos.y <= 206.0:
+	if pos.x <= 190.0 and pos.y >= 214.0 and pos.y <= 266.0:
 		time_scale_index = (time_scale_index + 1) % TIME_SCALES.size()
 		queue_redraw()
 		return
-	if pos.x >= viewport_size.x - 190.0 and pos.y >= 214.0 and pos.y <= 266.0:
+	if pos.x <= 190.0 and pos.y >= 274.0 and pos.y <= 326.0:
 		sfx_enabled = not sfx_enabled
 		if not sfx_enabled:
 			audio_queue.clear()
@@ -843,6 +843,8 @@ func _draw() -> void:
 	_draw_placement_preview()
 	for flare in flares:
 		var flare_pos: Vector2 = flare["pos"]
+		if not visible_effect_rect.has_point(flare_pos):
+			continue
 		var pulse: float = 1.0 + 0.18 * sin(float(flare["phase"]) * 8.0)
 		draw_circle(flare_pos, 11.0 * pulse, Color(1.0, 0.78, 0.12, 0.18))
 		draw_circle(flare_pos, 5.0 * pulse, Color("#ffe45c"))
@@ -1028,12 +1030,12 @@ func _draw_hud() -> void:
 	_draw_text("SAVED %d  LOST %d  HORDE %d" % [saved_count, lost_count, zombies.size()], Vector2(34.0, 142.0), 13, Color("#9cbcaf"))
 	if message_timer > 0.0:
 		_draw_text(message, Vector2(34.0, 177.0), 14, Color("#ffbd76"))
-	draw_rect(Rect2(viewport_size.x - 190.0, 154.0, 172.0, 52.0), Color("#183329"))
-	draw_rect(Rect2(viewport_size.x - 190.0, 154.0, 172.0, 52.0), Color("#6ccf91"), false, 2.0)
-	_draw_text("TIME  " + TIME_LABELS[time_scale_index], Vector2(viewport_size.x - 175.0, 187.0), 17, Color("#e5f8eb"))
-	draw_rect(Rect2(viewport_size.x - 190.0, 214.0, 172.0, 52.0), Color("#183329"))
-	draw_rect(Rect2(viewport_size.x - 190.0, 214.0, 172.0, 52.0), Color("#6ccf91") if sfx_enabled else Color("#8b6262"), false, 2.0)
-	_draw_text("[SFX: ON]" if sfx_enabled else "[SFX: OFF]", Vector2(viewport_size.x - 175.0, 247.0), 16, Color("#e5f8eb"))
+	draw_rect(Rect2(18.0, 214.0, 172.0, 52.0), Color("#183329"))
+	draw_rect(Rect2(18.0, 214.0, 172.0, 52.0), Color("#6ccf91"), false, 2.0)
+	_draw_text("TIME  " + TIME_LABELS[time_scale_index], Vector2(33.0, 247.0), 17, Color("#e5f8eb"))
+	draw_rect(Rect2(18.0, 274.0, 172.0, 52.0), Color("#183329"))
+	draw_rect(Rect2(18.0, 274.0, 172.0, 52.0), Color("#6ccf91") if sfx_enabled else Color("#8b6262"), false, 2.0)
+	_draw_text("[SFX: ON]" if sfx_enabled else "[SFX: OFF]", Vector2(33.0, 307.0), 16, Color("#e5f8eb"))
 
 func _draw_deployment_bar() -> void:
 	var top := viewport_size.y - 200.0
