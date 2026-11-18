@@ -34,7 +34,7 @@ const FLARE_LURE_RADIUS := 220.0
 const AUDIO_SAMPLE_RATE := 22050.0
 const MAX_ACTIVE_ZOMBIES := 650
 const PENDING_WAVE_SPAWN_INTERVAL := 0.20
-const SAVE_VERSION := 3
+const SAVE_VERSION := 4
 const OUTPOST_MIN_SIZE := 220.0
 const OUTPOST_MAX_SIZE := 760.0
 const OUTPOST_SNAP := 20.0
@@ -79,6 +79,10 @@ var supply_drop_timer := 150.0
 var supply_crates: Array[Dictionary] = []
 var civilian_steering: Array[Dictionary] = []
 var campaign_started := false
+var campaign_start_grace_timer := 0.0
+var initial_civilian_count := 0
+var scrap := 120
+var fuel := 300.0
 var endless_containment := false
 var day_phase := "DAY"
 var save_path := "user://containment_save.json"
@@ -226,6 +230,10 @@ func _start_sector(index: int) -> void:
 	evacuation_zones.clear()
 	primary_hq_position = Vector2(-1.0, -1.0)
 	campaign_started = false
+	campaign_start_grace_timer = 0.0
+	initial_civilian_count = 0
+	scrap = 120
+	fuel = 300.0
 	endless_containment = false
 	shelter_flush_timer = 15.0
 	supply_drop_timer = 150.0
@@ -268,6 +276,7 @@ func _start_sector(index: int) -> void:
 			if _is_open_world_position(spawn_point, 18.0):
 				civilians.append(spawn_point)
 				civilian_steering.append({})
+	initial_civilian_count = civilians.size()
 	for district_index in range(spawn_districts.size()):
 		var district: Rect2 = spawn_districts[district_index]
 		for outbreak_index in range(_scenario_initial_zombie_count(district_index)):
@@ -307,6 +316,7 @@ func _process(delta: float) -> void:
 		return
 
 	elapsed += sim_delta
+	campaign_start_grace_timer = maxf(0.0, campaign_start_grace_timer - sim_delta)
 	_update_vehicles(sim_delta)
 	_update_auto_ops(sim_delta)
 	message_timer = maxf(0.0, message_timer - sim_delta)
@@ -632,9 +642,12 @@ func _process(delta: float) -> void:
 		game_state = "victory"
 		_save_operation()
 		message = "SECTOR SECURED"
-	elif civilians.is_empty() and saved_count == 0 and lost_count > 0 and _total_sheltered_civilians() == 0:
-		game_state = "defeat"
-		message = "EVACUATION FAILED"
+	elif campaign_started and game_state == "playing" and campaign_start_grace_timer <= 0.0:
+		var surviving_civilians: int = civilians.size() + _total_sheltered_civilians() + saved_count
+		var minimum_survivors: int = maxi(1, ceili(float(maxi(initial_civilian_count, 1)) * 0.05))
+		if outposts.is_empty() or (lost_count > 0 and surviving_civilians < minimum_survivors):
+			game_state = "defeat"
+			message = "EVACUATION FAILED"
 
 	queue_redraw()
 
@@ -743,6 +756,14 @@ func _generate_state_map() -> void:
 				var base_hp: float = 1800.0 if archetype == "HIGHRISE" else 900.0
 				buildings.append(rect)
 				building_archetypes.append({"type": archetype, "district": district_index, "cache_available": archetype == "WAREHOUSE", "cache_hold": 0.0, "hp": base_hp, "max_hp": base_hp, "destroyed": false, "fortified": false, "secured": false, "fortified_outpost_index": -1})
+	# A valid campaign always has visible structures, even if future road-clearance
+	# or district-generation rules reject every procedural candidate.
+	while buildings.size() < 8:
+		var fallback_index: int = buildings.size()
+		var fallback_center: Vector2 = Vector2(WORLD_SIZE.x * (0.18 + float(fallback_index % 4) * 0.21), WORLD_SIZE.y * (0.12 + float(floori(float(fallback_index) / 4.0)) * 0.76))
+		var fallback_rect := Rect2(fallback_center - Vector2(110.0, 100.0), Vector2(220.0, 200.0))
+		buildings.append(fallback_rect)
+		building_archetypes.append({"type": "RESIDENTIAL", "district": -1, "cache_available": false, "cache_hold": 0.0, "hp": 900.0, "max_hp": 900.0, "destroyed": false, "fortified": false, "secured": false, "fortified_outpost_index": -1})
 	for road_index in range(3):
 		var road_y: float = WORLD_SIZE.y * float(road_index + 1) / 4.0
 		highway_segments.append({"from": Vector2(0.0, road_y), "to": Vector2(WORLD_SIZE.x, road_y), "width": 76.0})
@@ -1003,7 +1024,6 @@ func _confirm_outpost_placement() -> void:
 		var hq_fortified_count: int = _fortify_enclosed_buildings(outpost_placement_rect, 0)
 		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 300.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 1200.0, "max_hp": 1200.0, "level": 1, "capacity": hq_capacity + hq_fortified_count * 8, "sheltered": 0, "fortified_buildings": _fortified_building_indices(0)})
 		_create_outpost_perimeter(outpost_placement_rect, 0)
-		campaign_started = true
 		game_state = "playing"
 		wave_timer = 1.0
 	else:
@@ -1013,6 +1033,10 @@ func _confirm_outpost_placement() -> void:
 		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 260.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 900.0, "max_hp": 900.0, "level": 1, "capacity": capacity + fortified_count * 8, "sheltered": 0, "fortified_buildings": _fortified_building_indices(new_outpost_index)})
 		_create_outpost_perimeter(outpost_placement_rect, outposts.size() - 1)
 	funds -= cost
+	if outpost_placement_kind == "hq":
+		# The HQ, perimeter and evacuation zone are now registered before the campaign can tick.
+		campaign_started = not outposts.is_empty() and float(outposts[0].get("hp", 0.0)) > 0.0
+		campaign_start_grace_timer = 1.0
 	outpost_placement_active = false
 	outpost_placement_dragging = false
 	message = "CUSTOM OUTPOST ESTABLISHED — $%d" % cost
@@ -1405,7 +1429,7 @@ func _draw_buildings() -> void:
 		if not visible_rect.intersects(building):
 			continue
 		var archetype: String = _building_type_at(index)
-		var state: Dictionary = building_archetypes[index]
+		var state: Dictionary = building_archetypes[index] if index < building_archetypes.size() else {}
 		var fill: Color = Color("#263746")
 		var edge: Color = Color("#829db5")
 		var tag: String = "RES"
@@ -3294,8 +3318,13 @@ func _structure_action_top() -> float:
 	return safe_insets.y + maxf(STRUCTURE_ACTION_TOP, HUD_EDGE_PADDING + 196.0 + 3.0 * (touch_target_size + 6.0))
 
 func _camera_view_rect() -> Rect2:
-	var size: Vector2 = viewport_size / maxf(camera_zoom, 0.01)
-	return Rect2(camera_position - size * 0.5, size)
+	# Derive the world-space culling rectangle from the same inverse transform
+	# used by input. This keeps rendering and touch coordinates in lockstep.
+	var top_left: Vector2 = _screen_to_world(Vector2.ZERO)
+	var bottom_right: Vector2 = _screen_to_world(viewport_size)
+	var rect_position := Vector2(minf(top_left.x, bottom_right.x), minf(top_left.y, bottom_right.y))
+	var rect_end := Vector2(maxf(top_left.x, bottom_right.x), maxf(top_left.y, bottom_right.y))
+	return Rect2(rect_position, rect_end - rect_position)
 
 func _screen_to_world(screen_position: Vector2) -> Vector2:
 	return camera_position + (screen_position - viewport_size * 0.5) / maxf(camera_zoom, 0.01)
@@ -3543,7 +3572,7 @@ func _save_operation() -> void:
 	# Never replace a prior valid campaign with an incomplete HQ-placement state.
 	if not campaign_started or game_state == "hq_placement":
 		return
-	var state: Dictionary = {"version": SAVE_VERSION, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer}
+	var state: Dictionary = {"version": SAVE_VERSION, "scrap": scrap, "fuel": fuel, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer}
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify(_save_variant(state)))
@@ -3568,6 +3597,9 @@ func _resume_operation() -> void:
 		district_seed_points.assign(state["district_seed_points"])
 	wave = int(state.get("wave", 0))
 	funds = int(state.get("funds", 300))
+	scrap = maxi(0, int(state.get("scrap", 120)))
+	fuel = maxf(0.0, float(state.get("fuel", 300.0)))
+	initial_civilian_count = maxi(int(state.get("initial_civilian_count", 0)), civilians.size() + int(state.get("saved_count", 0)) + int(state.get("lost_count", 0)))
 	saved_count = int(state.get("saved_count", 0))
 	lost_count = int(state.get("lost_count", 0))
 	primary_hq_position = state.get("primary_hq_position", Vector2.ZERO)
@@ -3639,7 +3671,8 @@ func _resume_operation() -> void:
 		civilian_steering.append({})
 	_rebuild_zombie_spatial_grid()
 	_rebuild_spatial_grid(civilian_grid, civilians)
-	campaign_started = true
+	campaign_started = not outposts.is_empty()
+	campaign_start_grace_timer = 1.0
 	manual_paused = false
 	lifecycle_paused = false
 	game_state = "playing"

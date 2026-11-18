@@ -1,0 +1,86 @@
+name: Build iOS Xcode Project
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  export-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Godot 4.3 binary and export templates
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            Godot.app
+            ~/Library/Application Support/Godot/export_templates/4.3.stable
+          key: godot-4.3-macos-ios-templates-v1
+
+      - name: Download Godot 4.3 and iOS export templates
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_macos.universal.zip \
+            --output godot-macos.zip
+          curl --fail --location --retry 3 \
+            https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_export_templates.tpz \
+            --output godot-templates.tpz
+          unzip -q godot-macos.zip
+          APP_PATH="$(find . -maxdepth 3 -name Godot.app -print -quit)"
+          test -n "$APP_PATH"
+          mv "$APP_PATH" Godot.app
+          mkdir -p "$HOME/Library/Application Support/Godot/export_templates/4.3.stable"
+          mkdir -p "$RUNNER_TEMP/godot-templates"
+          unzip -q godot-templates.tpz -d "$RUNNER_TEMP/godot-templates"
+          test -d "$RUNNER_TEMP/godot-templates/templates"
+          cp -a "$RUNNER_TEMP/godot-templates/templates/." "$HOME/Library/Application Support/Godot/export_templates/4.3.stable/"
+          test -s "$HOME/Library/Application Support/Godot/export_templates/4.3.stable/ios.zip"
+
+      - name: Verify Godot and Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT="$GITHUB_WORKSPACE/Godot.app/Contents/MacOS/Godot"
+          test -x "$GODOT"
+          "$GODOT" --version
+          xcodebuild -version
+          xcrun --find clang
+
+      - name: Validate GDScript project
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT="$GITHUB_WORKSPACE/Godot.app/Contents/MacOS/Godot"
+          VALIDATION_LOG="$RUNNER_TEMP/godot-ios-validation.log"
+          "$GODOT" --headless --path "$GITHUB_WORKSPACE" --editor --quit 2>&1 | tee "$VALIDATION_LOG"
+          if grep -E "SCRIPT ERROR:|Parse Error:|Failed to load script" "$VALIDATION_LOG"; then
+            echo "Godot reported a GDScript parse/load error."
+            exit 1
+          fi
+
+      - name: Export unsigned iOS Xcode project
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/ios
+          "$GITHUB_WORKSPACE/Godot.app/Contents/MacOS/Godot" --headless --path "$GITHUB_WORKSPACE" \
+            --export-debug "iOS" build/ios/ContainmentProtocol
+          test -d build/ios/ContainmentProtocol
+          test -s build/ios/ContainmentProtocol/project.pbxproj
+          ditto -c -k --sequesterRsrc --keepParent build/ios/ContainmentProtocol build/ios/ContainmentProtocol-Xcode.zip
+          shasum -a 256 build/ios/ContainmentProtocol-Xcode.zip | tee build/ios/ContainmentProtocol-Xcode.zip.sha256
+
+      - name: Upload unsigned iOS Xcode artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ContainmentProtocol-iOS-Xcode-Unsigned
+          path: |
+            build/ios/ContainmentProtocol-Xcode.zip
+            build/ios/ContainmentProtocol-Xcode.zip.sha256
+          if-no-files-found: error
