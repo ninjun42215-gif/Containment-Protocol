@@ -820,51 +820,71 @@ func _execute_airstrike(center: Vector2) -> void:
 	message_timer = 2.5
 
 func _draw() -> void:
+	viewport_size = get_viewport_rect().size
 	if game_state == "title" or game_state == "sector_select":
-		draw_rect(Rect2(Vector2.ZERO, VIEW_SIZE), Color("#07110f"))
-		_draw_grid()
+		draw_rect(Rect2(Vector2.ZERO, viewport_size), Color("#07110f"))
+		for x in range(0, int(viewport_size.x) + 1, 60):
+			draw_line(Vector2(x, 0.0), Vector2(x, viewport_size.y), Color(0.12, 0.23, 0.19, 0.32), 1.0)
+		for y in range(0, int(viewport_size.y) + 1, 60):
+			draw_line(Vector2(0.0, y), Vector2(viewport_size.x, y), Color(0.12, 0.23, 0.19, 0.32), 1.0)
 		_draw_title_screen()
 		return
 	var shake_offset := Vector2.ZERO
 	if shake_timer > 0.0:
 		shake_offset = Vector2(randf_range(-shake_strength, shake_strength), randf_range(-shake_strength, shake_strength))
-	draw_set_transform(shake_offset, 0.0, Vector2.ONE)
-	draw_rect(Rect2(Vector2.ZERO, VIEW_SIZE), Color("#07110f"))
+	var world_transform_origin := viewport_size * 0.5 - camera_position * camera_zoom + shake_offset
+	draw_set_transform(world_transform_origin, 0.0, Vector2(camera_zoom, camera_zoom))
+	draw_rect(Rect2(Vector2.ZERO, WORLD_SIZE), Color("#07110f"))
 	_draw_grid()
 	_draw_evac_zone()
 	_draw_buildings()
 	_draw_entities()
 	_draw_medevac()
 	_draw_placement_preview()
-	_draw_hud()
-	_draw_deployment_bar()
-	if manual_paused or lifecycle_paused:
-		_draw_pause_overlay()
-	if airstrike_timer > 0.0:
-		draw_arc(airstrike_marker, 112.0, 0.0, TAU, 48, Color(1.0, 0.42, 0.12, airstrike_timer), 4.0)
 	for flare in flares:
-		var pulse: float = 1.0 + 0.18 * sin(float(flare["phase"]) * 8.0)
 		var flare_pos: Vector2 = flare["pos"]
+		var pulse: float = 1.0 + 0.18 * sin(float(flare["phase"]) * 8.0)
 		draw_circle(flare_pos, 11.0 * pulse, Color(1.0, 0.78, 0.12, 0.18))
 		draw_circle(flare_pos, 5.0 * pulse, Color("#ffe45c"))
 		draw_arc(flare_pos, 18.0 * pulse, 0.0, TAU, 32, Color(1.0, 0.82, 0.22, 0.8), 2.0)
+	var visible_effect_rect := _camera_view_rect().grow(220.0)
 	for wave_effect in shockwaves:
+		if not visible_effect_rect.has_point(wave_effect["pos"]):
+			continue
 		var alpha: float = clampf(float(wave_effect["life"]) / float(wave_effect["max_life"]), 0.0, 1.0)
 		var ring_color := Color(0.35, 1.0, 0.28, alpha) if bool(wave_effect.get("toxic", false)) else Color(1.0, 0.48, 0.16, alpha)
 		draw_arc(wave_effect["pos"], float(wave_effect["radius"]), 0.0, TAU, 48, ring_color, 3.0)
+	if airstrike_timer > 0.0 and visible_effect_rect.has_point(airstrike_marker):
+		draw_arc(airstrike_marker, 112.0, 0.0, TAU, 48, Color(1.0, 0.42, 0.12, airstrike_timer), 4.0)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	_draw_hud()
+	_draw_minimap()
+	_draw_deployment_bar()
+	if manual_paused or lifecycle_paused:
+		_draw_pause_overlay()
 	if game_state != "playing":
 		_draw_end_screen()
-	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _draw_grid() -> void:
-	for x in range(0, 721, 60):
-		draw_line(Vector2(x, 0), Vector2(x, BAR_TOP), Color(0.12, 0.23, 0.19, 0.32), 1.0)
-	for y in range(0, int(BAR_TOP) + 1, 60):
-		draw_line(Vector2(0, y), Vector2(720, y), Color(0.12, 0.23, 0.19, 0.32), 1.0)
-	draw_rect(Rect2(18, 18, 684, 1040), Color(0.12, 0.24, 0.19, 0.12), false, 2.0)
+	var visible_rect := _camera_view_rect().grow(100.0)
+	var start_x := maxi(0, floori(visible_rect.position.x / 80.0) * 80)
+	var end_x := mini(int(WORLD_SIZE.x), ceili(visible_rect.end.x / 80.0) * 80)
+	var start_y := maxi(0, floori(visible_rect.position.y / 80.0) * 80)
+	var end_y := mini(int(WORLD_SIZE.y), ceili(visible_rect.end.y / 80.0) * 80)
+	for x in range(start_x, end_x + 1, 80):
+		draw_line(Vector2(x, start_y), Vector2(x, end_y), Color(0.12, 0.23, 0.19, 0.32), 1.0)
+	for y in range(start_y, end_y + 1, 80):
+		draw_line(Vector2(start_x, y), Vector2(end_x, y), Color(0.12, 0.23, 0.19, 0.32), 1.0)
 
 func _draw_evac_zone() -> void:
-	pass
+	for zone in evacuation_zones:
+		draw_circle(zone, EVAC_RADIUS, Color(0.05, 0.55, 0.25, 0.18))
+		draw_arc(zone, EVAC_RADIUS, 0.0, TAU, 48, Color("#48e58b"), 3.0)
+		draw_arc(zone, EVAC_RADIUS - 12.0, 0.0, TAU, 48, Color(0.28, 0.85, 0.55, 0.35), 1.0)
+		_draw_text("SAFE ZONE", zone + Vector2(-45.0, 5.0), 13, Color("#8cf5b5"))
+	for outpost in outposts:
+		draw_circle(outpost["pos"], float(outpost["safe_radius"]), Color(0.10, 0.65, 0.32, 0.035))
+		draw_arc(outpost["pos"], float(outpost["vision_radius"]), 0.0, TAU, 48, Color(0.25, 0.85, 0.48, 0.16), 1.0)
 
 func _draw_title_screen() -> void:
 	draw_rect(Rect2(viewport_size.x * 0.06, viewport_size.y * 0.16, viewport_size.x * 0.88, viewport_size.y * 0.68), Color(0.02, 0.07, 0.055, 0.96))
@@ -874,7 +894,7 @@ func _draw_title_screen() -> void:
 	_draw_text("TACTICAL EVACUATION COMMAND", Vector2(viewport_size.x * 0.17, viewport_size.y * 0.35), 18, Color("#a9c8b7"))
 	if game_state == "title":
 		draw_rect(Rect2(viewport_size.x * 0.19, viewport_size.y * 0.51, viewport_size.x * 0.62, 100.0), Color("#1d4935"))
-		draw_rect(Rect2(140.0, 650.0, 440.0, 100.0), Color("#75e6a0"), false, 3.0)
+		draw_rect(Rect2(viewport_size.x * 0.19, viewport_size.y * 0.51, viewport_size.x * 0.62, 100.0), Color("#75e6a0"), false, 3.0)
 		_draw_text("TAP TO SELECT SECTOR", Vector2(viewport_size.x * 0.27, viewport_size.y * 0.56), 22, Color("#f0fff5"))
 	else:
 		_draw_text("SELECT OPERATIONAL SECTOR", Vector2(viewport_size.x * 0.19, viewport_size.y * 0.42), 22, Color("#d8eee0"))
@@ -971,6 +991,34 @@ func _draw_entities() -> void:
 			continue
 		var alpha: float = clampf(float(flash["life"]) / float(flash["max_life"]), 0.0, 1.0)
 		draw_circle(flash["pos"], 8.0 * alpha, Color(1.0, 0.78, 0.35, alpha))
+
+func _draw_minimap() -> void:
+	var minimap_rect := Rect2(Vector2(viewport_size.x - MINIMAP_SIZE.x - 18.0, 18.0), MINIMAP_SIZE)
+	draw_rect(minimap_rect, Color("#081713", 0.96))
+	for building in buildings:
+		var building_rect := Rect2(minimap_rect.position + building.position / WORLD_SIZE * minimap_rect.size, building.size / WORLD_SIZE * minimap_rect.size)
+		draw_rect(building_rect, Color("#52685d"))
+	for zone in evacuation_zones:
+		draw_circle(minimap_rect.position + zone / WORLD_SIZE * minimap_rect.size, 2.2, Color("#54e98e"))
+	for civilian in civilians:
+		draw_circle(minimap_rect.position + civilian / WORLD_SIZE * minimap_rect.size, 1.5, Color("#65cfff"))
+	for zombie in zombies:
+		var zombie_pos: Vector2 = zombie["pos"]
+		draw_circle(minimap_rect.position + zombie_pos / WORLD_SIZE * minimap_rect.size, 1.9, Color("#f34d58", 0.78))
+	for outpost in outposts:
+		draw_rect(Rect2(minimap_rect.position + outpost["pos"] / WORLD_SIZE * minimap_rect.size - Vector2(2.0, 2.0), Vector2(4.0, 4.0)), Color("#55f08b"))
+	for turret in turrets:
+		draw_rect(Rect2(minimap_rect.position + turret["pos"] / WORLD_SIZE * minimap_rect.size - Vector2(1.5, 1.5), Vector2(3.0, 3.0)), Color("#f1d071"))
+	var camera_rect := _camera_view_rect()
+	var mini_camera := Rect2(minimap_rect.position + camera_rect.position / WORLD_SIZE * minimap_rect.size, camera_rect.size / WORLD_SIZE * minimap_rect.size)
+	draw_rect(mini_camera, Color("#f4e28a", 0.12))
+	draw_rect(mini_camera, Color("#f4e28a"), false, 1.5)
+	draw_rect(Rect2(Vector2(viewport_size.x - 112.0, 220.0), Vector2(94.0, 56.0)), Color("#183329"))
+	draw_rect(Rect2(Vector2(viewport_size.x - 112.0, 220.0), Vector2(94.0, 56.0)), Color("#6ccf91"), false, 2.0)
+	_draw_text("ZOOM +", Vector2(viewport_size.x - 101.0, 244.0), 14, Color("#e5f8eb"))
+	draw_rect(Rect2(Vector2(viewport_size.x - 112.0, 282.0), Vector2(94.0, 56.0)), Color("#183329"))
+	draw_rect(Rect2(Vector2(viewport_size.x - 112.0, 282.0), Vector2(94.0, 56.0)), Color("#6ccf91"), false, 2.0)
+	_draw_text("ZOOM -", Vector2(viewport_size.x - 101.0, 306.0), 14, Color("#e5f8eb"))
 
 func _draw_hud() -> void:
 	draw_rect(Rect2(18.0, 18.0, 390.0, 126.0), Color("#0b1b17", 0.94))
