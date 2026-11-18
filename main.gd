@@ -565,7 +565,7 @@ func _process(delta: float) -> void:
 						break
 				var fire_interval := base_interval * (0.8 if command_buff else 1.0)
 				if _is_near_building_type(turret["pos"], "ARMORY", ARMORY_RADIUS):
-					fire_interval *= 0.85
+					fire_interval /= 1.15
 				if int(turret.get("level", 1)) >= 2:
 					var tracer_direction: Vector2 = (turret_target - turret["pos"]).normalized().orthogonal() * 5.0
 					_add_bullet_tracer(turret["pos"] + tracer_direction, turret_target + tracer_direction)
@@ -619,7 +619,7 @@ func _process(delta: float) -> void:
 			var unit_damage: float = 80.0 if is_sniper else (16.0 if is_militia else 35.0)
 			var fire_interval: float = 1.05 if is_sniper else (0.85 if is_militia else 0.62)
 			if _is_near_building_type(unit_pos, "ARMORY", ARMORY_RADIUS):
-				fire_interval *= 0.85
+				fire_interval /= 1.15
 			_damage_zombie(target_index, unit_damage)
 			unit["cooldown"] = fire_interval
 			muzzle_flashes.append({"pos": firing_origin, "life": 0.10, "max_life": 0.10})
