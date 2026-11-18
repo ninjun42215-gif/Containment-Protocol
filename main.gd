@@ -1463,6 +1463,10 @@ func _draw_buildings() -> void:
 				var window_x: float = building.position.x + building.size.x * float(window_index) / 4.0
 				draw_line(Vector2(window_x, building.position.y + 15.0), Vector2(window_x, building.end.y - 15.0), Color("#7189a5"), 2.0)
 		elif archetype == "HOSPITAL":
+			var pad_center: Vector2 = building.get_center() + Vector2(building.size.x * 0.25, building.size.y * 0.24)
+			draw_circle(pad_center, 30.0, Color("#283a3a"))
+			draw_circle(pad_center, 30.0, Color("#b6d7d2"), false, 2.0)
+			_draw_text("H", pad_center + Vector2(-9.0, 9.0), 24, Color("#e8f7f2"))
 			var center: Vector2 = building.get_center() + Vector2(0.0, -42.0)
 			draw_rect(Rect2(center - Vector2(20.0, 6.0), Vector2(40.0, 12.0)), Color("#fff4f5"))
 			draw_rect(Rect2(center - Vector2(6.0, 20.0), Vector2(12.0, 40.0)), Color("#fff4f5"))
@@ -1541,6 +1545,7 @@ func _recruit_unit(kind: String) -> void:
 	selected_unit_index = units.size() - 1
 	message = "%s RECRUITED — $%d" % [kind.to_upper(), cost]
 	message_timer = 2.0
+	world_callouts.append({"pos": spawn_position, "text": "RECRUITED", "life": 2.0})
 	_save_operation()
 
 func _ai_button_rect() -> Rect2:
@@ -2920,12 +2925,12 @@ func _draw_hud() -> void:
 	for recruit_rect in [inf_rect, sniper_rect]:
 		draw_rect(recruit_rect, Color("#183329"))
 		draw_rect(recruit_rect, Color("#6ccf91"), false, 2.0)
-	_draw_text("[RECRUIT INF]", inf_rect.position + Vector2(7.0, touch_target_size * 0.62), 12, Color("#e5f8eb"))
-	_draw_text("[RECRUIT SNIPER]", sniper_rect.position + Vector2(7.0, touch_target_size * 0.62), 11, Color("#e5f8eb"))
+	_draw_text("[INF $60]", inf_rect.position + Vector2(7.0, touch_target_size * 0.62), 12, Color("#e5f8eb"))
+	_draw_text("[SNIPER $110]", sniper_rect.position + Vector2(7.0, touch_target_size * 0.62), 11, Color("#e5f8eb"))
 	var engineer_rect := _engineer_button_rect()
 	draw_rect(engineer_rect, Color("#183329"))
 	draw_rect(engineer_rect, Color("#6ccf91"), false, 2.0)
-	_draw_text("[RECRUIT ENG]", engineer_rect.position + Vector2(7.0, touch_target_size * 0.62), 12, Color("#e5f8eb"))
+	_draw_text("[ENGINEER $85]", engineer_rect.position + Vector2(7.0, touch_target_size * 0.62), 11, Color("#e5f8eb"))
 	var salvage_rect := _salvage_button_rect()
 	draw_rect(salvage_rect, Color("#3a3420"))
 	draw_rect(salvage_rect, Color("#e4c66d"), false, 2.0)
@@ -3579,9 +3584,6 @@ func _has_valid_save() -> bool:
 		return false
 	if int(state.get("wave", -1)) < 0:
 		return false
-	var save_version: int = int(state.get("version", 0))
-	if save_version < 2 or save_version > SAVE_VERSION:
-		return false
 	var required_arrays: Array[String] = ["evacuation_zones", "civilians", "zombies", "units", "outposts", "turrets", "barricades", "gates", "building_archetypes", "district_regions", "zombie_grid_serialized", "civilian_grid_serialized"]
 	for key in required_arrays:
 		if not state.has(key) or not state[key] is Array:
@@ -3614,7 +3616,7 @@ func _save_operation() -> void:
 	# Never replace a prior valid campaign with an incomplete HQ-placement state.
 	if not campaign_started or game_state == "hq_placement":
 		return
-	var state: Dictionary = {"version": SAVE_VERSION, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "medevac": medevac, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer}
+	var state: Dictionary = {"version": SAVE_VERSION, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer}
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify(_save_variant(state)))
@@ -3665,7 +3667,7 @@ func _resume_operation() -> void:
 	turrets.assign(state.get("turrets", []))
 	barricades.assign(state.get("barricades", []))
 	flares.assign(state.get("flares", []))
-	medevac = state.get("medevac", {})
+	medevac = {}
 	camera_position = state.get("camera_position", WORLD_SIZE * 0.5)
 	camera_zoom = float(state.get("camera_zoom", 0.62))
 	elapsed = float(state.get("elapsed", 0.0))
