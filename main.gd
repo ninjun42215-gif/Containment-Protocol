@@ -294,16 +294,31 @@ func _process(delta: float) -> void:
 		zombie["pos"] = zpos
 		zombies[i] = zombie
 
-		for c_idx in range(civilians.size() - 1, -1, -1):
-			if zpos.distance_to(civilians[c_idx]) < 15.0:
-				var infected_pos: Vector2 = civilians[c_idx]
-				civilians.remove_at(c_idx)
-				civilian_grid = _build_spatial_grid(civilians)
-				lost_count += 1
-				zombies.append({"pos": infected_pos, "kind": "shambler", "hp": 30.0, "max_hp": 30.0})
-				message = "CIVILIAN LOST"
-				message_timer = 1.4
+		var civilian_cell := _cell_for(zpos)
+		var infected_index := -1
+		for cell_y in range(civilian_cell.y - 1, civilian_cell.y + 2):
+			for cell_x in range(civilian_cell.x - 1, civilian_cell.x + 2):
+				var cell_key := Vector2i(cell_x, cell_y)
+				if not civilian_grid.has(cell_key):
+					continue
+				var nearby_civilians: Array = civilian_grid[cell_key]
+				for raw_civilian_index in nearby_civilians:
+					var civilian_index: int = int(raw_civilian_index)
+					if civilian_index < civilians.size() and zpos.distance_to(civilians[civilian_index]) < 15.0:
+						infected_index = civilian_index
+						break
+				if infected_index >= 0:
+					break
+			if infected_index >= 0:
 				break
+		if infected_index >= 0:
+			var infected_pos: Vector2 = civilians[infected_index]
+			civilians.remove_at(infected_index)
+			civilian_grid = _build_spatial_grid(civilians)
+			lost_count += 1
+			zombies.append({"pos": infected_pos, "kind": "shambler", "hp": 30.0, "max_hp": 30.0})
+			message = "CIVILIAN LOST"
+			message_timer = 1.4
 
 	zombie_grid = _build_zombie_spatial_grid()
 	for outpost_index in range(outposts.size()):
@@ -654,11 +669,11 @@ func _handle_tap(pos: Vector2) -> void:
 	if pos.x >= viewport_size.x - 112.0 and pos.y >= 282.0 and pos.y <= 338.0:
 		_zoom_camera(0.85, viewport_size * 0.5)
 		return
-	if pos.x >= 520.0 and pos.y >= 145.0 and pos.y <= 206.0:
+	if pos.x >= viewport_size.x - 190.0 and pos.y >= 145.0 and pos.y <= 206.0:
 		time_scale_index = (time_scale_index + 1) % TIME_SCALES.size()
 		queue_redraw()
 		return
-	if pos.x >= 530.0 and pos.y >= 214.0 and pos.y <= 266.0:
+	if pos.x >= viewport_size.x - 190.0 and pos.y >= 214.0 and pos.y <= 266.0:
 		sfx_enabled = not sfx_enabled
 		if not sfx_enabled:
 			audio_queue.clear()
@@ -965,12 +980,12 @@ func _draw_hud() -> void:
 	_draw_text("SAVED %d  LOST %d  HORDE %d" % [saved_count, lost_count, zombies.size()], Vector2(34.0, 142.0), 13, Color("#9cbcaf"))
 	if message_timer > 0.0:
 		_draw_text(message, Vector2(34.0, 177.0), 14, Color("#ffbd76"))
-	draw_rect(Rect2(530.0, 154.0, 172.0, 52.0), Color("#183329"))
-	draw_rect(Rect2(530.0, 154.0, 172.0, 52.0), Color("#6ccf91"), false, 2.0)
-	_draw_text("TIME  " + TIME_LABELS[time_scale_index], Vector2(545.0, 187.0), 17, Color("#e5f8eb"))
-	draw_rect(Rect2(530.0, 214.0, 172.0, 52.0), Color("#183329"))
-	draw_rect(Rect2(530.0, 214.0, 172.0, 52.0), Color("#6ccf91") if sfx_enabled else Color("#8b6262"), false, 2.0)
-	_draw_text("[SFX: ON]" if sfx_enabled else "[SFX: OFF]", Vector2(545.0, 247.0), 16, Color("#e5f8eb"))
+	draw_rect(Rect2(viewport_size.x - 190.0, 154.0, 172.0, 52.0), Color("#183329"))
+	draw_rect(Rect2(viewport_size.x - 190.0, 154.0, 172.0, 52.0), Color("#6ccf91"), false, 2.0)
+	_draw_text("TIME  " + TIME_LABELS[time_scale_index], Vector2(viewport_size.x - 175.0, 187.0), 17, Color("#e5f8eb"))
+	draw_rect(Rect2(viewport_size.x - 190.0, 214.0, 172.0, 52.0), Color("#183329"))
+	draw_rect(Rect2(viewport_size.x - 190.0, 214.0, 172.0, 52.0), Color("#6ccf91") if sfx_enabled else Color("#8b6262"), false, 2.0)
+	_draw_text("[SFX: ON]" if sfx_enabled else "[SFX: OFF]", Vector2(viewport_size.x - 175.0, 247.0), 16, Color("#e5f8eb"))
 
 func _draw_deployment_bar() -> void:
 	var top := viewport_size.y - 200.0
