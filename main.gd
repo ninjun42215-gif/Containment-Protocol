@@ -8,6 +8,9 @@ const BAR_TOP := 1080.0
 const EVAC_ZONE := Vector2(360.0, 205.0)
 const EVAC_RADIUS := 76.0
 const MAX_WAVES := 5
+const GRID_CELL_SIZE := 64.0
+const UNIT_SELECT_RADIUS := 30.0
+const BUILDING_RADIUS := 11.0
 
 const DEPLOYMENTS := [
 	{"name": "INFANTRY", "detail": "SQUAD  $100", "cost": 100, "kind": "infantry"},
@@ -33,10 +36,23 @@ var message_timer := 4.0
 var airstrike_marker := Vector2.ZERO
 var airstrike_timer := 0.0
 var screen_font: Font
+var buildings: Array[Rect2] = []
+var civilian_grid: Dictionary = {}
+var zombie_grid: Dictionary = {}
+var selected_unit_index := -1
+var time_scale_index := 0
+const TIME_SCALES := [1.0, 0.25, 0.0]
+const TIME_LABELS := ["1x", "0.25x", "PAUSE"]
+var bullet_tracers: Array[Dictionary] = []
+var muzzle_flashes: Array[Dictionary] = []
+var shockwaves: Array[Dictionary] = []
+var shake_timer := 0.0
+var shake_strength := 0.0
 
 func _ready() -> void:
 	randomize()
 	screen_font = ThemeDB.fallback_font
+	_setup_city()
 	_start_round()
 	queue_redraw()
 
@@ -53,30 +69,44 @@ func _start_round() -> void:
 	elapsed = 0.0
 	game_state = "playing"
 	selected_deployment = 0
+	selected_unit_index = -1
+	time_scale_index = 0
+	bullet_tracers.clear()
+	muzzle_flashes.clear()
+	shockwaves.clear()
+	shake_timer = 0.0
 	message = "EVACUATE CIVILIANS. HOLD THE LINE."
 	message_timer = 4.0
 	for i in range(45):
 		civilians.append(Vector2(randf_range(52.0, 668.0), randf_range(510.0, 1030.0)))
 
 func _process(delta: float) -> void:
+	_update_combat_effects(delta)
 	if game_state != "playing":
 		queue_redraw()
 		return
 
-	elapsed += delta
-	message_timer = maxf(0.0, message_timer - delta)
-	airstrike_timer = maxf(0.0, airstrike_timer - delta)
-	wave_timer -= delta
+	var sim_delta: float = delta * TIME_SCALES[time_scale_index]
+	if sim_delta <= 0.0:
+		queue_redraw()
+		return
+
+	elapsed += sim_delta
+	message_timer = maxf(0.0, message_timer - sim_delta)
+	airstrike_timer = maxf(0.0, airstrike_timer - sim_delta)
+	wave_timer -= sim_delta
 
 	if wave < MAX_WAVES and wave_timer <= 0.0:
 		_spawn_wave()
 		wave_timer = 18.0
 
-	# Civilians move steadily toward the extraction zone.
+	# Civilians evacuate through the street network; the grid is rebuilt once
+	# after movement so every zombie queries current civilian positions.
 	for i in range(civilians.size() - 1, -1, -1):
-		var civilian := civilians[i]
-		var direction := (EVAC_ZONE - civilian).normalized()
-		civilian += direction * 43.0 * delta
+		var civilian: Vector2 = civilians[i]
+		var direction: Vector2 = (EVAC_ZONE - civilian).normalized()
+		var displacement: Vector2 = direction * 43.0 * sim_delta
+		civilian = _move_circle_with_buildings(civilian, displacement, 5.5)
 		civilians[i] = civilian
 		if civilian.distance_to(EVAC_ZONE) <= EVAC_RADIUS:
 			civilians.remove_at(i)
@@ -85,24 +115,22 @@ func _process(delta: float) -> void:
 			message = "CIVILIAN EVACUATED  +$25"
 			message_timer = 1.1
 
-	# Zombies choose the nearest civilian. Runners are faster and more aggressive.
+	civilian_grid = _build_spatial_grid(civilians)
 	for i in range(zombies.size() - 1, -1, -1):
 		var zombie: Dictionary = zombies[i]
 		var zpos: Vector2 = zombie["pos"]
-		var target := EVAC_ZONE
-		var nearest := INF
-		for civilian in civilians:
-			var distance := zpos.distance_squared_to(civilian)
-			if distance < nearest:
-				nearest = distance
-				target = civilian
+		var target_index: int = _find_nearest_entity(civilian_grid, civilians, zpos, 640.0)
+		var target: Vector2 = EVAC_ZONE
+		if target_index >= 0:
+			target = civilians[target_index]
 		var speed: float = 112.0 if zombie["kind"] == "runner" else 61.0
-		zpos += (target - zpos).normalized() * speed * delta
+		var displacement: Vector2 = (target - zpos).normalized() * speed * sim_delta
+		zpos = _move_circle_with_buildings(zpos, displacement, 7.0)
 
-		# Barricades absorb time and slow the horde at the point of contact.
+		# Barricades remain deployable soft blockers in addition to city walls.
 		for wall in barricades:
 			if zpos.distance_to(wall) < 27.0:
-				zpos -= (target - wall).normalized() * 38.0 * delta
+				zpos -= (target - wall).normalized() * 38.0 * sim_delta
 				break
 		zombie["pos"] = zpos
 		zombies[i] = zombie
@@ -117,24 +145,24 @@ func _process(delta: float) -> void:
 				message_timer = 1.4
 				break
 
-	# Deployed teams automatically engage targets in range.
-	for unit in units:
-		unit["cooldown"] = maxf(0.0, float(unit["cooldown"]) - delta)
+	zombie_grid = _build_zombie_spatial_grid()
+	for unit_index in range(units.size()):
+		var unit: Dictionary = units[unit_index]
+		unit["cooldown"] = maxf(0.0, float(unit["cooldown"]) - sim_delta)
 		if float(unit["cooldown"]) > 0.0 or zombies.is_empty():
 			continue
 		var unit_pos: Vector2 = unit["pos"]
 		var is_sniper: bool = unit["kind"] == "sniper"
-		var attack_range := 390.0 if is_sniper else 205.0
-		var target_index := -1
-		var best_distance := attack_range
-		for zi in range(zombies.size()):
-			var distance := unit_pos.distance_to(zombies[zi]["pos"])
-			if distance < best_distance:
-				best_distance = distance
-				target_index = zi
+		var attack_range: float = 390.0 if is_sniper else 205.0
+		var target_index: int = _find_nearest_zombie(unit_pos, attack_range)
 		if target_index >= 0:
+			var target_pos: Vector2 = zombies[target_index]["pos"]
+			_add_bullet_tracer(unit_pos, target_pos)
 			zombies.remove_at(target_index)
 			unit["cooldown"] = 1.05 if is_sniper else 0.62
+			muzzle_flashes.append({"pos": unit_pos, "life": 0.10, "max_life": 0.10})
+			zombie_grid = _build_zombie_spatial_grid()
+		units[unit_index] = unit
 
 	if wave >= MAX_WAVES and zombies.is_empty() and civilians.is_empty():
 		game_state = "victory"
@@ -144,6 +172,141 @@ func _process(delta: float) -> void:
 		message = "EVACUATION FAILED"
 
 	queue_redraw()
+
+
+func _setup_city() -> void:
+	buildings = [
+		Rect2(48.0, 330.0, 190.0, 112.0),
+		Rect2(482.0, 326.0, 190.0, 132.0),
+		Rect2(58.0, 650.0, 174.0, 142.0),
+		Rect2(488.0, 670.0, 184.0, 138.0),
+		Rect2(270.0, 866.0, 180.0, 104.0)
+	]
+
+func _cell_for(position: Vector2) -> Vector2i:
+	return Vector2i(floori(position.x / GRID_CELL_SIZE), floori(position.y / GRID_CELL_SIZE))
+
+func _build_spatial_grid(positions: Array[Vector2]) -> Dictionary:
+	var grid: Dictionary = {}
+	for index in range(positions.size()):
+		var cell: Vector2i = _cell_for(positions[index])
+		if not grid.has(cell):
+			var bucket: Array[int] = []
+			grid[cell] = bucket
+		var entries: Array = grid[cell]
+		entries.append(index)
+		grid[cell] = entries
+	return grid
+
+func _build_zombie_spatial_grid() -> Dictionary:
+	var positions: Array[Vector2] = []
+	positions.resize(zombies.size())
+	for index in range(zombies.size()):
+		positions[index] = zombies[index]["pos"]
+	return _build_spatial_grid(positions)
+
+func _find_nearest_entity(grid: Dictionary, positions: Array[Vector2], origin: Vector2, radius: float) -> int:
+	var cell_radius: int = ceili(radius / GRID_CELL_SIZE)
+	var center_cell: Vector2i = _cell_for(origin)
+	var best_index := -1
+	var best_distance := radius * radius
+	for y in range(center_cell.y - cell_radius, center_cell.y + cell_radius + 1):
+		for x in range(center_cell.x - cell_radius, center_cell.x + cell_radius + 1):
+			var cell := Vector2i(x, y)
+			if not grid.has(cell):
+				continue
+			var entries: Array = grid[cell]
+			for raw_index in entries:
+				var index: int = int(raw_index)
+				if index >= positions.size():
+					continue
+				var distance: float = origin.distance_squared_to(positions[index])
+				if distance < best_distance:
+					best_distance = distance
+					best_index = index
+	return best_index
+
+func _find_nearest_zombie(origin: Vector2, radius: float) -> int:
+	var positions: Array[Vector2] = []
+	positions.resize(zombies.size())
+	for index in range(zombies.size()):
+		positions[index] = zombies[index]["pos"]
+	return _find_nearest_entity(zombie_grid, positions, origin, radius)
+
+func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius: float) -> Vector2:
+	var position: Vector2 = origin
+	var remaining: Vector2 = displacement
+	for iteration in range(2):
+		var candidate: Vector2 = position + remaining
+		for building in buildings:
+			var closest: Vector2 = Vector2(
+				clampf(candidate.x, building.position.x, building.end.x),
+				clampf(candidate.y, building.position.y, building.end.y)
+			)
+			var offset: Vector2 = candidate - closest
+			var distance: float = offset.length()
+			if distance < radius:
+				var normal := Vector2.ZERO
+				if distance > 0.001:
+					normal = offset / distance
+				else:
+					var left_gap: float = candidate.x - building.position.x
+					var right_gap: float = building.end.x - candidate.x
+					var top_gap: float = candidate.y - building.position.y
+					var bottom_gap: float = building.end.y - candidate.y
+					var smallest: float = minf(minf(left_gap, right_gap), minf(top_gap, bottom_gap))
+					if smallest == left_gap:
+						normal = Vector2.LEFT
+					elif smallest == right_gap:
+						normal = Vector2.RIGHT
+					elif smallest == top_gap:
+						normal = Vector2.UP
+					else:
+						normal = Vector2.DOWN
+				candidate = closest + normal * radius
+				var into_wall: float = remaining.dot(normal)
+				if into_wall < 0.0:
+					remaining -= normal * into_wall
+		position = candidate
+	return position
+
+func _is_valid_street_position(position: Vector2) -> bool:
+	if position.x < 28.0 or position.x > 692.0 or position.y < 270.0 or position.y > 1060.0:
+		return false
+	for building in buildings:
+		var expanded := building.grow(UNIT_SELECT_RADIUS)
+		if expanded.has_point(position):
+			return false
+	return true
+
+func _update_combat_effects(delta: float) -> void:
+	shake_timer = maxf(0.0, shake_timer - delta)
+	for i in range(bullet_tracers.size() - 1, -1, -1):
+		bullet_tracers[i]["life"] = float(bullet_tracers[i]["life"]) - delta
+		if float(bullet_tracers[i]["life"]) <= 0.0:
+			bullet_tracers.remove_at(i)
+	for i in range(muzzle_flashes.size() - 1, -1, -1):
+		muzzle_flashes[i]["life"] = float(muzzle_flashes[i]["life"]) - delta
+		if float(muzzle_flashes[i]["life"]) <= 0.0:
+			muzzle_flashes.remove_at(i)
+	for i in range(shockwaves.size() - 1, -1, -1):
+		var effect: Dictionary = shockwaves[i]
+		effect["life"] = float(effect["life"]) - delta
+		effect["radius"] = minf(190.0, float(effect["radius"]) + 280.0 * delta)
+		if float(effect["life"]) <= 0.0:
+			shockwaves.remove_at(i)
+		else:
+			shockwaves[i] = effect
+
+func _add_bullet_tracer(origin: Vector2, target: Vector2) -> void:
+	bullet_tracers.append({"from": origin, "to": target, "life": 0.12, "max_life": 0.12})
+
+func _draw_buildings() -> void:
+	for building in buildings:
+		draw_rect(building, Color("#172b27"))
+		draw_rect(building, Color("#49645a"), false, 3.0)
+		draw_line(building.position + Vector2(10.0, 14.0), building.position + Vector2(building.size.x - 10.0, 14.0), Color("#314a41"), 2.0)
+		draw_line(building.position + Vector2(10.0, building.size.y - 14.0), building.position + Vector2(building.size.x - 10.0, building.size.y - 14.0), Color("#314a41"), 2.0)
 
 func _spawn_wave() -> void:
 	wave += 1
@@ -170,6 +333,10 @@ func _handle_tap(pos: Vector2) -> void:
 		if pos.y > 900.0:
 			_start_round()
 		return
+	if pos.x >= 520.0 and pos.y >= 145.0 and pos.y <= 215.0:
+		time_scale_index = (time_scale_index + 1) % TIME_SCALES.size()
+		queue_redraw()
+		return
 	if pos.y >= BAR_TOP:
 		var button_width := VIEW_SIZE.x / 4.0
 		selected_deployment = clampi(int(pos.x / button_width), 0, 3)
@@ -178,6 +345,29 @@ func _handle_tap(pos: Vector2) -> void:
 		queue_redraw()
 		return
 	if pos.y < 270.0:
+		return
+
+	# First tap selects a deployed squad; the next valid street tap repositions it.
+	if selected_unit_index >= 0 and selected_unit_index < units.size():
+		if _is_valid_street_position(pos):
+			units[selected_unit_index]["pos"] = pos
+			message = "SQUAD REPOSITIONED"
+			message_timer = 1.2
+			selected_unit_index = -1
+			queue_redraw()
+			return
+		selected_unit_index = -1
+	for i in range(units.size() - 1, -1, -1):
+		if pos.distance_to(units[i]["pos"]) <= UNIT_SELECT_RADIUS:
+			selected_unit_index = i
+			message = "SQUAD SELECTED — TAP STREET TO MOVE"
+			message_timer = 2.0
+			queue_redraw()
+			return
+	if not _is_valid_street_position(pos):
+		message = "POSITION BLOCKED — SELECT AN OPEN STREET"
+		message_timer = 1.4
+		queue_redraw()
 		return
 
 	var deployment: Dictionary = DEPLOYMENTS[selected_deployment]
@@ -210,6 +400,9 @@ func _handle_tap(pos: Vector2) -> void:
 func _execute_airstrike(center: Vector2) -> void:
 	airstrike_marker = center
 	airstrike_timer = 0.8
+	shockwaves.append({"pos": center, "radius": 8.0, "life": 0.65, "max_life": 0.65})
+	shake_timer = 0.28
+	shake_strength = 5.0
 	var radius := 112.0
 	for i in range(zombies.size() - 1, -1, -1):
 		if center.distance_to(zombies[i]["pos"]) <= radius:
@@ -229,16 +422,25 @@ func _execute_airstrike(center: Vector2) -> void:
 	message_timer = 2.5
 
 func _draw() -> void:
+	var shake_offset := Vector2.ZERO
+	if shake_timer > 0.0:
+		shake_offset = Vector2(randf_range(-shake_strength, shake_strength), randf_range(-shake_strength, shake_strength))
+	draw_set_transform(shake_offset, 0.0, Vector2.ONE)
 	draw_rect(Rect2(Vector2.ZERO, VIEW_SIZE), Color("#07110f"))
 	_draw_grid()
 	_draw_evac_zone()
+	_draw_buildings()
 	_draw_entities()
 	_draw_hud()
 	_draw_deployment_bar()
 	if airstrike_timer > 0.0:
 		draw_arc(airstrike_marker, 112.0, 0.0, TAU, 48, Color(1.0, 0.42, 0.12, airstrike_timer), 4.0)
+	for wave_effect in shockwaves:
+		var alpha: float = clampf(float(wave_effect["life"]) / float(wave_effect["max_life"]), 0.0, 1.0)
+		draw_arc(wave_effect["pos"], float(wave_effect["radius"]), 0.0, TAU, 48, Color(1.0, 0.48, 0.16, alpha), 3.0)
 	if game_state != "playing":
 		_draw_end_screen()
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _draw_grid() -> void:
 	for x in range(0, 721, 60):
@@ -267,12 +469,21 @@ func _draw_entities() -> void:
 	for wall in barricades:
 		draw_rect(Rect2(wall - Vector2(15, 15), Vector2(30, 30)), Color("#9b8b70"), false, 4.0)
 		draw_line(wall + Vector2(-11, 0), wall + Vector2(11, 0), Color("#cbb99a"), 3.0)
-	for unit in units:
+	for unit_index in range(units.size()):
+		var unit: Dictionary = units[unit_index]
 		var p: Vector2 = unit["pos"]
 		var sniper: bool = unit["kind"] == "sniper"
 		var tint := Color("#6bdc9a") if not sniper else Color("#8ab6ff")
 		draw_rect(Rect2(p - Vector2(9, 9), Vector2(18, 18)), tint)
 		draw_arc(p, 390.0 if sniper else 205.0, 0.0, TAU, 48, Color(tint.r, tint.g, tint.b, 0.10), 1.0)
+		if unit_index == selected_unit_index:
+			draw_arc(p, 24.0, 0.0, TAU, 32, Color("#fff28a"), 3.0)
+	for tracer in bullet_tracers:
+		var alpha: float = clampf(float(tracer["life"]) / float(tracer["max_life"]), 0.0, 1.0)
+		draw_line(tracer["from"], tracer["to"], Color(1.0, 0.88, 0.48, alpha), 2.0)
+	for flash in muzzle_flashes:
+		var alpha: float = clampf(float(flash["life"]) / float(flash["max_life"]), 0.0, 1.0)
+		draw_circle(flash["pos"], 8.0 * alpha, Color(1.0, 0.78, 0.35, alpha))
 
 func _draw_hud() -> void:
 	draw_rect(Rect2(18, 18, 684, 126), Color("#0b1b17"))
@@ -282,6 +493,9 @@ func _draw_hud() -> void:
 	_draw_text("SAVED %d   LOST %d   HORDE %d" % [saved_count, lost_count, zombies.size()], Vector2(34, 122), 17, Color("#9cbcaf"))
 	if message_timer > 0.0:
 		_draw_text(message, Vector2(34, 177), 16, Color("#ffbd76"))
+	draw_rect(Rect2(530, 154, 172, 52), Color("#183329"))
+	draw_rect(Rect2(530, 154, 172, 52), Color("#6ccf91"), false, 2.0)
+	_draw_text("TIME  " + TIME_LABELS[time_scale_index], Vector2(545, 187), 17, Color("#e5f8eb"))
 
 func _draw_deployment_bar() -> void:
 	draw_rect(Rect2(0, BAR_TOP, 720, 200), Color("#0b1715"))
