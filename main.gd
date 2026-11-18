@@ -2604,13 +2604,13 @@ func _handle_tap(pos: Vector2) -> void:
 			return
 	var tapped_building: int = _building_index_at(world_pos)
 	if selected_unit_index >= 0 and selected_unit_index < units.size():
-		if tapped_building >= 0 and str(units[selected_unit_index].get("kind", "")) == "engineer":
+		if tapped_building >= 0 and (str(units[selected_unit_index].get("kind", "")) == "engineer" or command_tab == 2):
 			units[selected_unit_index]["work_kind"] = "demolish"
 			units[selected_unit_index]["work_target_index"] = tapped_building
 			units[selected_unit_index]["work_timer"] = 5.0
 			units[selected_unit_index]["move_target"] = buildings[tapped_building].get_center()
 			units[selected_unit_index]["manual_order"] = true
-			message = "ENGINEER ORDERED TO DEMOLISH — 5.0S"
+			message = "SQUAD DEMOLITION ORDERED — ENGINEERS WORK 2X FASTER"
 			message_timer = 2.0
 			queue_redraw()
 			return
