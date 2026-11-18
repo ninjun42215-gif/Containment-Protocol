@@ -1430,7 +1430,7 @@ func _handle_tap(pos: Vector2) -> void:
 			lifecycle_paused = false
 		queue_redraw()
 		return
-	var minimap_rect := Rect2(Vector2(viewport_size.x - MINIMAP_SIZE.x - 18.0, 18.0), MINIMAP_SIZE)
+	var minimap_rect := Rect2(Vector2(viewport_size.x - safe_insets.z - MINIMAP_SIZE.x - HUD_EDGE_PADDING, safe_insets.y + HUD_EDGE_PADDING), MINIMAP_SIZE)
 	if minimap_rect.has_point(pos):
 		var local := (pos - minimap_rect.position) / minimap_rect.size
 		camera_position = Vector2(local.x * WORLD_SIZE.x, local.y * WORLD_SIZE.y)
@@ -1643,7 +1643,9 @@ func _draw() -> void:
 			draw_line(Vector2(x, 0.0), Vector2(x, viewport_size.y), Color(0.12, 0.23, 0.19, 0.32), 1.0)
 		for y in range(0, int(viewport_size.y) + 1, 60):
 			draw_line(Vector2(0.0, y), Vector2(viewport_size.x, y), Color(0.12, 0.23, 0.19, 0.32), 1.0)
+		draw_set_transform(safe_area_rect.position, 0.0, Vector2.ONE)
 		_draw_title_screen()
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 		return
 	if game_state == "hq_placement":
 		var hq_hint := "DRAG TO SIZE THE STATE HQ PERIMETER" if outpost_placement_active else "DRAG ON AN OPEN STREET TO DESIGN HQ"
@@ -1653,12 +1655,13 @@ func _draw() -> void:
 			draw_set_transform(hq_origin, 0.0, Vector2(camera_zoom, camera_zoom))
 			_draw_placement_preview()
 			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-		draw_rect(Rect2(0.0, viewport_size.y - 150.0, viewport_size.x, 150.0), Color("#071713", 0.96))
-		_draw_text("SELECT HQ LOCATION", Vector2(24.0, viewport_size.y - 134.0), 20, Color("#e8fff0"))
-		_draw_text(hq_hint, Vector2(24.0, viewport_size.y - 108.0), 13, Color("#a9c8b7"))
+		var hq_panel_top: float = _safe_bottom_y(150.0)
+		draw_rect(Rect2(safe_insets.x, hq_panel_top, viewport_size.x - safe_insets.x - safe_insets.z, viewport_size.y - hq_panel_top), Color("#071713", 0.96))
+		_draw_text("SELECT HQ LOCATION", Vector2(safe_insets.x + 24.0, hq_panel_top + 24.0), 20, Color("#e8fff0"))
+		_draw_text(hq_hint, Vector2(safe_insets.x + 24.0, hq_panel_top + 48.0), 13, Color("#a9c8b7"))
 		if outpost_placement_active:
-			_draw_text("%.0f x %.0f  COST $%d  SHELTER %d  %s" % [outpost_placement_rect.size.x, outpost_placement_rect.size.y, _outpost_build_cost(outpost_placement_rect.size), maxi(12, roundi(outpost_placement_rect.size.x * outpost_placement_rect.size.y / 18000.0)), "VALID" if outpost_placement_valid else "BLOCKED"], Vector2(24.0, viewport_size.y - 82.0), 12, Color("#e8fff0"))
-			_draw_outpost_placement_hud(viewport_size.y - 60.0)
+			_draw_text("%.0f x %.0f  COST $%d  SHELTER %d  %s" % [outpost_placement_rect.size.x, outpost_placement_rect.size.y, _outpost_build_cost(outpost_placement_rect.size), maxi(12, roundi(outpost_placement_rect.size.x * outpost_placement_rect.size.y / 18000.0)), "VALID" if outpost_placement_valid else "BLOCKED"], Vector2(safe_insets.x + 24.0, hq_panel_top + 76.0), 12, Color("#e8fff0"))
+			_draw_outpost_placement_hud(_safe_bottom_y(60.0))
 		return
 	var shake_offset := Vector2.ZERO
 	if shake_timer > 0.0:
@@ -1705,7 +1708,7 @@ func _draw() -> void:
 	_draw_minimap()
 	_draw_deployment_bar()
 	if outpost_placement_active:
-		_draw_outpost_placement_hud(viewport_size.y - 260.0)
+		_draw_outpost_placement_hud(_safe_bottom_y(260.0))
 	if manual_paused or lifecycle_paused:
 		_draw_pause_overlay()
 	if game_state != "playing":
@@ -1743,30 +1746,31 @@ func _draw_evac_zone() -> void:
 		_draw_dashed_circle(outpost["pos"], OUTPOST_COMMAND_RADIUS, Color(0.35, 0.88, 0.55, 0.34), 48)
 
 func _draw_title_screen() -> void:
-	draw_rect(Rect2(viewport_size.x * 0.06, viewport_size.y * 0.16, viewport_size.x * 0.88, viewport_size.y * 0.68), Color(0.02, 0.07, 0.055, 0.96))
-	draw_rect(Rect2(viewport_size.x * 0.06, viewport_size.y * 0.16, viewport_size.x * 0.88, viewport_size.y * 0.68), Color("#4d7964"), false, 2.0)
-	_draw_text("CONTAINMENT", Vector2(viewport_size.x * 0.14, viewport_size.y * 0.26), 42, Color("#e4f6e9"))
-	_draw_text("PROTOCOL", Vector2(viewport_size.x * 0.29, viewport_size.y * 0.30), 42, Color("#79e7a4"))
-	_draw_text("TACTICAL EVACUATION COMMAND", Vector2(viewport_size.x * 0.17, viewport_size.y * 0.35), 18, Color("#a9c8b7"))
+	var title_size: Vector2 = _safe_viewport_size()
+	draw_rect(Rect2(title_size.x * 0.06, title_size.y * 0.08, title_size.x * 0.88, title_size.y * 0.84), Color(0.02, 0.07, 0.055, 0.96))
+	draw_rect(Rect2(title_size.x * 0.06, title_size.y * 0.08, title_size.x * 0.88, title_size.y * 0.84), Color("#4d7964"), false, 2.0)
+	_draw_text("CONTAINMENT", Vector2(title_size.x * 0.14, title_size.y * 0.26), 42, Color("#e4f6e9"))
+	_draw_text("PROTOCOL", Vector2(title_size.x * 0.29, title_size.y * 0.30), 42, Color("#79e7a4"))
+	_draw_text("TACTICAL EVACUATION COMMAND", Vector2(title_size.x * 0.17, title_size.y * 0.35), 18, Color("#a9c8b7"))
 	if game_state == "title":
-		draw_rect(Rect2(viewport_size.x * 0.19, viewport_size.y * 0.51, viewport_size.x * 0.62, 100.0), Color("#1d4935"))
-		draw_rect(Rect2(viewport_size.x * 0.19, viewport_size.y * 0.51, viewport_size.x * 0.62, 100.0), Color("#75e6a0"), false, 3.0)
-		_draw_text("TAP TO SELECT SECTOR", Vector2(viewport_size.x * 0.27, viewport_size.y * 0.56), 22, Color("#f0fff5"))
+		draw_rect(Rect2(title_size.x * 0.19, title_size.y * 0.51, title_size.x * 0.62, 100.0), Color("#1d4935"))
+		draw_rect(Rect2(title_size.x * 0.19, title_size.y * 0.51, title_size.x * 0.62, 100.0), Color("#75e6a0"), false, 3.0)
+		_draw_text("TAP TO SELECT SECTOR", Vector2(title_size.x * 0.27, title_size.y * 0.56), 22, Color("#f0fff5"))
 		if _has_valid_save():
-			draw_rect(Rect2(viewport_size.x * 0.14, viewport_size.y * 0.66, viewport_size.x * 0.72, 78.0), Color("#294c3c"))
-			draw_rect(Rect2(viewport_size.x * 0.14, viewport_size.y * 0.66, viewport_size.x * 0.72, 78.0), Color("#e4c66d"), false, 2.0)
-			_draw_text("RESUME SAVED OPERATION", Vector2(viewport_size.x * 0.19, viewport_size.y * 0.71), 18, Color("#fff4c7"))
+			draw_rect(Rect2(title_size.x * 0.14, title_size.y * 0.66, title_size.x * 0.72, 78.0), Color("#294c3c"))
+			draw_rect(Rect2(title_size.x * 0.14, title_size.y * 0.66, title_size.x * 0.72, 78.0), Color("#e4c66d"), false, 2.0)
+			_draw_text("RESUME SAVED OPERATION", Vector2(title_size.x * 0.19, title_size.y * 0.71), 18, Color("#fff4c7"))
 	else:
-		_draw_text("SELECT OPERATIONAL SECTOR", Vector2(viewport_size.x * 0.19, viewport_size.y * 0.42), 22, Color("#d8eee0"))
+		_draw_text("SELECT OPERATIONAL SECTOR", Vector2(title_size.x * 0.19, title_size.y * 0.42), 22, Color("#d8eee0"))
 		var names: Array[String] = ["01  SUBURBAN OUTSKIRTS", "02  MEDICAL & URBAN CORE", "03  INDUSTRIAL HIGHWAY"]
 		var details: Array[String] = ["BALANCED CASH / CIVILIANS  •  30 WAVES", "HOSPITALS + HIGHRISES / HIGH PRESSURE", "WAREHOUSE + ARMORY CHOKEPOINTS"]
 		for index in range(3):
-			var y := viewport_size.y * 0.44 + float(index) * viewport_size.y * 0.12
-			draw_rect(Rect2(viewport_size.x * 0.10, y, viewport_size.x * 0.80, 96.0), Color("#18352a"))
-			draw_rect(Rect2(viewport_size.x * 0.10, y, viewport_size.x * 0.80, 96.0), Color("#69b98a"), false, 2.0)
-			_draw_text(names[index], Vector2(viewport_size.x * 0.14, y + 38.0), 20, Color("#e8fff0"))
-			_draw_text(details[index], Vector2(viewport_size.x * 0.14, y + 70.0), 13, Color("#a9c8b7"))
-	_draw_text("ANDROID TACTICAL RESPONSE UNIT", Vector2(viewport_size.x * 0.21, viewport_size.y * 0.86), 15, Color("#648675"))
+			var y := title_size.y * 0.44 + float(index) * title_size.y * 0.12
+			draw_rect(Rect2(title_size.x * 0.10, y, title_size.x * 0.80, 96.0), Color("#18352a"))
+			draw_rect(Rect2(title_size.x * 0.10, y, title_size.x * 0.80, 96.0), Color("#69b98a"), false, 2.0)
+			_draw_text(names[index], Vector2(title_size.x * 0.14, y + 38.0), 20, Color("#e8fff0"))
+			_draw_text(details[index], Vector2(title_size.x * 0.14, y + 70.0), 13, Color("#a9c8b7"))
+	_draw_text("ANDROID TACTICAL RESPONSE UNIT", Vector2(title_size.x * 0.21, title_size.y * 0.86), 15, Color("#648675"))
 
 func _draw_pause_overlay() -> void:
 	draw_rect(Rect2(Vector2.ZERO, viewport_size), Color(0.01, 0.04, 0.03, 0.78))
@@ -1905,7 +1909,7 @@ func _draw_entities() -> void:
 		draw_circle(flash["pos"], 8.0 * alpha, Color(1.0, 0.78, 0.35, alpha))
 
 func _draw_minimap() -> void:
-	var minimap_rect := Rect2(Vector2(viewport_size.x - MINIMAP_SIZE.x - 18.0, 18.0), MINIMAP_SIZE)
+	var minimap_rect := Rect2(Vector2(viewport_size.x - safe_insets.z - MINIMAP_SIZE.x - HUD_EDGE_PADDING, safe_insets.y + HUD_EDGE_PADDING), MINIMAP_SIZE)
 	draw_rect(minimap_rect, Color("#081713", 0.96))
 	for building in buildings:
 		var building_rect := Rect2(minimap_rect.position + building.position / WORLD_SIZE * minimap_rect.size, building.size / WORLD_SIZE * minimap_rect.size)
@@ -1928,12 +1932,14 @@ func _draw_minimap() -> void:
 	var mini_camera := Rect2(minimap_rect.position + camera_rect.position / WORLD_SIZE * minimap_rect.size, camera_rect.size / WORLD_SIZE * minimap_rect.size)
 	draw_rect(mini_camera, Color("#f4e28a", 0.12))
 	draw_rect(mini_camera, Color("#f4e28a"), false, 1.5)
-	draw_rect(Rect2(Vector2(viewport_size.x - 112.0, 220.0), Vector2(94.0, 56.0)), Color("#183329"))
-	draw_rect(Rect2(Vector2(viewport_size.x - 112.0, 220.0), Vector2(94.0, 56.0)), Color("#6ccf91"), false, 2.0)
-	_draw_text("ZOOM +", Vector2(viewport_size.x - 101.0, 244.0), 14, Color("#e5f8eb"))
-	draw_rect(Rect2(Vector2(viewport_size.x - 112.0, 282.0), Vector2(94.0, 56.0)), Color("#183329"))
-	draw_rect(Rect2(Vector2(viewport_size.x - 112.0, 282.0), Vector2(94.0, 56.0)), Color("#6ccf91"), false, 2.0)
-	_draw_text("ZOOM -", Vector2(viewport_size.x - 101.0, 306.0), 14, Color("#e5f8eb"))
+	var zoom_x: float = viewport_size.x - safe_insets.z - 112.0
+	var zoom_top: float = safe_insets.y + 220.0
+	draw_rect(Rect2(Vector2(zoom_x, zoom_top), Vector2(94.0, 56.0)), Color("#183329"))
+	draw_rect(Rect2(Vector2(zoom_x, zoom_top), Vector2(94.0, 56.0)), Color("#6ccf91"), false, 2.0)
+	_draw_text("ZOOM +", Vector2(zoom_x + 11.0, zoom_top + 24.0), 14, Color("#e5f8eb"))
+	draw_rect(Rect2(Vector2(zoom_x, zoom_top + 62.0), Vector2(94.0, 56.0)), Color("#183329"))
+	draw_rect(Rect2(Vector2(zoom_x, zoom_top + 62.0), Vector2(94.0, 56.0)), Color("#6ccf91"), false, 2.0)
+	_draw_text("ZOOM -", Vector2(zoom_x + 11.0, zoom_top + 86.0), 14, Color("#e5f8eb"))
 
 func _draw_hud() -> void:
 	draw_rect(Rect2(18.0, 18.0, 390.0, 126.0), Color("#0b1b17", 0.94))
