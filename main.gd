@@ -475,6 +475,7 @@ func _process(delta: float) -> void:
 
 	if wave >= 30 and zombies.is_empty() and medevac.is_empty() and not endless_containment:
 		game_state = "victory"
+		_save_operation()
 		message = "SECTOR SECURED"
 	elif civilians.is_empty() and saved_count == 0 and lost_count > 0 and medevac.is_empty():
 		game_state = "defeat"
@@ -804,6 +805,8 @@ func _handle_tap(pos: Vector2) -> void:
 			message = "PRIMARY HQ ESTABLISHED — OPERATION STARTED"
 			message_timer = 3.0
 			queue_redraw()
+			return
+		if pos.y >= viewport_size.y - 150.0:
 			return
 		var hq_world: Vector2 = _screen_to_world(pos)
 		if _is_open_world_position(hq_world, 95.0):
