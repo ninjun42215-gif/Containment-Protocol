@@ -323,6 +323,11 @@ func _process(delta: float) -> void:
 			if outpost_rect.grow(80.0).has_point(civilian) and outpost_distance < nearest_outpost_distance:
 				nearest_outpost_distance = outpost_distance
 				civilian_safe_target = outpost["pos"]
+				if not outpost_rect.has_point(civilian):
+					for gate in gates:
+						if int(gate.get("outpost_index", -1)) == outposts.find(outpost):
+							civilian_safe_target = gate["pos"]
+							break
 		var direction: Vector2 = (civilian_safe_target - civilian).normalized()
 		var displacement: Vector2 = direction * 43.0 * sim_delta
 		var civilian_steer: Dictionary = civilian_steering[i] if i < civilian_steering.size() else {}
@@ -382,7 +387,7 @@ func _process(delta: float) -> void:
 					medevac.clear()
 			else:
 				zombie["medevac_cooldown"] = maxf(0.0, medevac_cooldown - sim_delta)
-		zpos = _move_circle_with_buildings(zpos, displacement, 10.0 if zombie_kind == "brute" else 7.0, sim_delta, target, zombie)
+		zpos = _move_circle_with_buildings(zpos, displacement, 10.0 if zombie_kind == "brute" else 7.0, sim_delta, target, zombie, true)
 
 		for wall_index in range(barricades.size() - 1, -1, -1):
 			var wall: Dictionary = barricades[wall_index]
@@ -500,6 +505,8 @@ func _process(delta: float) -> void:
 						command_buff = true
 						break
 				var fire_interval := base_interval * (0.8 if command_buff else 1.0)
+				if _is_near_building_type(turret["pos"], "ARMORY", ARMORY_RADIUS):
+					fire_interval *= 0.85
 				if int(turret.get("level", 1)) >= 2:
 					var tracer_direction: Vector2 = (turret_target - turret["pos"]).normalized().orthogonal() * 5.0
 					_add_bullet_tracer(turret["pos"] + tracer_direction, turret_target + tracer_direction)
@@ -580,6 +587,8 @@ func _generate_state_map() -> void:
 				if rect.end.x >= WORLD_SIZE.x - 20.0 or rect.end.y >= region.end.y - 20.0:
 					continue
 				var archetype: String = _building_type_for_district(district_index, row, column)
+				if archetype == "HIGHRISE":
+					rect.size = Vector2(minf(440.0, cell_width - 90.0), minf(410.0, cell_height - 35.0))
 				buildings.append(rect)
 				building_archetypes.append({"type": archetype, "district": district_index, "cache_available": archetype == "WAREHOUSE", "cache_hold": 0.0})
 
@@ -597,8 +606,11 @@ func _building_type_for_district(district_index: int, row: int, column: int) -> 
 			return "WAREHOUSE" if column % 4 == 0 else "RESIDENTIAL"
 
 func _residential_density_bonus(region: Rect2) -> int:
-	var district_index: int = clampi(floori(region.position.y / (WORLD_SIZE.y / 5.0)), 0, 4)
-	return 22 if district_index == 1 else (12 if district_index == 0 or district_index == 3 else 4)
+	var residential_count: int = 0
+	for index in range(buildings.size()):
+		if _building_type_at(index) == "RESIDENTIAL" and region.intersects(buildings[index]):
+			residential_count += 1
+	return mini(residential_count * 2, 36)
 
 func _building_type_at(index: int) -> String:
 	if index < 0 or index >= building_archetypes.size():
@@ -845,7 +857,7 @@ func _find_nearest_entity(grid: Dictionary, positions: Array[Vector2], origin: V
 func _find_nearest_zombie(origin: Vector2, radius: float) -> int:
 	return _find_nearest_entity(zombie_grid, zombie_positions, origin, radius)
 
-func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius: float, delta: float, target: Vector2 = Vector2.ZERO, steering: Dictionary = {}) -> Vector2:
+func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius: float, delta: float, target: Vector2 = Vector2.ZERO, steering: Dictionary = {}, block_gates_for_hostiles: bool = false) -> Vector2:
 	var position: Vector2 = origin
 	var remaining: Vector2 = displacement
 	var lock_time: float = maxf(0.0, float(steering.get("lock_time", 0.0)) - delta)
@@ -916,7 +928,7 @@ func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius:
 				var wall_normal: Vector2 = wall_offset.normalized() if wall_offset.length_squared() > 0.001 else Vector2.UP
 				candidate = closest_wall + wall_normal * radius
 		for gate in gates:
-			if bool(gate.get("open", false)):
+			if bool(gate.get("open", false)) and not block_gates_for_hostiles:
 				continue
 			var gate_rect: Rect2 = gate["rect"]
 			var closest_gate := Vector2(clampf(candidate.x, gate_rect.position.x, gate_rect.end.x), clampf(candidate.y, gate_rect.position.y, gate_rect.end.y))
@@ -1183,7 +1195,7 @@ func _handle_tap(pos: Vector2) -> void:
 		queue_redraw()
 		return
 	if game_state == "hq_placement":
-		if outpost_placement_active and pos.y >= viewport_size.y - 112.0 and pos.y <= viewport_size.y - 58.0:
+		if outpost_placement_active and pos.y >= viewport_size.y - 60.0 and pos.y <= viewport_size.y - 6.0:
 			if pos.x < viewport_size.x * 0.5:
 				_confirm_outpost_placement()
 			else:
@@ -1316,7 +1328,7 @@ func _handle_tap(pos: Vector2) -> void:
 	var cost: int = int(deployment["cost"])
 	var kind: String = str(deployment["kind"])
 	if kind == "outpost":
-		if outposts.size() >= OUTPOST_MAX_COUNT:
+		if outposts.size() >= OUTPOST_MAX_COUNT + 1:
 			message = "FORWARD OUTPOST LIMIT REACHED (6)"
 			message_timer = 1.5
 			return
@@ -1452,13 +1464,17 @@ func _draw() -> void:
 	if game_state == "hq_placement":
 		var hq_hint := "DRAG TO SIZE THE STATE HQ PERIMETER" if outpost_placement_active else "DRAG ON AN OPEN STREET TO DESIGN HQ"
 		_draw_world_scene()
-		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-		draw_rect(Rect2(0.0, viewport_size.y - 150.0, viewport_size.x, 150.0), Color("#071713", 0.96))
-		_draw_text("SELECT HQ LOCATION", Vector2(24.0, viewport_size.y - 112.0), 22, Color("#e8fff0"))
-		_draw_text(hq_hint, Vector2(24.0, viewport_size.y - 78.0), 15, Color("#a9c8b7"))
 		if outpost_placement_active:
-			_draw_outpost_placement_hud(viewport_size.y - 112.0)
-			_draw_text("%.0f x %.0f  COST $%d  SHELTER %d" % [outpost_placement_rect.size.x, outpost_placement_rect.size.y, _outpost_build_cost(outpost_placement_rect.size), maxi(12, roundi(outpost_placement_rect.size.x * outpost_placement_rect.size.y / 18000.0))], Vector2(24.0, viewport_size.y - 124.0), 13, Color("#e8fff0"))
+			var hq_origin: Vector2 = viewport_size * 0.5 - camera_position * camera_zoom
+			draw_set_transform(hq_origin, 0.0, Vector2(camera_zoom, camera_zoom))
+			_draw_placement_preview()
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		draw_rect(Rect2(0.0, viewport_size.y - 150.0, viewport_size.x, 150.0), Color("#071713", 0.96))
+		_draw_text("SELECT HQ LOCATION", Vector2(24.0, viewport_size.y - 134.0), 20, Color("#e8fff0"))
+		_draw_text(hq_hint, Vector2(24.0, viewport_size.y - 108.0), 13, Color("#a9c8b7"))
+		if outpost_placement_active:
+			_draw_text("%.0f x %.0f  COST $%d  SHELTER %d" % [outpost_placement_rect.size.x, outpost_placement_rect.size.y, _outpost_build_cost(outpost_placement_rect.size), maxi(12, roundi(outpost_placement_rect.size.x * outpost_placement_rect.size.y / 18000.0))], Vector2(24.0, viewport_size.y - 82.0), 12, Color("#e8fff0"))
+			_draw_outpost_placement_hud(viewport_size.y - 60.0)
 		return
 	var shake_offset := Vector2.ZERO
 	if shake_timer > 0.0:
@@ -1943,7 +1959,7 @@ func _draw_placement_preview() -> void:
 	var radius := _deployment_range(kind)
 	var deployment_cost := _deployment_cost(kind)
 	var valid := _is_valid_street_position(preview_position) and funds >= deployment_cost
-	if kind == "outpost" and outposts.size() >= OUTPOST_MAX_COUNT:
+	if kind == "outpost" and outposts.size() >= OUTPOST_MAX_COUNT + 1:
 		valid = false
 	if kind == "gate":
 		valid = funds >= GATE_COST
@@ -2169,7 +2185,7 @@ func _update_outpost_damage(delta: float) -> void:
 		for outpost_index in range(outposts.size() - 1, -1, -1):
 			var outpost: Dictionary = outposts[outpost_index]
 			var outpost_rect: Rect2 = outpost.get("rect", Rect2(outpost["pos"] - Vector2(34.0, 34.0), Vector2(68.0, 68.0)))
-			if not outpost_rect.grow(26.0).has_point(zombie_position):
+			if not outpost_rect.grow(-20.0).has_point(zombie_position):
 				continue
 			var damage: float = 42.0 if str(zombie.get("kind", "shambler")) == "brute" else 18.0
 			outpost["hp"] = maxf(0.0, float(outpost.get("hp", 500.0)) - damage)
@@ -2455,6 +2471,11 @@ func _draw_world_scene() -> void:
 	draw_rect(Rect2(Vector2.ZERO, WORLD_SIZE), Color("#07110f"))
 	_draw_grid()
 	_draw_buildings()
+	for district_index in range(district_regions.size()):
+		var district_rect: Rect2 = district_regions[district_index]
+		if _camera_view_rect().intersects(district_rect):
+			var district_label: String = ["URBAN CORE", "SUBURBS", "INDUSTRIAL ZONE", "MEDICAL DISTRICT", "RURAL HIGHWAYS"][district_index]
+			_draw_text(district_label, Vector2(70.0, district_rect.position.y + 62.0), 24, Color(0.45, 0.75, 0.62, 0.6))
 	_draw_evac_zone()
 	_draw_entities()
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
