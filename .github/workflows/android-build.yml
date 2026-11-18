@@ -11,27 +11,48 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK components
+      # GitHub's ubuntu-latest image already provides Java and the Android SDK.
+      # Avoid setup actions that replace/reconfigure the runner's SDK installation.
+      - name: Verify preinstalled Java and Android SDK
+        shell: bash
         run: |
-          sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34"
+          set -euo pipefail
+          : "${ANDROID_HOME:?ANDROID_HOME is not set on this runner}"
+          : "${JAVA_HOME:?JAVA_HOME is not set on this runner}"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$SDKMANAGER" ]]; then
+            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager -perm -u+x | sort -V | tail -n 1)"
+          fi
+          test -x "$SDKMANAGER"
           echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          adb version
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "SDKMANAGER=$SDKMANAGER"
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          java -version
+          "$SDKMANAGER" --version
+
+      - name: Install required Android SDK components
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Keep pipefail disabled only for license acceptance: sdkmanager can
+          # close the input early, which otherwise makes yes exit with SIGPIPE.
+          set +o pipefail
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses
+          set -o pipefail
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "ndk;23.2.8568313" \
+            "cmake;3.10.2.4988404"
+          echo "Installed Android SDK packages:"
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --list_installed
 
       - name: Download Godot 4.3 and export templates
         shell: bash
         run: |
           set -euo pipefail
-          GODOT_VERSION="4.3-stable"
           GODOT_ZIP="Godot_v4.3-stable_linux.x86_64.zip"
           TEMPLATE_TPZ="Godot_v4.3-stable_export_templates.tpz"
 
@@ -48,22 +69,18 @@ jobs:
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.3.stable"
           mkdir -p "$TEMPLATE_DIR"
           unzip -o "$TEMPLATE_TPZ" -d "$TEMPLATE_DIR"
-
-          echo "Godot executable:"
-          ./Godot_v4.3-stable_linux.x86_64 --version
-          echo "Installed Godot Android export templates:"
-          find "$TEMPLATE_DIR" -maxdepth 2 -type f -print | sort
           test -s "$TEMPLATE_DIR/android_source.zip"
           test -s "$TEMPLATE_DIR/android_debug.apk"
+
+          ./Godot_v4.3-stable_linux.x86_64 --version
+          echo "Godot Android templates:"
+          ls -lh "$TEMPLATE_DIR"/android_*
 
       - name: Configure Godot Android settings and debug signing
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.config/godot"
-
-          # Godot 4.3 reads editor_settings-4.tres. Also write the
-          # explicitly versioned filename for transparent CI diagnostics.
           for settings_file in \
             "$HOME/.config/godot/editor_settings-4.tres" \
             "$HOME/.config/godot/editor_settings-4.3.tres"; do
@@ -85,20 +102,15 @@ jobs:
             -dname "CN=Android Debug,O=Android,C=US"
           keytool -list -keystore "$GITHUB_WORKSPACE/debug.keystore" \
             -storepass android -alias androiddebugkey
-
-          echo "Godot settings files:"
-          ls -l "$HOME/.config/godot/editor_settings-4.tres" \
-            "$HOME/.config/godot/editor_settings-4.3.tres"
-          echo "Java:"
-          java -version
-          echo "Android SDK: $ANDROID_HOME"
           test -x "$ANDROID_HOME/platform-tools/adb"
           test -x "$ANDROID_HOME/build-tools/34.0.0/zipalign"
           test -s "$GITHUB_WORKSPACE/debug.keystore"
 
       - name: Validate GDScript project
+        shell: bash
         run: |
-          ./Godot_v4.3-stable_linux.x86_64 --headless --path . --editor --quit
+          set -euo pipefail
+          ./Godot_v4.3-stable_linux.x86_64 --headless --path "$GITHUB_WORKSPACE" --editor --quit
 
       - name: Export Debug APK
         shell: bash
@@ -109,15 +121,13 @@ jobs:
           export GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD="android"
 
           mkdir -p build/android
-          ./Godot_v4.3-stable_linux.x86_64 --headless --verbose --path . \
+          ./Godot_v4.3-stable_linux.x86_64 --headless --verbose --path "$GITHUB_WORKSPACE" \
             --export-debug "Android" build/android/ContainmentProtocol.apk \
             2>&1 | tee build/android/export.log
 
           test -s build/android/ContainmentProtocol.apk
-          echo "APK created:"
           ls -lh build/android/ContainmentProtocol.apk
-          echo "Export log tail:"
-          tail -n 80 build/android/export.log
+          tail -n 100 build/android/export.log
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
