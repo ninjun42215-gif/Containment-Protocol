@@ -7,106 +7,114 @@ on:
 jobs:
   export-android:
     runs-on: ubuntu-latest
-    container:
-      image: barichello/godot-ci:4.3
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Android Templates
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: |
+          sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          adb version
+
+      - name: Download Godot 4.3 and export templates
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -v -p "$HOME/.local/share/godot/export_templates/"
-          test -d /root/.local/share/godot/export_templates
-          cp -a /root/.local/share/godot/export_templates/. "$HOME/.local/share/godot/export_templates/"
-          echo "Installed Godot export template files:"
-          find "$HOME/.local/share/godot/export_templates" -maxdepth 3 -type f -print | sort
-          test -s "$HOME/.local/share/godot/export_templates/4.3.stable/android_source.zip"
+          GODOT_VERSION="4.3-stable"
+          GODOT_ZIP="Godot_v4.3-stable_linux.x86_64.zip"
+          TEMPLATE_TPZ="Godot_v4.3-stable_export_templates.tpz"
 
-      - name: Configure Java, Android SDK and export signing
+          curl --fail --location --retry 3 \
+            "https://github.com/godotengine/godot/releases/download/4.3-stable/$GODOT_ZIP" \
+            --output "$GODOT_ZIP"
+          curl --fail --location --retry 3 \
+            "https://github.com/godotengine/godot/releases/download/4.3-stable/$TEMPLATE_TPZ" \
+            --output "$TEMPLATE_TPZ"
+
+          unzip -o "$GODOT_ZIP" -d "$GITHUB_WORKSPACE"
+          chmod +x ./Godot_v4.3-stable_linux.x86_64
+
+          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.3.stable"
+          mkdir -p "$TEMPLATE_DIR"
+          unzip -o "$TEMPLATE_TPZ" -d "$TEMPLATE_DIR"
+
+          echo "Godot executable:"
+          ./Godot_v4.3-stable_linux.x86_64 --version
+          echo "Installed Godot Android export templates:"
+          find "$TEMPLATE_DIR" -maxdepth 2 -type f -print | sort
+          test -s "$TEMPLATE_DIR/android_source.zip"
+          test -s "$TEMPLATE_DIR/android_debug.apk"
+
+      - name: Configure Godot Android settings and debug signing
         shell: bash
         run: |
-          apt-get update
-          apt-get install -y --no-install-recommends openjdk-17-jdk-headless
-          JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
-          echo "Using JAVA_HOME=$JAVA_HOME"
-          test -x "$JAVA_HOME/bin/java"
-          test -d "$ANDROID_HOME"
-
-          # Install the Android SDK components expected by Godot 4.3.
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/cmdline-tools/bin/sdkmanager"
-          test -x "$SDKMANAGER"
-
-          # Avoid the yes-helper SIGPIPE failure under pipefail.
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses < <(yes)
-
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
-            "platform-tools" \
-            "build-tools;34.0.0" \
-            "platforms;android-34" \
-            "cmdline-tools;latest" \
-            "cmake;3.10.2.4988404" \
-            "ndk;23.2.8568313"
-
-          # Godot 4.3 reads the per-major-version EditorSettings file.
+          set -euo pipefail
           mkdir -p "$HOME/.config/godot"
-          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
+
+          # Godot 4.3 reads editor_settings-4.tres. Also write the
+          # explicitly versioned filename for transparent CI diagnostics.
+          for settings_file in \
+            "$HOME/.config/godot/editor_settings-4.tres" \
+            "$HOME/.config/godot/editor_settings-4.3.tres"; do
+            cat > "$settings_file" <<EOF
           [gd_resource type="EditorSettings" format=3]
 
           [resource]
-          export/android/java_sdk_path = "$JAVA_HOME"
           export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/java_sdk_path = "$JAVA_HOME"
           EOF
+          done
 
           keytool -genkeypair -v \
-            -keystore "$GITHUB_WORKSPACE/.ci-debug.keystore" \
+            -keystore "$GITHUB_WORKSPACE/debug.keystore" \
             -storepass android \
             -alias androiddebugkey \
             -keypass android \
             -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
-          echo "Godot Java SDK and Android SDK settings configured."
-          echo "Debug signing keystore generated."
-          keytool -list -keystore "$GITHUB_WORKSPACE/.ci-debug.keystore" -storepass android -alias androiddebugkey
-          test -s "$GITHUB_WORKSPACE/.ci-debug.keystore"
-          # Resolve the project-relative preset path to the absolute CI path.
-          sed -i "s|keystore/debug=\".ci-debug.keystore\"|keystore/debug=\"$GITHUB_WORKSPACE/.ci-debug.keystore\"|" export_presets.cfg
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "JAVA_HOME=$JAVA_HOME"
-          grep -E '^keystore/debug(_user|_password)?=' export_presets.cfg
+          keytool -list -keystore "$GITHUB_WORKSPACE/debug.keystore" \
+            -storepass android -alias androiddebugkey
+
+          echo "Godot settings files:"
+          ls -l "$HOME/.config/godot/editor_settings-4.tres" \
+            "$HOME/.config/godot/editor_settings-4.3.tres"
+          echo "Java:"
+          java -version
+          echo "Android SDK: $ANDROID_HOME"
+          test -x "$ANDROID_HOME/platform-tools/adb"
+          test -x "$ANDROID_HOME/build-tools/34.0.0/zipalign"
+          test -s "$GITHUB_WORKSPACE/debug.keystore"
 
       - name: Validate GDScript project
         run: |
-          godot --headless --path . --editor --quit
+          ./Godot_v4.3-stable_linux.x86_64 --headless --path . --editor --quit
 
       - name: Export Debug APK
         shell: bash
         run: |
           set -euo pipefail
-          JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
-          export JAVA_HOME
-          export ANDROID_HOME
-          export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/34.0.0:$PATH"
-          export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$GITHUB_WORKSPACE/.ci-debug.keystore"
+          export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$GITHUB_WORKSPACE/debug.keystore"
           export GODOT_ANDROID_KEYSTORE_DEBUG_USER="androiddebugkey"
           export GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD="android"
 
-          echo "Godot Android export environment:"
-          echo "JAVA_HOME=$JAVA_HOME"
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          java -version
-          test -x "$ANDROID_HOME/platform-tools/adb"
-          test -x "$ANDROID_HOME/build-tools/34.0.0/zipalign"
-          test -s "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH"
-          echo "Godot export templates:"
-          find "$HOME/.local/share/godot/export_templates" -maxdepth 3 -type f -print | sort
-          test -s "$HOME/.local/share/godot/export_templates/4.3.stable/android_source.zip"
+          mkdir -p build/android
+          ./Godot_v4.3-stable_linux.x86_64 --headless --verbose --path . \
+            --export-debug "Android" build/android/ContainmentProtocol.apk \
+            2>&1 | tee build/android/export.log
 
-          mkdir -v -p build/android
-          godot --headless --verbose --path . --export-debug "Android" build/android/ContainmentProtocol.apk 2>&1 | tee build/android/export.log
           test -s build/android/ContainmentProtocol.apk
-          echo "APK size:"
+          echo "APK created:"
           ls -lh build/android/ContainmentProtocol.apk
           echo "Export log tail:"
           tail -n 80 build/android/export.log
@@ -116,3 +124,4 @@ jobs:
         with:
           name: ContainmentProtocol-APK
           path: build/android/ContainmentProtocol.apk
+          if-no-files-found: error
