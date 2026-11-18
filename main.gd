@@ -730,7 +730,8 @@ func _update_audio() -> void:
 		return
 	if not sfx_enabled:
 		while playback.get_frames_available() > 0:
-			playback.push_frame(Vector2.ZERO)
+			if playback != null:
+				playback.push_frame(Vector2.ZERO)
 		return
 	while audio_samples_left <= 0 and not audio_queue.is_empty():
 		audio_effect = audio_queue.pop_front()
@@ -760,7 +761,8 @@ func _update_audio() -> void:
 					sample = sin(audio_phase * TAU * 1040.0) * 0.22 if beep_phase < 0.055 else 0.0
 			audio_phase += 1.0 / AUDIO_SAMPLE_RATE
 			audio_samples_left -= 1
-		playback.push_frame(Vector2(sample, sample))
+		if playback != null:
+			playback.push_frame(Vector2(sample, sample))
 
 func _draw_end_screen() -> void:
 	draw_rect(Rect2(0, 0, 720, 1280), Color(0.01, 0.04, 0.03, 0.88))
