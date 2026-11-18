@@ -52,6 +52,11 @@ const UNIT_DEPLOYMENTS := [
 	{"name": "AIRSTRIKE", "detail": "$300", "cost": 300, "kind": "airstrike"},
 	{"name": "FLARE", "detail": "BEACON  $40", "cost": FLARE_COST, "kind": "flare"}
 ]
+const RECRUIT_DEPLOYMENTS := [
+	{"name": "INFANTRY", "detail": "$60", "cost": 60, "kind": "infantry"},
+	{"name": "SNIPER", "detail": "$110", "cost": 110, "kind": "sniper"},
+	{"name": "ENGINEER", "detail": "$85", "cost": 85, "kind": "engineer"}
+]
 const BASE_DEPLOYMENTS := [
 	{"name": "OUTPOST", "detail": "$220", "cost": OUTPOST_COST, "kind": "outpost"},
 	{"name": "TURRET", "detail": "$140", "cost": TURRET_COST, "kind": "turret"},
@@ -2114,7 +2119,7 @@ func _input(event: InputEvent) -> void:
 			touch_points[touch.index] = touch.position
 			if touch_points.size() == 1:
 				var touch_world: Vector2 = _screen_to_world(touch.position)
-				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and touch.position.y < _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and touch.position.y > safe_insets.y + 520.0 and touch.position.y < _safe_bottom_y(260.0) and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
+				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and touch.position.y < _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and touch.position.y > safe_insets.y + 520.0 and touch.position.y < _safe_bottom_y(260.0) and command_tab == 0 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
 				if can_start_placement:
 					_begin_outpost_placement(touch_world, "hq" if game_state == "hq_placement" else "outpost")
 				elif outpost_placement_active:
@@ -2187,7 +2192,7 @@ func _input(event: InputEvent) -> void:
 		if mouse.button_index == MOUSE_BUTTON_LEFT:
 			if mouse.pressed:
 				var mouse_world: Vector2 = _screen_to_world(mouse.position)
-				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and mouse.position.y < _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and mouse.position.y > safe_insets.y + 520.0 and mouse.position.y < _safe_bottom_y(260.0) and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
+				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and mouse.position.y < _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and mouse.position.y > safe_insets.y + 520.0 and mouse.position.y < _safe_bottom_y(260.0) and command_tab == 0 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
 				if can_start_placement:
 					_begin_outpost_placement(mouse_world, "hq" if game_state == "hq_placement" else "outpost")
 				elif outpost_placement_active:
@@ -2368,11 +2373,12 @@ func _handle_tap(pos: Vector2) -> void:
 	var safe_width: float = viewport_size.x - safe_insets.x - safe_insets.z
 	if pos.y >= bar_top and pos.x >= safe_left and pos.x <= safe_left + safe_width:
 		if pos.y <= bar_top + touch_target_size:
-			command_tab = 1 - command_tab
+			var safe_tab_width: float = safe_width / 3.0
+			command_tab = clampi(int((pos.x - safe_left) / safe_tab_width), 0, 2)
 			selected_deployment = 0
 			queue_redraw()
 			return
-		var choices: Array = UNIT_DEPLOYMENTS if command_tab == 0 else BASE_DEPLOYMENTS
+		var choices: Array = BASE_DEPLOYMENTS if command_tab == 0 else (RECRUIT_DEPLOYMENTS if command_tab == 1 else UNIT_DEPLOYMENTS)
 		var button_width: float = safe_width / float(choices.size())
 		selected_deployment = clampi(int((pos.x - safe_left) / button_width), 0, choices.size() - 1)
 		message = str(choices[selected_deployment]["name"]) + " SELECTED"
@@ -3061,12 +3067,13 @@ func _draw_deployment_bar() -> void:
 	var safe_width: float = viewport_size.x - safe_insets.x - safe_insets.z
 	draw_rect(Rect2(safe_left, top, safe_width, panel_height), Color("#0b1715"))
 	draw_line(Vector2(safe_left, top), Vector2(safe_left + safe_width, top), Color("#45665a"), 2.0)
-	var half_width: float = safe_width * 0.5
-	draw_rect(Rect2(safe_left, top, half_width, touch_target_size), Color("#254538") if command_tab == 0 else Color("#12251f"))
-	draw_rect(Rect2(safe_left + half_width, top, half_width, touch_target_size), Color("#254538") if command_tab == 1 else Color("#12251f"))
-	_draw_text("UNITS & STRIKES", Vector2(safe_left + 28.0, top + touch_target_size * 0.62), 16, Color("#e8fff0"))
-	_draw_text("BUILD BASE", Vector2(safe_left + half_width + 42.0, top + touch_target_size * 0.62), 16, Color("#e8fff0"))
-	var choices: Array = UNIT_DEPLOYMENTS if command_tab == 0 else BASE_DEPLOYMENTS
+	var tab_width: float = safe_width / 3.0
+	var tab_labels: Array[String] = ["BUILD", "RECRUIT", "TACTICS"]
+	for tab_index in range(3):
+		var tab_rect := Rect2(safe_left + float(tab_index) * tab_width, top, tab_width, touch_target_size)
+		draw_rect(tab_rect, Color("#254538") if command_tab == tab_index else Color("#12251f"))
+		_draw_text(tab_labels[tab_index], Vector2(tab_rect.position.x + 12.0, top + touch_target_size * 0.62), 14, Color("#e8fff0"))
+	var choices: Array = BASE_DEPLOYMENTS if command_tab == 0 else (RECRUIT_DEPLOYMENTS if command_tab == 1 else UNIT_DEPLOYMENTS)
 	var button_width: float = safe_width / float(choices.size())
 	var cards_top: float = top + touch_target_size + 6.0
 	var card_height: float = panel_height - touch_target_size - 6.0
@@ -3211,7 +3218,8 @@ func _draw_placement_preview() -> void:
 func _deployment_cost(kind: String) -> int:
 	if kind == "outpost":
 		return _outpost_build_cost(outpost_placement_rect.size)
-	return int((UNIT_DEPLOYMENTS if command_tab == 0 else BASE_DEPLOYMENTS)[selected_deployment]["cost"])
+	var choices: Array = BASE_DEPLOYMENTS if command_tab == 0 else (RECRUIT_DEPLOYMENTS if command_tab == 1 else UNIT_DEPLOYMENTS)
+	return int(choices[selected_deployment]["cost"])
 
 func _deployment_range(kind: String) -> float:
 	match kind:
