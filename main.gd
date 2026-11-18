@@ -1791,9 +1791,10 @@ func _update_auto_ops(delta: float) -> void:
 					units[unit_index] = unit
 					continue
 		if task == "CHOP" or task == "HUNT":
-			unit["work_kind"] = "chop" if task == "CHOP" else "hunt"
-			unit["work_target_index"] = int(unit.get("ai_target_index", -1))
-			unit["work_timer"] = 3.0
+			if str(unit.get("work_kind", "")) != ("chop" if task == "CHOP" else "hunt"):
+				unit["work_kind"] = "chop" if task == "CHOP" else "hunt"
+				unit["work_target_index"] = int(unit.get("ai_target_index", -1))
+				unit["work_timer"] = 3.0
 			units[unit_index] = unit
 			continue
 		if task == "SUPPLY":
@@ -2530,11 +2531,15 @@ func _handle_tap(pos: Vector2) -> void:
 			var safe_tab_width: float = safe_width / 3.0
 			command_tab = clampi(int((pos.x - safe_left) / safe_tab_width), 0, 2)
 			selected_deployment = 0
+			selected_unit_index = -1
+			selected_vehicle_index = -1
 			queue_redraw()
 			return
 		var choices: Array = BASE_DEPLOYMENTS if command_tab == 0 else (RECRUIT_DEPLOYMENTS if command_tab == 1 else UNIT_DEPLOYMENTS)
 		var button_width: float = safe_width / float(choices.size())
 		selected_deployment = clampi(int((pos.x - safe_left) / button_width), 0, choices.size() - 1)
+		selected_unit_index = -1
+		selected_vehicle_index = -1
 		message = str(choices[selected_deployment]["name"]) + " SELECTED"
 		message_timer = 1.2
 		queue_redraw()
