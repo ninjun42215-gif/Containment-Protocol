@@ -353,7 +353,7 @@ func _process(delta: float) -> void:
 
 	if campaign_start_grace_timer <= 0.0 and wave_timer <= 0.0:
 		_spawn_wave()
-		wave_timer = 180.0 / (1.4 if day_phase == "NIGHT" else 1.0)
+		wave_timer = 180.0
 		_save_operation()
 	_shelter_flush_timer_step(sim_delta)
 	_update_supply_drops(sim_delta)
@@ -665,6 +665,7 @@ func _process(delta: float) -> void:
 			if _is_near_building_type(unit_pos, "ARMORY", ARMORY_RADIUS):
 				fire_interval /= 1.15
 			_damage_zombie(target_index, unit_damage, unit_index)
+			unit = units[unit_index]
 			unit["cooldown"] = fire_interval
 			muzzle_flashes.append({"pos": firing_origin, "life": 0.10, "max_life": 0.10})
 			_queue_sfx("gunfire")
@@ -1039,7 +1040,7 @@ func _update_outpost_placement_from_anchor(world_position: Vector2) -> void:
 	var top_left := Vector2(minf(world_position.x, outpost_placement_anchor.x), minf(world_position.y, outpost_placement_anchor.y))
 	outpost_placement_rect = Rect2(top_left, size)
 	var cost: int = _outpost_build_cost(size)
-	outpost_placement_valid = _outpost_rect_valid(outpost_placement_rect) and funds >= cost and (outpost_placement_kind == "hq" or outposts.size() < OUTPOST_MAX_COUNT + 1)
+	outpost_placement_valid = _outpost_rect_valid(outpost_placement_rect) and funds >= cost and scrap >= 40 and (outpost_placement_kind == "hq" or outposts.size() < OUTPOST_MAX_COUNT + 1)
 	queue_redraw()
 
 func _confirm_outpost_placement() -> void:
@@ -1573,7 +1574,7 @@ func _recruit_unit(kind: String) -> void:
 		return
 	var spawn_position: Vector2 = _outpost_recruit_spawn(source_index, outposts[source_index]["pos"])
 	outposts[source_index]["sheltered"] = maxi(0, int(outposts[source_index].get("sheltered", 0)) - 1)
-	units.append({"id": _next_unit_id(), "pos": spawn_position, "kind": kind, "cooldown": 0.1, "hp": 100.0, "max_hp": 100.0, "garrisoned": false, "garrison_building": -1, "move_target": null, "manual_order": false, "ai_task": "", "steering": {}})
+	units.append({"id": _next_unit_id(), "pos": spawn_position, "kind": kind, "cooldown": 0.1, "hp": 100.0, "max_hp": 100.0, "kills": 0, "rank": 0, "garrisoned": false, "garrison_building": -1, "move_target": null, "manual_order": false, "ai_task": "", "steering": {}})
 	funds -= cost
 	selected_unit_index = units.size() - 1
 	message = "%s RECRUITED — $%d" % [kind.to_upper(), cost]
@@ -3208,7 +3209,11 @@ func _draw_placement_preview() -> void:
 	if kind == "outpost" and outposts.size() >= OUTPOST_MAX_COUNT + 1:
 		valid = false
 	if kind == "gate":
-		valid = funds >= GATE_COST
+		valid = funds >= GATE_COST and scrap >= 15
+	elif kind == "turret":
+		valid = funds >= TURRET_COST and scrap >= 25
+	elif kind == "wall":
+		valid = funds >= WALL_COST and scrap >= 10
 	var tint := Color(0.2, 1.0, 0.48, 0.18) if valid else Color(1.0, 0.18, 0.2, 0.20)
 	var line_tint := Color("#56f58f") if valid else Color("#ff555d")
 	draw_circle(preview_position, radius, tint)
