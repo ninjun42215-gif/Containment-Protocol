@@ -719,6 +719,7 @@ func _process(delta: float) -> void:
 			_rebuild_zombie_spatial_grid()
 		units[unit_index] = unit
 
+	_update_wildlife(sim_delta)
 	_update_work_orders(sim_delta)
 
 	if wave >= 30 and zombies.is_empty() and pending_wave_spawns <= 0 and civilians.is_empty() and _total_sheltered_civilians() == 0 and not endless_containment:
@@ -3989,6 +3990,32 @@ func _apply_daily_rations() -> void:
 	message = "DAY %d RATIONS: -%d FOOD  |  STOCKPILE %d" % [survival_day, daily_consumption, food]
 	message_timer = 3.0
 	_save_operation()
+
+func _update_wildlife(delta: float) -> void:
+	for animal_index in range(wildlife.size()):
+		var animal: Dictionary = wildlife[animal_index]
+		if not bool(animal.get("alive", false)):
+			continue
+		var position: Vector2 = animal["pos"]
+		var target_value: Variant = animal.get("wander_target", null)
+		if not target_value is Vector2 or position.distance_to(target_value) <= 12.0:
+			var flee_direction := Vector2.ZERO
+			for unit in units:
+				var distance_squared: float = position.distance_squared_to(unit["pos"])
+				if distance_squared <= 110.0 * 110.0:
+					flee_direction += (position - unit["pos"]).normalized()
+			if flee_direction.length_squared() > 0.01:
+				target_value = position + flee_direction.normalized() * 170.0
+			else:
+				target_value = position + Vector2(randf_range(-115.0, 115.0), randf_range(-115.0, 115.0))
+			target_value.x = clampf(target_value.x, 24.0, WORLD_SIZE.x - 24.0)
+			target_value.y = clampf(target_value.y, 24.0, WORLD_SIZE.y - 24.0)
+		var target: Vector2 = target_value
+		var speed: float = 16.0 if str(animal.get("kind", "")) == "deer" else 10.0
+		var displacement: Vector2 = (target - position).normalized() * speed * delta
+		animal["pos"] = _move_circle_with_buildings(position, displacement, 5.0, delta, target, animal)
+		animal["wander_target"] = target
+		wildlife[animal_index] = animal
 
 func _update_work_orders(delta: float) -> void:
 	for unit_index in range(units.size()):
