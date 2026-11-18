@@ -705,6 +705,7 @@ func _call_to_arms() -> void:
 			civilian_steering.remove_at(civilian_index)
 	units.append({"pos": source_position + Vector2(28.0, 0.0), "kind": "militia", "cooldown": 0.2, "hp": 100.0, "max_hp": 100.0, "badge": "MILITIA"})
 	funds -= cost
+	_save_operation()
 	message = "MILITIA RIFLEMAN MOBILIZED — $%d" % cost
 	message_timer = 2.0
 
@@ -740,7 +741,7 @@ func _update_outpost_placement(world_position: Vector2) -> void:
 	var size: Vector2 = _snap_outpost_size(end_point - outpost_placement_start)
 	outpost_placement_rect = Rect2(outpost_placement_start, size)
 	var cost: int = _outpost_build_cost(size)
-	outpost_placement_valid = _outpost_rect_valid(outpost_placement_rect) and funds >= cost and (outpost_placement_kind == "hq" or outposts.size() < OUTPOST_MAX_COUNT)
+	outpost_placement_valid = _outpost_rect_valid(outpost_placement_rect) and funds >= cost and (outpost_placement_kind == "hq" or outposts.size() < OUTPOST_MAX_COUNT + 1)
 	queue_redraw()
 
 func _confirm_outpost_placement() -> void:
@@ -837,6 +838,7 @@ func _try_place_gate(position: Vector2) -> bool:
 					barricades.append({"pos": bottom_rect.get_center(), "rect": bottom_rect, "hp": float(wall["hp"]), "max_hp": float(wall["max_hp"]), "kind": "perimeter", "outpost_index": outpost_index})
 			gates.append({"pos": gate_rect.get_center(), "rect": gate_rect, "hp": 500.0, "max_hp": 500.0, "open": false, "outpost_index": outpost_index})
 			funds -= GATE_COST
+			_save_operation()
 			return true
 	return false
 
@@ -2397,7 +2399,7 @@ func _has_valid_save() -> bool:
 		return false
 	if int(state.get("wave", -1)) < 0:
 		return false
-	var required_arrays: Array[String] = ["evacuation_zones", "civilians", "zombies", "units", "outposts", "turrets", "barricades", "gates", "building_archetypes", "district_regions"]
+	var required_arrays: Array[String] = ["evacuation_zones", "civilians", "zombies", "units", "outposts", "turrets", "barricades", "gates", "building_archetypes", "district_regions", "zombie_grid_serialized", "civilian_grid_serialized"]
 	for key in required_arrays:
 		if not state.has(key) or not state[key] is Array:
 			return false
