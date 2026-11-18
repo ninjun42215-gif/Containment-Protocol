@@ -2601,11 +2601,25 @@ func _draw_roads() -> void:
 			var line_y2: float = road_from.y + 7.0
 			draw_line(Vector2(road_from.x, line_y1), Vector2(road_to.x, line_y1), Color("#d8bd63"), 2.0)
 			draw_line(Vector2(road_from.x, line_y2), Vector2(road_to.x, line_y2), Color("#d8bd63"), 2.0)
+			var lane_start: float = maxf(minf(road_from.x, road_to.x), visible_rect.position.x)
+			var lane_end: float = minf(maxf(road_from.x, road_to.x), visible_rect.end.x)
+			for lane_offset in [-25.0, 25.0]:
+				var lane_x: float = lane_start
+				while lane_x < lane_end:
+					draw_line(Vector2(lane_x, road_from.y + lane_offset), Vector2(minf(lane_x + 42.0, lane_end), road_from.y + lane_offset), Color("#b9c8bf", 0.55), 2.0)
+					lane_x += 82.0
 		else:
 			var line_x1: float = road_from.x - 7.0
 			var line_x2: float = road_from.x + 7.0
 			draw_line(Vector2(line_x1, road_from.y), Vector2(line_x1, road_to.y), Color("#d8bd63"), 2.0)
 			draw_line(Vector2(line_x2, road_from.y), Vector2(line_x2, road_to.y), Color("#d8bd63"), 2.0)
+			var lane_start: float = maxf(minf(road_from.y, road_to.y), visible_rect.position.y)
+			var lane_end: float = minf(maxf(road_from.y, road_to.y), visible_rect.end.y)
+			for lane_offset in [-25.0, 25.0]:
+				var lane_y: float = lane_start
+				while lane_y < lane_end:
+					draw_line(Vector2(road_from.x + lane_offset, lane_y), Vector2(road_from.x + lane_offset, minf(lane_y + 42.0, lane_end)), Color("#b9c8bf", 0.55), 2.0)
+					lane_y += 82.0
 	for segment in secondary_road_segments:
 		var road_from: Vector2 = segment["from"]
 		var road_to: Vector2 = segment["to"]
