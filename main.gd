@@ -394,7 +394,7 @@ func _process(delta: float) -> void:
 			var wall_pos: Vector2 = wall["pos"]
 			var wall_rect: Rect2 = wall.get("rect", Rect2(wall_pos - Vector2(15.0, 15.0), Vector2(30.0, 30.0)))
 			var wall_nearest := Vector2(clampf(zpos.x, wall_rect.position.x, wall_rect.end.x), clampf(zpos.y, wall_rect.position.y, wall_rect.end.y))
-			if zpos.distance_to(wall_nearest) < 30.0
+			if zpos.distance_to(wall_nearest) < 30.0:
 				if zombie_kind == "brute":
 					var attack_cooldown: float = float(zombie.get("wall_cooldown", 0.0))
 					if attack_cooldown <= 0.0:
