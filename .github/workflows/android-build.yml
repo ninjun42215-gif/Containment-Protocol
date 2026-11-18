@@ -124,7 +124,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./Godot_v4.3-stable_linux.x86_64 --headless --path "$GITHUB_WORKSPACE" --editor --quit
+          VALIDATION_LOG="$RUNNER_TEMP/godot-validation.log"
+          ./Godot_v4.3-stable_linux.x86_64 --headless --path "$GITHUB_WORKSPACE" --editor --quit 2>&1 | tee "$VALIDATION_LOG"
+          if grep -E "SCRIPT ERROR:|Parse Error:|Failed to load script" "$VALIDATION_LOG"; then
+            echo "Godot reported a GDScript parse/load error."
+            exit 1
+          fi
 
       - name: Export Debug APK
         shell: bash
