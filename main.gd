@@ -635,7 +635,7 @@ func _update_building_effects(delta: float) -> void:
 				held = true
 				break
 		var hold_time: float = float(archetype.get("cache_hold", 0.0))
-			hold_time = hold_time + delta if held else 0.0
+		hold_time = hold_time + delta if held else 0.0
 		archetype["cache_hold"] = hold_time
 		if hold_time >= WAREHOUSE_HOLD_TIME:
 			archetype["cache_available"] = false
