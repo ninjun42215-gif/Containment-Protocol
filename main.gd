@@ -360,6 +360,7 @@ func _process(delta: float) -> void:
 	for i in range(zombies.size() - 1, -1, -1):
 		var zombie: Dictionary = zombies[i]
 		zombie["turret_attack_cooldown"] = maxf(0.0, float(zombie.get("turret_attack_cooldown", 0.0)) - sim_delta)
+		zombie["gate_attack_cooldown"] = maxf(0.0, float(zombie.get("gate_attack_cooldown", 0.0)) - sim_delta)
 		var zpos: Vector2 = zombie["pos"]
 		var target_index: int = _find_nearest_entity(civilian_grid, civilians, zpos, 640.0)
 		var target: Vector2 = _nearest_evac_zone(zpos)
@@ -416,10 +417,10 @@ func _process(delta: float) -> void:
 			var gate: Dictionary = gates[gate_index]
 			var gate_rect: Rect2 = gate["rect"]
 			var gate_nearest := Vector2(clampf(zpos.x, gate_rect.position.x, gate_rect.end.x), clampf(zpos.y, gate_rect.position.y, gate_rect.end.y))
-			if zpos.distance_to(gate_nearest) <= 30.0 and float(zombie.get("wall_cooldown", 0.0)) <= 0.0:
+			if zpos.distance_to(gate_nearest) <= 30.0 and float(zombie.get("gate_attack_cooldown", 0.0)) <= 0.0:
 				var gate_damage: float = 50.0 if zombie_kind == "brute" else 18.0
 				gate["hp"] = maxf(0.0, float(gate.get("hp", 500.0)) - gate_damage)
-				zombie["wall_cooldown"] = 1.0
+				zombie["gate_attack_cooldown"] = 1.0
 				if float(gate["hp"]) <= 0.0:
 					gates.remove_at(gate_index)
 					message = "PERIMETER GATE BREACHED"
