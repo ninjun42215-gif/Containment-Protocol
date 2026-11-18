@@ -346,6 +346,15 @@ func _handle_tap(pos: Vector2) -> void:
 	if pos.y < 270.0:
 		return
 
+	# Squad hit-testing takes priority over repositioning, so tapping another
+	# deployed squad changes selection instead of moving the current selection.
+	for squad_index in range(units.size() - 1, -1, -1):
+		if pos.distance_to(units[squad_index]["pos"]) <= UNIT_SELECT_RADIUS:
+			selected_unit_index = squad_index
+			message = "SQUAD SELECTED — TAP STREET TO MOVE"
+			message_timer = 2.0
+			queue_redraw()
+			return
 	# First tap selects a deployed squad; the next valid street tap repositions it.
 	if selected_unit_index >= 0 and selected_unit_index < units.size():
 		if _is_valid_street_position(pos):
