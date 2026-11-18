@@ -1950,12 +1950,13 @@ func _draw_minimap() -> void:
 	draw_rect(mini_camera, Color("#f4e28a"), false, 1.5)
 	var zoom_x: float = viewport_size.x - safe_insets.z - 112.0
 	var zoom_top: float = safe_insets.y + 220.0
-	draw_rect(Rect2(Vector2(zoom_x, zoom_top), Vector2(94.0, 56.0)), Color("#183329"))
-	draw_rect(Rect2(Vector2(zoom_x, zoom_top), Vector2(94.0, 56.0)), Color("#6ccf91"), false, 2.0)
-	_draw_text("ZOOM +", Vector2(zoom_x + 11.0, zoom_top + 24.0), 14, Color("#e5f8eb"))
-	draw_rect(Rect2(Vector2(zoom_x, zoom_top + 62.0), Vector2(94.0, 56.0)), Color("#183329"))
-	draw_rect(Rect2(Vector2(zoom_x, zoom_top + 62.0), Vector2(94.0, 56.0)), Color("#6ccf91"), false, 2.0)
-	_draw_text("ZOOM -", Vector2(zoom_x + 11.0, zoom_top + 86.0), 14, Color("#e5f8eb"))
+	var zoom_bottom_top: float = zoom_top + touch_target_size + 6.0
+	draw_rect(Rect2(Vector2(zoom_x, zoom_top), Vector2(94.0, touch_target_size)), Color("#183329"))
+	draw_rect(Rect2(Vector2(zoom_x, zoom_top), Vector2(94.0, touch_target_size)), Color("#6ccf91"), false, 2.0)
+	_draw_text("ZOOM +", Vector2(zoom_x + 11.0, zoom_top + touch_target_size * 0.62), 14, Color("#e5f8eb"))
+	draw_rect(Rect2(Vector2(zoom_x, zoom_bottom_top), Vector2(94.0, touch_target_size)), Color("#183329"))
+	draw_rect(Rect2(Vector2(zoom_x, zoom_bottom_top), Vector2(94.0, touch_target_size)), Color("#6ccf91"), false, 2.0)
+	_draw_text("ZOOM -", Vector2(zoom_x + 11.0, zoom_bottom_top + touch_target_size * 0.62), 14, Color("#e5f8eb"))
 
 func _draw_hud() -> void:
 	var hud_left: float = safe_insets.x + HUD_EDGE_PADDING
@@ -1965,20 +1966,21 @@ func _draw_hud() -> void:
 	_draw_text("FUNDS  $%d" % funds, Vector2(hud_left + 16.0, hud_top + 70.0), 21, Color("#f4d77b"))
 	_draw_text("SECTOR %02d  WAVE %d/%d" % [sector_index + 1, wave, sector_wave_limit], Vector2(hud_left + 16.0, hud_top + 104.0), 15, Color("#ffad62"))
 	_draw_text("SAVED %d  LOST %d  HORDE %d/%d" % [saved_count, lost_count, zombies.size(), MAX_ACTIVE_ZOMBIES], Vector2(hud_left + 16.0, hud_top + 124.0), 13, Color("#9cbcaf"))
-	draw_rect(Rect2(hud_left, hud_top + 434.0, 192.0, 56.0), Color("#33422a"))
-	draw_rect(Rect2(hud_left, hud_top + 434.0, 192.0, 56.0), Color("#d5c36b"), false, 2.0)
+	draw_rect(Rect2(hud_left, hud_top + 434.0, 192.0, touch_target_size), Color("#33422a"))
+	draw_rect(Rect2(hud_left, hud_top + 434.0, 192.0, touch_target_size), Color("#d5c36b"), false, 2.0)
 	var militia_cost: int = _call_to_arms_cost()
-	_draw_text("CALL TO ARMS $%d" % militia_cost, Vector2(hud_left + 10.0, hud_top + 468.0), 14, Color("#fff4c7"))
+	_draw_text("CALL TO ARMS $%d" % militia_cost, Vector2(hud_left + 10.0, hud_top + 434.0 + touch_target_size * 0.62), 14, Color("#fff4c7"))
 	_draw_text("%s  |  %s" % [day_phase, "ENDLESS" if endless_containment else "CAMPAIGN"], Vector2(hud_left + 16.0, hud_top + 144.0), 12, Color("#a9c8b7"))
 	if message_timer > 0.0:
 		_draw_text(message, Vector2(hud_left + 16.0, hud_top + 164.0), 14, Color("#ffbd76"))
-	draw_rect(Rect2(hud_left, hud_top + 196.0, 172.0, 56.0), Color("#183329"))
-	draw_rect(Rect2(hud_left, hud_top + 196.0, 172.0, 56.0), Color("#6ccf91"), false, 2.0)
-	_draw_text("TIME  " + TIME_LABELS[time_scale_index], Vector2(hud_left + 15.0, hud_top + 230.0), 17, Color("#e5f8eb"))
-	draw_rect(Rect2(hud_left, hud_top + 258.0, 172.0, 56.0), Color("#183329"))
-	draw_rect(Rect2(hud_left, hud_top + 258.0, 172.0, 56.0), Color("#6ccf91") if sfx_enabled else Color("#8b6262"), false, 2.0)
-	_draw_text("[SFX: ON]" if sfx_enabled else "[SFX: OFF]", Vector2(hud_left + 15.0, hud_top + 292.0), 16, Color("#e5f8eb"))
-	var diagnostic_rect := Rect2(Vector2(safe_insets.x + DIAGNOSTIC_BUTTON.position.x, safe_insets.y + DIAGNOSTIC_BUTTON.position.y), DIAGNOSTIC_BUTTON.size)
+	draw_rect(Rect2(hud_left, hud_top + 196.0, 172.0, touch_target_size), Color("#183329"))
+	draw_rect(Rect2(hud_left, hud_top + 196.0, 172.0, touch_target_size), Color("#6ccf91"), false, 2.0)
+	_draw_text("TIME  " + TIME_LABELS[time_scale_index], Vector2(hud_left + 15.0, hud_top + 196.0 + touch_target_size * 0.62), 17, Color("#e5f8eb"))
+	var sfx_top: float = hud_top + 196.0 + touch_target_size + 6.0
+	draw_rect(Rect2(hud_left, sfx_top, 172.0, touch_target_size), Color("#183329"))
+	draw_rect(Rect2(hud_left, sfx_top, 172.0, touch_target_size), Color("#6ccf91") if sfx_enabled else Color("#8b6262"), false, 2.0)
+	_draw_text("[SFX: ON]" if sfx_enabled else "[SFX: OFF]", Vector2(hud_left + 15.0, sfx_top + touch_target_size * 0.62), 16, Color("#e5f8eb"))
+	var diagnostic_rect := Rect2(Vector2(safe_insets.x + DIAGNOSTIC_BUTTON.position.x, safe_insets.y + DIAGNOSTIC_BUTTON.position.y), Vector2(DIAGNOSTIC_BUTTON.size.x, touch_target_size))
 	draw_rect(diagnostic_rect, Color("#183329"))
 	draw_rect(diagnostic_rect, Color("#6ccf91") if diagnostics_enabled else Color("#49645a"), false, 2.0)
 	_draw_text("DIAG", diagnostic_rect.position + Vector2(20.0, 32.0), 16, Color("#e5f8eb"))
@@ -1992,13 +1994,13 @@ func _draw_outpost_placement_hud(top: float) -> void:
 	var safe_left: float = safe_insets.x + HUD_EDGE_PADDING
 	var safe_width: float = viewport_size.x - safe_insets.x - safe_insets.z - HUD_EDGE_PADDING * 2.0
 	var half_width: float = safe_width * 0.5
-	draw_rect(Rect2(safe_left, top, half_width - 6.0, 54.0), confirm_color)
-	draw_rect(Rect2(safe_left, top, half_width - 6.0, 54.0), Color("#72d69a") if outpost_placement_valid else Color("#ff6868"), false, 2.0)
-	_draw_text("[CONFIRM BUILD ($%d)]" % _outpost_build_cost(outpost_placement_rect.size), Vector2(safe_left + 10.0, top + 33.0), 14, Color("#f0fff5"))
+	draw_rect(Rect2(safe_left, top, half_width - 6.0, touch_target_size), confirm_color)
+	draw_rect(Rect2(safe_left, top, half_width - 6.0, touch_target_size), Color("#72d69a") if outpost_placement_valid else Color("#ff6868"), false, 2.0)
+	_draw_text("[CONFIRM BUILD ($%d)]" % _outpost_build_cost(outpost_placement_rect.size), Vector2(safe_left + 10.0, top + touch_target_size * 0.62), 14, Color("#f0fff5"))
 	var cancel_left: float = safe_left + half_width + 6.0
-	draw_rect(Rect2(cancel_left, top, half_width - 6.0, 54.0), Color("#472a2a"))
-	draw_rect(Rect2(cancel_left, top, half_width - 6.0, 54.0), Color("#d77b7b"), false, 2.0)
-	_draw_text("[CANCEL]", Vector2(cancel_left + 36.0, top + 33.0), 16, Color("#fff0f0"))
+	draw_rect(Rect2(cancel_left, top, half_width - 6.0, touch_target_size), Color("#472a2a"))
+	draw_rect(Rect2(cancel_left, top, half_width - 6.0, touch_target_size), Color("#d77b7b"), false, 2.0)
+	_draw_text("[CANCEL]", Vector2(cancel_left + 36.0, top + touch_target_size * 0.62), 16, Color("#fff0f0"))
 
 func _draw_structure_actions() -> void:
 	if selected_structure_type.is_empty() or selected_structure_index < 0:
