@@ -371,8 +371,12 @@ func _process(delta: float) -> void:
 	survival_day = maxi(1, int(floor(world_clock_minutes / 1440.0)) + 1)
 	if survival_day > last_upkeep_day:
 		for upkeep_day in range(last_upkeep_day + 1, survival_day + 1):
+			last_upkeep_day = upkeep_day
 			_apply_daily_rations()
-		last_upkeep_day = survival_day
+		best_days_survived = maxi(best_days_survived, survival_day)
+		best_civilians_saved = maxi(best_civilians_saved, saved_count)
+		_update_persistent_records()
+		_save_operation()
 	_update_day_phase()
 	_update_radio_transmission()
 	radio_banner_timer = maxf(0.0, radio_banner_timer - sim_delta)
