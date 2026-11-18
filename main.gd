@@ -399,6 +399,11 @@ func _process(delta: float) -> void:
 		var lure_index: int = _find_nearest_flare(zpos)
 		if lure_index >= 0:
 			target = flares[lure_index]["pos"]
+		var zombie_kind: String = str(zombie.get("kind", "shambler"))
+		var zombie_speed: float = 112.0 if zombie_kind == "runner" else 61.0
+		if zombie_kind == "brute":
+			zombie_speed = 34.0
+		var displacement: Vector2 = (target - zpos).normalized() * zombie_speed * sim_delta
 		zpos = _move_circle_with_buildings(zpos, displacement, 10.0 if zombie_kind == "brute" else 7.0, sim_delta, target, zombie, true)
 		var contacted_building_index: int = _building_contact_index(zpos, 22.0)
 		if contacted_building_index < 0 and siege_building_index >= 0 and siege_building_index < buildings.size() and zpos.distance_to(buildings[siege_building_index].get_center()) <= 28.0:
