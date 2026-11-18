@@ -63,6 +63,7 @@ jobs:
             -dname "CN=Android Debug,O=Android,C=US"
           echo "Godot Java SDK and Android SDK settings configured."
           echo "Debug signing keystore generated."
+          keytool -list -keystore "$GITHUB_WORKSPACE/.ci-debug.keystore" -storepass android -alias androiddebugkey
           test -s "$GITHUB_WORKSPACE/.ci-debug.keystore"
           # Resolve the project-relative preset path to the absolute CI path.
           sed -i "s|keystore/debug=\".ci-debug.keystore\"|keystore/debug=\"$GITHUB_WORKSPACE/.ci-debug.keystore\"|" export_presets.cfg
@@ -75,9 +76,28 @@ jobs:
           godot --headless --path . --editor --quit
 
       - name: Export Debug APK
+        shell: bash
         run: |
+          set -euo pipefail
+          JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
+          export JAVA_HOME
+          export ANDROID_HOME
+          export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/34.0.0:$PATH"
+          export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$GITHUB_WORKSPACE/.ci-debug.keystore"
+          export GODOT_ANDROID_KEYSTORE_DEBUG_USER="androiddebugkey"
+          export GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD="android"
+
+          echo "Godot Android export environment:"
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          java -version
+          test -x "$ANDROID_HOME/platform-tools/adb"
+          test -x "$ANDROID_HOME/build-tools/34.0.0/zipalign"
+          test -s "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH"
+          find "$HOME/.local/share/godot/export_templates" -maxdepth 2 -type f \\( -name 'android_debug.apk' -o -name 'android_release.apk' -o -name 'android_source.zip' \\) -print
+
           mkdir -v -p build/android
-          godot --headless --verbose --path . --export-debug "Android" build/android/ContainmentProtocol.apk
+          godot --headless --verbose --path . --export-debug "Android" build/android/ContainmentProtocol.apk 2>&1 | tee build/android/export.log
           test -s build/android/ContainmentProtocol.apk
 
       - name: Upload APK Artifact
