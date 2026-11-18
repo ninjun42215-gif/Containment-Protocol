@@ -371,6 +371,7 @@ func _process(delta: float) -> void:
 		var zombie: Dictionary = zombies[i]
 		zombie["turret_attack_cooldown"] = maxf(0.0, float(zombie.get("turret_attack_cooldown", 0.0)) - sim_delta)
 		zombie["gate_attack_cooldown"] = maxf(0.0, float(zombie.get("gate_attack_cooldown", 0.0)) - sim_delta)
+		zombie["building_attack_cooldown"] = maxf(0.0, float(zombie.get("building_attack_cooldown", 0.0)) - sim_delta)
 		var zpos: Vector2 = zombie["pos"]
 		var target_index: int = _find_nearest_entity(civilian_grid, civilians, zpos, 640.0)
 		var target: Vector2 = _nearest_evac_zone(zpos)
@@ -582,14 +583,25 @@ func _process(delta: float) -> void:
 		var target_index: int = _find_nearest_zombie(unit_pos, attack_range)
 		if target_index >= 0:
 			var target_pos: Vector2 = zombies[target_index]["pos"]
-			_add_bullet_tracer(unit_pos, target_pos)
+			var firing_origin: Vector2 = unit_pos
+			if bool(unit.get("garrisoned", false)):
+				var garrison_building_index: int = int(unit.get("garrison_building", -1))
+				if garrison_building_index >= 0 and garrison_building_index < buildings.size():
+					var roof: Rect2 = buildings[garrison_building_index]
+					var fire_direction: Vector2 = (target_pos - roof.get_center()).normalized()
+					var half_extent: Vector2 = roof.size * 0.5
+					var horizontal_scale: float = absf(fire_direction.x) / maxf(half_extent.x, 1.0)
+					var vertical_scale: float = absf(fire_direction.y) / maxf(half_extent.y, 1.0)
+					var edge_scale: float = maxf(horizontal_scale, vertical_scale)
+					firing_origin = roof.get_center() + fire_direction / maxf(edge_scale, 0.001) * 0.88
+			_add_bullet_tracer(firing_origin, target_pos)
 			var unit_damage: float = 80.0 if is_sniper else (16.0 if is_militia else 35.0)
 			var fire_interval: float = 1.05 if is_sniper else (0.85 if is_militia else 0.62)
 			if _is_near_building_type(unit_pos, "ARMORY", ARMORY_RADIUS):
 				fire_interval *= 0.85
 			_damage_zombie(target_index, unit_damage)
 			unit["cooldown"] = fire_interval
-			muzzle_flashes.append({"pos": unit_pos, "life": 0.10, "max_life": 0.10})
+			muzzle_flashes.append({"pos": firing_origin, "life": 0.10, "max_life": 0.10})
 			_queue_sfx("gunfire")
 			_rebuild_zombie_spatial_grid()
 		units[unit_index] = unit
@@ -931,15 +943,16 @@ func _confirm_outpost_placement() -> void:
 		evacuation_zones.append(center)
 		var hq_capacity: int = maxi(12, roundi(size.x * size.y / 18000.0))
 		var hq_fortified_count: int = _fortify_enclosed_buildings(outpost_placement_rect, 0)
-		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 300.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 1200.0, "max_hp": 1200.0, "level": 1, "capacity": hq_capacity + hq_fortified_count * 8, "sheltered": 0, "fortified_buildings": []})
+		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 300.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 1200.0, "max_hp": 1200.0, "level": 1, "capacity": hq_capacity + hq_fortified_count * 8, "sheltered": 0, "fortified_buildings": _fortified_building_indices(0)})
 		_create_outpost_perimeter(outpost_placement_rect, 0)
 		campaign_started = true
 		game_state = "playing"
 		wave_timer = 1.0
 	else:
 		var capacity: int = maxi(12, roundi(size.x * size.y / 18000.0))
-		var fortified_count: int = _fortify_enclosed_buildings(outpost_placement_rect, outposts.size())
-		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 260.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 900.0, "max_hp": 900.0, "level": 1, "capacity": capacity + fortified_count * 8, "sheltered": 0, "fortified_buildings": []})
+		var new_outpost_index: int = outposts.size()
+		var fortified_count: int = _fortify_enclosed_buildings(outpost_placement_rect, new_outpost_index)
+		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 260.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 900.0, "max_hp": 900.0, "level": 1, "capacity": capacity + fortified_count * 8, "sheltered": 0, "fortified_buildings": _fortified_building_indices(new_outpost_index)})
 		_create_outpost_perimeter(outpost_placement_rect, outposts.size() - 1)
 	funds -= cost
 	outpost_placement_active = false
@@ -948,6 +961,13 @@ func _confirm_outpost_placement() -> void:
 	message_timer = 2.5
 	_save_operation()
 	queue_redraw()
+
+func _fortified_building_indices(outpost_index: int) -> Array[int]:
+	var indices: Array[int] = []
+	for building_index in range(building_archetypes.size()):
+		if bool(building_archetypes[building_index].get("fortified", false)) and int(building_archetypes[building_index].get("fortified_outpost_index", -1)) == outpost_index:
+			indices.append(building_index)
+	return indices
 
 func _fortify_enclosed_buildings(rect: Rect2, outpost_index: int) -> int:
 	var count: int = 0
@@ -1101,6 +1121,15 @@ func _garrison_unit(unit_index: int, building_index: int) -> void:
 	if bool(state.get("destroyed", false)):
 		message = "BUILDING DESTROYED — GARRISON UNAVAILABLE"
 		message_timer = 1.4
+		return
+	var garrison_count: int = 0
+	for existing_unit in units:
+		if bool(existing_unit.get("garrisoned", false)) and int(existing_unit.get("garrison_building", -1)) == building_index:
+			garrison_count += 1
+	var capacity: int = 8 if _building_type_at(building_index) == "HIGHRISE" else 4
+	if not bool(units[unit_index].get("garrisoned", false)) and garrison_count >= capacity:
+		message = "BUILDING GARRISON FULL — %d/%d" % [garrison_count, capacity]
+		message_timer = 1.5
 		return
 	var unit: Dictionary = units[unit_index]
 	unit["garrisoned"] = true
@@ -1670,11 +1699,21 @@ func _handle_tap(pos: Vector2) -> void:
 		if tapped_building >= 0:
 			_garrison_unit(selected_unit_index, tapped_building)
 			return
+		var selected_is_garrisoned: bool = bool(units[selected_unit_index].get("garrisoned", false))
+		if selected_is_garrisoned:
+			_exit_unit_garrison(selected_unit_index, world_pos)
+			if _is_valid_street_position(world_pos):
+				units[selected_unit_index]["move_target"] = world_pos
+			message = "UNIT EXITED GARRISON"
+			message_timer = 1.5
+			selected_unit_index = -1
+			queue_redraw()
+			return
 		if _is_valid_street_position(world_pos):
 			_exit_unit_garrison(selected_unit_index, world_pos)
 			units[selected_unit_index]["move_target"] = world_pos
-			message = "UNIT EXITED — MOVING TO ORDERED POSITION"
-			message_timer = 1.5
+			message = "SQUAD REPOSITIONED"
+			message_timer = 1.2
 			selected_unit_index = -1
 			queue_redraw()
 			return
