@@ -444,7 +444,7 @@ func _process(delta: float) -> void:
 						break
 				var fire_interval := base_interval * (0.8 if command_buff else 1.0)
 				if int(turret.get("level", 1)) >= 2:
-					var tracer_direction := (turret_target - turret["pos"]).normalized().orthogonal() * 5.0
+					var tracer_direction: Vector2 = (turret_target - turret["pos"]).normalized().orthogonal() * 5.0
 					_add_bullet_tracer(turret["pos"] + tracer_direction, turret_target + tracer_direction)
 					_add_bullet_tracer(turret["pos"] - tracer_direction, turret_target - tracer_direction)
 				else:
