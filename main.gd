@@ -713,11 +713,13 @@ func _generate_state_map() -> void:
 	district_seed_points.clear()
 	campaign_map_seed = randi()
 	vehicles.clear()
+	highway_segments.clear()
+	secondary_road_segments.clear()
 	var map_rng := RandomNumberGenerator.new()
 	map_rng.seed = campaign_map_seed
 	for district_index in range(8):
 		var district_column: int = district_index % 2
-		var district_row: int = district_index / 2
+		var district_row: int = floori(float(district_index) / 2.0)
 		var seed_point := Vector2((float(district_column) + 0.5) * WORLD_SIZE.x / 2.0 + map_rng.randf_range(-380.0, 380.0), (float(district_row) + 0.5) * WORLD_SIZE.y / 4.0 + map_rng.randf_range(-420.0, 420.0))
 		var found_seed := false
 		for attempt in range(120):
@@ -946,30 +948,6 @@ func _update_gate_states() -> void:
 					break
 		gate["open"] = should_open
 		gates[gate_index] = gate
-
-func _call_to_arms_cost() -> int:
-	var source_index: int = _best_recruitment_outpost()
-	var source_position: Vector2 = outposts[source_index]["pos"] if source_index >= 0 else primary_hq_position
-	return roundi(float(CALL_TO_ARMS_COST) * (0.75 if _is_near_building_type(source_position, "ARMORY", ARMORY_RADIUS) else 1.0))
-
-func _call_to_arms() -> void:
-	var source_outpost_index: int = _best_recruitment_outpost()
-	if source_outpost_index < 0:
-		message = "CALL TO ARMS REQUIRES 1 SHELTERED OUTPOST SETTLER"
-		message_timer = 1.8
-		return
-	var source_position: Vector2 = outposts[source_outpost_index]["pos"]
-	var cost: int = roundi(float(CALL_TO_ARMS_COST) * (0.75 if _is_near_building_type(source_position, "ARMORY", ARMORY_RADIUS) else 1.0))
-	if funds < cost:
-		message = "CALL TO ARMS REQUIRES $%d" % cost
-		message_timer = 1.5
-		return
-	outposts[source_outpost_index]["sheltered"] = maxi(0, int(outposts[source_outpost_index]["sheltered"]) - 1)
-	units.append({"id": _next_unit_id(), "pos": _outpost_recruit_spawn(source_outpost_index, source_position), "kind": "militia", "cooldown": 0.2, "hp": 100.0, "max_hp": 100.0, "badge": "MILITIA", "garrisoned": false, "garrison_building": -1, "move_target": null, "manual_order": false, "ai_task": "", "steering": {}})
-	funds -= cost
-	_save_operation()
-	message = "MILITIA RIFLEMAN MOBILIZED — $%d" % cost
-	message_timer = 2.0
 
 func _outpost_build_cost(size: Vector2) -> int:
 	var wall_segments: int = ceili((2.0 * (size.x + size.y)) / 40.0)
@@ -2317,10 +2295,6 @@ func _handle_tap(pos: Vector2) -> void:
 		_salvage_nearest_vehicle()
 		queue_redraw()
 		return
-	if pos.x >= safe_insets.x + HUD_EDGE_PADDING and pos.x <= safe_insets.x + HUD_EDGE_PADDING + 192.0 and pos.y >= _call_to_arms_top() and pos.y <= _call_to_arms_top() + touch_target_size:
-		_call_to_arms()
-		queue_redraw()
-		return
 	if manual_paused or lifecycle_paused:
 		if pos.x >= viewport_size.x * 0.2 and pos.x <= viewport_size.x * 0.8 and pos.y >= viewport_size.y * 0.52 and pos.y <= viewport_size.y * 0.68:
 			manual_paused = false
@@ -2867,6 +2841,8 @@ func _draw_entities() -> void:
 		var state: Dictionary = building_archetypes[building_index]
 		if bool(state.get("destroyed", false)):
 			continue
+		if not visible_rect.intersects(buildings[building_index]):
+			continue
 		var count: int = 0
 		for garrison_unit in units:
 			if bool(garrison_unit.get("garrisoned", false)) and int(garrison_unit.get("garrison_building", -1)) == building_index:
@@ -2890,13 +2866,21 @@ func _draw_entities() -> void:
 			draw_line(vehicle_pos + Vector2(-28.0, -24.0), vehicle_pos + Vector2(28.0, 24.0), vehicle_color, 4.0)
 			draw_line(vehicle_pos + Vector2(-28.0, 24.0), vehicle_pos + Vector2(28.0, -24.0), vehicle_color, 4.0)
 			draw_line(vehicle_pos + Vector2(-42.0, 0.0), vehicle_pos + Vector2(42.0, 0.0), Color("#d6f6f7"), 3.0)
+			draw_line(vehicle_pos + Vector2(-48.0, -30.0), vehicle_pos + Vector2(48.0, -30.0), Color("#d6f6f7"), 3.0)
+			draw_line(vehicle_pos + Vector2(-48.0, -34.0), vehicle_pos + Vector2(48.0, -34.0), Color("#d6f6f7"), 2.0)
 		else:
 			draw_rect(Rect2(vehicle_pos - Vector2(25.0, 14.0), Vector2(50.0, 28.0)), vehicle_color)
 			draw_rect(Rect2(vehicle_pos - Vector2(12.0, 9.0), Vector2(24.0, 18.0)), Color("#26352e"))
+			if day_phase == "NIGHT":
+				draw_line(vehicle_pos + Vector2(25.0, -8.0), vehicle_pos + Vector2(72.0, -24.0), Color(1.0, 0.92, 0.58, 0.28), 8.0)
+				draw_line(vehicle_pos + Vector2(25.0, 8.0), vehicle_pos + Vector2(72.0, 24.0), Color(1.0, 0.92, 0.58, 0.28), 8.0)
 		var health_ratio: float = clampf(float(vehicle.get("hp", 0.0)) / maxf(float(vehicle.get("max_hp", 1.0)), 1.0), 0.0, 1.0)
 		draw_rect(Rect2(vehicle_pos + Vector2(-24.0, -25.0), Vector2(48.0 * health_ratio, 4.0)), Color("#67e89b"))
 		if not bool(vehicle.get("active", false)):
-			_draw_text("SALVAGE $%d" % int(vehicle.get("salvage_cost", 0)), vehicle_pos + Vector2(-38.0, -34.0), 10, Color("#f4d77b"))
+			var salvage_remaining: float = float(vehicle.get("salvage_timer", 4.0))
+			_draw_text("SALVAGE $%d  %.1fS" % [int(vehicle.get("salvage_cost", 0)), salvage_remaining], vehicle_pos + Vector2(-48.0, -34.0), 10, Color("#f4d77b"))
+		else:
+			_draw_text("ONBOARD %d/6" % int(vehicle.get("onboard", 0)), vehicle_pos + Vector2(-34.0, 38.0), 10, Color("#b8f1df"))
 	for unit_index in range(units.size()):
 		var unit: Dictionary = units[unit_index]
 		var p: Vector2 = unit["pos"]
@@ -2975,11 +2959,6 @@ func _draw_hud() -> void:
 	_draw_text("FUNDS  $%d" % funds, Vector2(hud_left + 16.0, hud_top + 70.0), 21, Color("#f4d77b"))
 	_draw_text("SECTOR %02d  WAVE %d/%d" % [sector_index + 1, wave, sector_wave_limit], Vector2(hud_left + 16.0, hud_top + 104.0), 15, Color("#ffad62"))
 	_draw_text("SAVED %d  LOST %d  HORDE %d/%d" % [saved_count, lost_count, zombies.size(), MAX_ACTIVE_ZOMBIES], Vector2(hud_left + 16.0, hud_top + 124.0), 13, Color("#9cbcaf"))
-	var call_to_arms_top: float = _call_to_arms_top()
-	draw_rect(Rect2(hud_left, call_to_arms_top, 192.0, touch_target_size), Color("#33422a"))
-	draw_rect(Rect2(hud_left, call_to_arms_top, 192.0, touch_target_size), Color("#d5c36b"), false, 2.0)
-	var militia_cost: int = _call_to_arms_cost()
-	_draw_text("CALL TO ARMS $%d" % militia_cost, Vector2(hud_left + 10.0, call_to_arms_top + touch_target_size * 0.62), 14, Color("#fff4c7"))
 	_draw_text("%s  |  %s" % [day_phase, "ENDLESS" if endless_containment else "CAMPAIGN"], Vector2(hud_left + 16.0, hud_top + 144.0), 12, Color("#a9c8b7"))
 	if message_timer > 0.0:
 		_draw_text(message, Vector2(hud_left + 16.0, hud_top + 164.0), 14, Color("#ffbd76"))
@@ -3426,9 +3405,6 @@ func _safe_bottom_y(panel_height: float) -> float:
 func _deployment_panel_height() -> float:
 	return maxf(200.0, touch_target_size + 146.0)
 
-func _call_to_arms_top() -> float:
-	return safe_insets.y + HUD_EDGE_PADDING + 196.0 + 2.0 * (touch_target_size + 6.0)
-
 func _structure_action_top() -> float:
 	return safe_insets.y + maxf(STRUCTURE_ACTION_TOP, HUD_EDGE_PADDING + 196.0 + 3.0 * (touch_target_size + 6.0))
 
@@ -3729,9 +3705,12 @@ func _resume_operation() -> void:
 	zombies.assign(state.get("zombies", []))
 	units.assign(state.get("units", []))
 	vehicles.assign(state.get("vehicles", []))
-	highway_segments.assign(state.get("highway_segments", []))
-	secondary_road_segments.assign(state.get("secondary_road_segments", []))
-	world_callouts.assign(state.get("world_callouts", []))
+	if state.has("highway_segments"):
+		highway_segments.assign(state["highway_segments"])
+	if state.has("secondary_road_segments"):
+		secondary_road_segments.assign(state["secondary_road_segments"])
+	if state.has("world_callouts"):
+		world_callouts.assign(state["world_callouts"])
 	if int(state.get("version", SAVE_VERSION)) == 2:
 		vehicles.clear()
 		for unit_index in range(units.size()):
