@@ -4,7 +4,7 @@ extends Node2D
 # Portrait 720x1280, drawn natively for low-overhead Android rendering.
 
 const VIEW_SIZE := Vector2(720.0, 1280.0)
-const WORLD_SIZE := Vector2(3000.0, 4400.0)
+const WORLD_SIZE := Vector2(6000.0, 8800.0)
 const BAR_TOP := 1080.0
 const EVAC_RADIUS := 76.0
 const MIN_ZOOM := 0.45
@@ -37,6 +37,17 @@ const FLARE_LURE_RADIUS := 220.0
 const AUDIO_SAMPLE_RATE := 22050.0
 const MAX_ACTIVE_ZOMBIES := 650
 const PENDING_WAVE_SPAWN_INTERVAL := 0.20
+const SAVE_VERSION := 2
+const OUTPOST_MIN_SIZE := 220.0
+const OUTPOST_MAX_SIZE := 760.0
+const OUTPOST_SNAP := 20.0
+const OUTPOST_WALL_THICKNESS := 18.0
+const GATE_COST := 90
+const CALL_TO_ARMS_COST := 60
+const MILITIA_RANGE := 175.0
+const HOSPITAL_REGEN_RADIUS := 160.0
+const ARMORY_RADIUS := 180.0
+const WAREHOUSE_HOLD_TIME := 4.0
 
 const UNIT_DEPLOYMENTS := [
 	{"name": "INFANTRY", "detail": "SQUAD  $100", "cost": 100, "kind": "infantry"},
@@ -48,7 +59,7 @@ const UNIT_DEPLOYMENTS := [
 const BASE_DEPLOYMENTS := [
 	{"name": "OUTPOST", "detail": "$220", "cost": OUTPOST_COST, "kind": "outpost"},
 	{"name": "TURRET", "detail": "$140", "cost": TURRET_COST, "kind": "turret"},
-	{"name": "WALL", "detail": "$75", "cost": WALL_COST, "kind": "wall"}
+	{"name": "WALL", "detail": "$75", "cost": WALL_COST, "kind": "wall"}, {"name": "GATE", "detail": "$90", "cost": GATE_COST, "kind": "gate"}
 ]
 
 var civilians: Array[Vector2] = []
@@ -96,6 +107,16 @@ var airstrike_marker := Vector2.ZERO
 var airstrike_timer := 0.0
 var screen_font: Font
 var buildings: Array[Rect2] = []
+var building_archetypes: Array[Dictionary] = []
+var district_regions: Array[Rect2] = []
+var gates: Array[Dictionary] = []
+var warehouse_hold_timers: Dictionary = {}
+var outpost_placement_active := false
+var outpost_placement_dragging := false
+var outpost_placement_start := Vector2.ZERO
+var outpost_placement_rect := Rect2(Vector2.ZERO, Vector2(OUTPOST_MIN_SIZE, OUTPOST_MIN_SIZE))
+var outpost_placement_kind := "outpost"
+var outpost_placement_valid := false
 var evacuation_zones: Array[Vector2] = []
 var spawn_districts: Array[Rect2] = []
 var outposts: Array[Dictionary] = []
@@ -182,6 +203,11 @@ func _start_sector(index: int) -> void:
 	flares.clear()
 	outposts.clear()
 	turrets.clear()
+	gates.clear()
+	building_archetypes.clear()
+	warehouse_hold_timers.clear()
+	outpost_placement_active = false
+	outpost_placement_dragging = false
 	supply_crates.clear()
 	civilian_steering.clear()
 	evacuation_zones.clear()
@@ -223,7 +249,8 @@ func _start_sector(index: int) -> void:
 	message = "EVACUATE CIVILIANS. HOLD THE LINE."
 	message_timer = 4.0
 	for district in spawn_districts:
-		for i in range(24):
+		var civilian_spawn_count: int = 30 + _residential_density_bonus(district)
+		for i in range(civilian_spawn_count):
 			var spawn_point := Vector2(randf_range(district.position.x, district.end.x), randf_range(district.position.y, district.end.y))
 			if _is_open_world_position(spawn_point, 18.0):
 				civilians.append(spawn_point)
@@ -277,6 +304,8 @@ func _process(delta: float) -> void:
 		_save_operation()
 	_shelter_flush_timer_step(sim_delta)
 	_update_supply_drops(sim_delta)
+	_update_building_effects(sim_delta)
+	_update_gate_states()
 	var phase_index: int = int(float(maxi(wave, 1) - 1) / 6.0) % 3
 	day_phase = "DAY" if phase_index == 0 else ("DUSK" if phase_index == 1 else "NIGHT")
 
@@ -497,21 +526,248 @@ func _setup_city() -> void:
 	_configure_sector(sector_index)
 
 func _configure_sector(index: int) -> void:
-	match index:
-		0:
-			sector_name = "Downtown Grid"
-			sector_wave_limit = 30
-			buildings = _generate_city_blocks(0)
-		1:
-			sector_name = "Highway Chokepoint"
-			sector_wave_limit = 30
-			buildings = _generate_city_blocks(1)
-		_:
-			sector_name = "Central Plaza"
-			sector_wave_limit = 30
-			buildings = _generate_city_blocks(2)
+	sector_name = "Statewide Containment"
+	sector_wave_limit = 30
+	sector_wave_limit = 30
+	_generate_state_map()
 
-	spawn_districts = [Rect2(80.0, 80.0, 720.0, 720.0), Rect2(2200.0, 80.0, 720.0, 720.0), Rect2(80.0, 3600.0, 720.0, 720.0), Rect2(2200.0, 3600.0, 720.0, 720.0)]
+func _generate_state_map() -> void:
+	buildings.clear()
+	building_archetypes.clear()
+	district_regions.clear()
+	spawn_districts.clear()
+	var band_height: float = WORLD_SIZE.y / 5.0
+	for district_index in range(5):
+		var region := Rect2(0.0, float(district_index) * band_height, WORLD_SIZE.x, band_height)
+		district_regions.append(region)
+		spawn_districts.append(region.grow(-120.0))
+		var cell_width: float = WORLD_SIZE.x / 10.0
+		var cell_height: float = (band_height - 180.0) / 3.0
+		for row in range(3):
+			for column in range(10):
+				if column == 4 or column == 5 or (row == 1 and column % 3 == 0):
+					continue
+				var width: float = randf_range(250.0, 390.0)
+				var height: float = randf_range(250.0, 390.0)
+				var x: float = float(column) * cell_width + randf_range(28.0, 75.0)
+				var y: float = region.position.y + 90.0 + float(row) * cell_height + randf_range(18.0, 55.0)
+				var rect := Rect2(x, y, minf(width, cell_width - 100.0), minf(height, cell_height - 50.0))
+				if rect.end.x >= WORLD_SIZE.x - 20.0 or rect.end.y >= region.end.y - 20.0:
+					continue
+				var archetype: String = _building_type_for_district(district_index, row, column)
+				buildings.append(rect)
+				building_archetypes.append({"type": archetype, "district": district_index, "cache_available": archetype == "WAREHOUSE", "cache_hold": 0.0})
+
+func _building_type_for_district(district_index: int, row: int, column: int) -> String:
+	match district_index:
+		0:
+			return "HIGHRISE" if (row + column) % 4 == 0 else "RESIDENTIAL"
+		1:
+			return "RESIDENTIAL" if (row + column) % 3 != 0 else "HIGHRISE"
+		2:
+			return "ARMORY" if column % 4 == 0 else "WAREHOUSE"
+		3:
+			return "HOSPITAL" if column % 3 == 0 else "RESIDENTIAL"
+		_:
+			return "WAREHOUSE" if column % 4 == 0 else "RESIDENTIAL"
+
+func _residential_density_bonus(region: Rect2) -> int:
+	var district_index: int = clampi(floori(region.position.y / (WORLD_SIZE.y / 5.0)), 0, 4)
+	return 22 if district_index == 1 else (12 if district_index == 0 or district_index == 3 else 4)
+
+func _building_type_at(index: int) -> String:
+	if index < 0 or index >= building_archetypes.size():
+		return "RESIDENTIAL"
+	return str(building_archetypes[index].get("type", "RESIDENTIAL"))
+
+func _is_near_building_type(position: Vector2, archetype: String, radius: float) -> bool:
+	var radius_squared: float = radius * radius
+	for index in range(buildings.size()):
+		if _building_type_at(index) != archetype:
+			continue
+		var nearest := Vector2(clampf(position.x, buildings[index].position.x, buildings[index].end.x), clampf(position.y, buildings[index].position.y, buildings[index].end.y))
+		if position.distance_squared_to(nearest) <= radius_squared:
+			return true
+	return false
+
+func _update_building_effects(delta: float) -> void:
+	for unit_index in range(units.size()):
+		var unit: Dictionary = units[unit_index]
+		var max_hp: float = float(unit.get("max_hp", 100.0))
+		if _is_near_building_type(unit["pos"], "HOSPITAL", HOSPITAL_REGEN_RADIUS):
+			unit["hp"] = minf(max_hp, float(unit.get("hp", max_hp)) + 2.0 * delta)
+		units[unit_index] = unit
+	for building_index in range(buildings.size()):
+		if _building_type_at(building_index) != "WAREHOUSE":
+			continue
+		var archetype: Dictionary = building_archetypes[building_index]
+		if not bool(archetype.get("cache_available", true)):
+			continue
+		var center: Vector2 = buildings[building_index].get_center()
+		var held := false
+		for unit in units:
+			if center.distance_to(unit["pos"]) <= 72.0:
+				held = true
+				break
+		var hold_time: float = float(archetype.get("cache_hold", 0.0))
+			hold_time = hold_time + delta if held else 0.0
+		archetype["cache_hold"] = hold_time
+		if hold_time >= WAREHOUSE_HOLD_TIME:
+			archetype["cache_available"] = false
+			funds += 100
+			message = "WAREHOUSE CACHE SECURED +$100"
+			message_timer = 2.0
+		building_archetypes[building_index] = archetype
+
+func _update_gate_states() -> void:
+	for gate_index in range(gates.size()):
+		var gate: Dictionary = gates[gate_index]
+		var gate_position: Vector2 = gate["pos"]
+		var should_open := false
+		for unit in units:
+			if gate_position.distance_to(unit["pos"]) <= 55.0:
+				should_open = true
+				break
+		if not should_open:
+			for civilian in civilians:
+				if gate_position.distance_to(civilian) <= 55.0:
+					should_open = true
+					break
+		gate["open"] = should_open
+		gates[gate_index] = gate
+
+func _call_to_arms() -> void:
+	var source_outpost_index: int = -1
+	for index in range(outposts.size()):
+		if int(outposts[index].get("sheltered", 0)) > 0:
+			source_outpost_index = index
+			break
+	var source_position: Vector2 = primary_hq_position
+	var civilian_index: int = -1
+	if source_outpost_index >= 0:
+		source_position = outposts[source_outpost_index]["pos"]
+	else:
+		for index in range(civilians.size()):
+			if civilians[index].distance_to(source_position) <= 180.0:
+				civilian_index = index
+				break
+	if source_outpost_index < 0 and civilian_index < 0:
+		message = "NO RESCUED CIVILIAN AVAILABLE NEAR HQ"
+		message_timer = 1.5
+		return
+	var cost: int = roundi(float(CALL_TO_ARMS_COST) * (0.75 if _is_near_building_type(source_position, "ARMORY", ARMORY_RADIUS) else 1.0))
+	if funds < cost:
+		message = "CALL TO ARMS REQUIRES $%d" % cost
+		message_timer = 1.5
+		return
+	if source_outpost_index >= 0:
+		outposts[source_outpost_index]["sheltered"] = int(outposts[source_outpost_index]["sheltered"]) - 1
+	else:
+		civilians.remove_at(civilian_index)
+		if civilian_index < civilian_steering.size():
+			civilian_steering.remove_at(civilian_index)
+	units.append({"pos": source_position + Vector2(28.0, 0.0), "kind": "militia", "cooldown": 0.2, "hp": 100.0, "max_hp": 100.0, "badge": "MILITIA"})
+	funds -= cost
+	message = "MILITIA RIFLEMAN MOBILIZED — $%d" % cost
+	message_timer = 2.0
+
+func _outpost_build_cost(size: Vector2) -> int:
+	var wall_segments: int = ceili((2.0 * (size.x + size.y)) / 40.0)
+	return OUTPOST_COST + wall_segments * 5
+
+func _snap_outpost_size(size: Vector2) -> Vector2:
+	return Vector2(clampf(roundf(size.x / OUTPOST_SNAP) * OUTPOST_SNAP, OUTPOST_MIN_SIZE, OUTPOST_MAX_SIZE), clampf(roundf(size.y / OUTPOST_SNAP) * OUTPOST_SNAP, OUTPOST_MIN_SIZE, OUTPOST_MAX_SIZE))
+
+func _outpost_rect_valid(rect: Rect2) -> bool:
+	if rect.position.x < 20.0 or rect.position.y < 20.0 or rect.end.x > WORLD_SIZE.x - 20.0 or rect.end.y > WORLD_SIZE.y - 20.0:
+		return false
+	for building in buildings:
+		if rect.intersects(building.grow(16.0)):
+			return false
+	for outpost in outposts:
+		var other_rect: Rect2 = outpost.get("rect", Rect2(outpost["pos"] - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
+		if rect.intersects(other_rect.grow(40.0)):
+			return false
+	return true
+
+func _begin_outpost_placement(world_position: Vector2, placement_kind: String) -> void:
+	outpost_placement_active = true
+	outpost_placement_dragging = true
+	outpost_placement_kind = placement_kind
+	outpost_placement_start = world_position
+	outpost_placement_rect = Rect2(world_position, Vector2(OUTPOST_MIN_SIZE, OUTPOST_MIN_SIZE))
+	_update_outpost_placement(world_position + Vector2(OUTPOST_MIN_SIZE, OUTPOST_MIN_SIZE))
+
+func _update_outpost_placement(world_position: Vector2) -> void:
+	var end_point := Vector2(maxf(world_position.x, outpost_placement_start.x + OUTPOST_MIN_SIZE), maxf(world_position.y, outpost_placement_start.y + OUTPOST_MIN_SIZE))
+	var size: Vector2 = _snap_outpost_size(end_point - outpost_placement_start)
+	outpost_placement_rect = Rect2(outpost_placement_start, size)
+	var cost: int = _outpost_build_cost(size)
+	outpost_placement_valid = _outpost_rect_valid(outpost_placement_rect) and funds >= cost and (outpost_placement_kind == "hq" or outposts.size() < OUTPOST_MAX_COUNT)
+	queue_redraw()
+
+func _confirm_outpost_placement() -> void:
+	var size: Vector2 = outpost_placement_rect.size
+	var cost: int = _outpost_build_cost(size)
+	if not outpost_placement_valid or funds < cost:
+		message = "OUTPOST FOOTPRINT BLOCKED OR INSUFFICIENT FUNDS"
+		message_timer = 1.5
+		return
+	var center: Vector2 = outpost_placement_rect.get_center()
+	if outpost_placement_kind == "hq":
+		primary_hq_position = center
+		evacuation_zones.clear()
+		evacuation_zones.append(center)
+		campaign_started = true
+		game_state = "playing"
+		wave_timer = 1.0
+	else:
+		var capacity: int = maxi(12, roundi(size.x * size.y / 18000.0))
+		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 260.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 900.0, "max_hp": 900.0, "level": 1, "capacity": capacity, "sheltered": 0})
+		_create_outpost_perimeter(outpost_placement_rect, outposts.size() - 1)
+	funds -= cost
+	outpost_placement_active = false
+	outpost_placement_dragging = false
+	message = "CUSTOM OUTPOST ESTABLISHED — $%d" % cost
+	message_timer = 2.5
+	_save_operation()
+	queue_redraw()
+
+func _create_outpost_perimeter(rect: Rect2, outpost_index: int) -> void:
+	var thickness: float = OUTPOST_WALL_THICKNESS
+	var gate_width: float = 60.0
+	var gate_rect := Rect2(Vector2(rect.position.x + rect.size.x * 0.5 - gate_width * 0.5, rect.end.y - thickness * 0.5), Vector2(gate_width, thickness))
+	var wall_rects: Array[Rect2] = [Rect2(rect.position, Vector2(rect.size.x, thickness)), Rect2(rect.position, Vector2(thickness, rect.size.y)), Rect2(Vector2(rect.end.x - thickness, rect.position.y), Vector2(thickness, rect.size.y)), Rect2(Vector2(rect.position.x, rect.end.y - thickness), Vector2((rect.size.x - gate_width) * 0.5, thickness)), Rect2(Vector2(rect.position.x + (rect.size.x + gate_width) * 0.5, rect.end.y - thickness), Vector2((rect.size.x - gate_width) * 0.5, thickness))]
+	for wall_rect in wall_rects:
+		barricades.append({"pos": wall_rect.get_center(), "rect": wall_rect, "hp": 650.0, "max_hp": 650.0, "kind": "perimeter", "outpost_index": outpost_index})
+	gates.append({"pos": gate_rect.get_center(), "rect": gate_rect, "hp": 500.0, "max_hp": 500.0, "open": false, "outpost_index": outpost_index})
+
+func _snap_turret_to_outpost(position: Vector2) -> Vector2:
+	var best_position: Vector2 = position
+	var best_distance: float = 72.0 * 72.0
+	for outpost in outposts:
+		var rect: Rect2 = outpost.get("rect", Rect2(outpost["pos"] - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
+		var candidates: Array[Vector2] = [Vector2(clampf(position.x, rect.position.x, rect.end.x), rect.position.y), Vector2(clampf(position.x, rect.position.x, rect.end.x), rect.end.y), Vector2(rect.position.x, clampf(position.y, rect.position.y, rect.end.y)), Vector2(rect.end.x, clampf(position.y, rect.position.y, rect.end.y)), rect.position, Vector2(rect.end.x, rect.position.y), rect.end, Vector2(rect.position.x, rect.end.y)]
+		for candidate in candidates:
+			var distance: float = position.distance_squared_to(candidate)
+			if distance < best_distance:
+				best_distance = distance
+				best_position = candidate
+	return best_position
+
+func _try_place_gate(position: Vector2) -> bool:
+	if funds < GATE_COST:
+		return false
+	for outpost_index in range(outposts.size()):
+		var rect: Rect2 = outposts[outpost_index]["rect"]
+		var nearest := Vector2(clampf(position.x, rect.position.x, rect.end.x), clampf(position.y, rect.position.y, rect.end.y))
+		if nearest.distance_to(position) <= 32.0:
+			var gate_rect := Rect2(nearest - Vector2(30.0, 9.0), Vector2(60.0, 18.0))
+			gates.append({"pos": gate_rect.get_center(), "rect": gate_rect, "hp": 500.0, "max_hp": 500.0, "open": false, "outpost_index": outpost_index})
+			funds -= GATE_COST
+			return true
+	return false
+
 
 func _cell_for(position: Vector2) -> Vector2i:
 	return Vector2i(floori(position.x / GRID_CELL_SIZE), floori(position.y / GRID_CELL_SIZE))
