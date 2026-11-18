@@ -1166,7 +1166,7 @@ func _confirm_outpost_placement() -> void:
 		# The HQ, perimeter and evacuation zone are now registered before the campaign can tick.
 		campaign_started = not outposts.is_empty() and float(outposts[0].get("hp", 0.0)) > 0.0
 		campaign_start_grace_timer = PREPARATION_SECONDS
-		radio_banner_text = "VANCE: CONTAINMENT PROTOCOL IS LIVE. ROSTOVA, CONFIRM THE HOSPITAL CHANNEL."
+		radio_banner_text = "COMMANDER VANCE: CONTAINMENT PROTOCOL IS LIVE. DR. ROSTOVA, CONFIRM THE HOSPITAL CHANNEL."
 		radio_log.append("DAY 1 — " + radio_banner_text)
 		radio_banner_timer = 7.0
 		radio_day_announced = 1
@@ -4193,15 +4193,15 @@ func _update_radio_transmission() -> void:
 	radio_day_announced = survival_day
 	match survival_day:
 		2:
-			radio_banner_text = "VANCE: ROSTOVA AT ST. MARROW HOSPITAL — BLACKWOOD RAIDERS ARE CLOSING IN."
+			radio_banner_text = "COMMANDER VANCE: DR. ROSTOVA AT ST. MARROW HOSPITAL — BLACKWOOD RAIDERS ARE CLOSING IN."
 		3:
-			radio_banner_text = "ROSTOVA: THE ARMORY HAS RATIONS. KEEP AN ENGINEER FREE FOR SALVAGE."
+			radio_banner_text = "DR. ROSTOVA: THE ARMORY HAS RATIONS. KEEP AN ENGINEER FREE FOR SALVAGE."
 		4:
 			radio_banner_text = "LAZARUS FILE 02: BLACKWOOD RAIDERS HAVE BEEN MOVING INFECTED SPECIMENS."
 		6:
-			radio_banner_text = "VANCE: BUILD FARMS BEFORE YOUR SETTLERS OUTNUMBER YOUR FOOD STOCKPILE."
+			radio_banner_text = "COMMANDER VANCE: BUILD FARMS BEFORE YOUR SETTLERS OUTNUMBER YOUR FOOD STOCKPILE."
 		9:
-			radio_banner_text = "ROSTOVA: THE QUARANTINE WAS NOT BUILT TO KEEP THE DEAD OUT."
+			radio_banner_text = "DR. ROSTOVA: THE QUARANTINE WAS NOT BUILT TO KEEP THE DEAD OUT."
 		14:
 			radio_banner_text = "LAZARUS FILE 07: BLACKWOOD WAS FUNDED BY THE CONTINUITY DIRECTORATE."
 		_:
