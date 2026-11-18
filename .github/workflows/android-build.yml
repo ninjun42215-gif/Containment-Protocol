@@ -67,8 +67,12 @@ jobs:
           chmod +x ./Godot_v4.3-stable_linux.x86_64
 
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.3.stable"
-          mkdir -p "$TEMPLATE_DIR"
-          unzip -o "$TEMPLATE_TPZ" -d "$TEMPLATE_DIR"
+          TEMPLATE_EXTRACT="$RUNNER_TEMP/godot-export-templates"
+          mkdir -p "$TEMPLATE_DIR" "$TEMPLATE_EXTRACT"
+          unzip -o "$TEMPLATE_TPZ" -d "$TEMPLATE_EXTRACT"
+          # The .tpz archive stores templates beneath a top-level templates/ folder.
+          test -d "$TEMPLATE_EXTRACT/templates"
+          cp -a "$TEMPLATE_EXTRACT/templates/." "$TEMPLATE_DIR/"
           test -s "$TEMPLATE_DIR/android_source.zip"
           test -s "$TEMPLATE_DIR/android_debug.apk"
 
