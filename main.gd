@@ -1267,13 +1267,13 @@ func _input(event: InputEvent) -> void:
 			touch_points[touch.index] = touch.position
 			if touch_points.size() == 1:
 				var touch_world: Vector2 = _screen_to_world(touch.position)
-				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and touch.position.y < _safe_bottom_y(150.0)) or (game_state == "playing" and touch.position.y > safe_insets.y + 520.0 and touch.position.y < _safe_bottom_y(260.0) and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
+						var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and touch.position.y < _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and touch.position.y > safe_insets.y + 520.0 and touch.position.y < _safe_bottom_y(260.0) and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
 				if can_start_placement:
 					_begin_outpost_placement(touch_world, "hq" if game_state == "hq_placement" else "outpost")
 				elif outpost_placement_active:
 					if outpost_placement_rect.grow(maxf(24.0, touch_target_size * 0.5 / maxf(camera_zoom, 0.01))).has_point(touch_world):
 						_begin_outpost_resize(touch_world)
-					elif (game_state == "hq_placement" and touch.position.y >= _safe_bottom_y(150.0)) or (game_state == "playing" and touch.position.y >= _safe_bottom_y(260.0) and touch.position.y <= _safe_bottom_y(206.0)):
+					elif (game_state == "hq_placement" and touch.position.y >= _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and touch.position.y >= _safe_bottom_y(260.0) and touch.position.y <= _safe_bottom_y(260.0 - touch_target_size)):
 						outpost_placement_gesture_mode = ""
 						outpost_placement_dragging = false
 					else:
@@ -1340,13 +1340,13 @@ func _input(event: InputEvent) -> void:
 		if mouse.button_index == MOUSE_BUTTON_LEFT:
 			if mouse.pressed:
 				var mouse_world: Vector2 = _screen_to_world(mouse.position)
-				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and mouse.position.y < _safe_bottom_y(150.0)) or (game_state == "playing" and mouse.position.y > safe_insets.y + 520.0 and mouse.position.y < _safe_bottom_y(260.0) and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
+				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and mouse.position.y < _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and mouse.position.y > safe_insets.y + 520.0 and mouse.position.y < _safe_bottom_y(260.0) and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
 				if can_start_placement:
 					_begin_outpost_placement(mouse_world, "hq" if game_state == "hq_placement" else "outpost")
 				elif outpost_placement_active:
 					if outpost_placement_rect.grow(maxf(24.0, touch_target_size * 0.5 / maxf(camera_zoom, 0.01))).has_point(mouse_world):
 						_begin_outpost_resize(mouse_world)
-					elif (game_state == "hq_placement" and mouse.position.y >= _safe_bottom_y(150.0)) or (game_state == "playing" and mouse.position.y >= _safe_bottom_y(260.0) and mouse.position.y <= _safe_bottom_y(206.0)):
+					elif (game_state == "hq_placement" and mouse.position.y >= _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and mouse.position.y >= _safe_bottom_y(260.0) and mouse.position.y <= _safe_bottom_y(260.0 - touch_target_size)):
 						outpost_placement_gesture_mode = ""
 						outpost_placement_dragging = false
 					else:
@@ -1387,7 +1387,7 @@ func _handle_tap(pos: Vector2) -> void:
 		queue_redraw()
 		return
 	if game_state == "hq_placement":
-		if outpost_placement_active and pos.y >= _safe_bottom_y(60.0) and pos.y <= viewport_size.y - safe_insets.w:
+		if outpost_placement_active and pos.y >= _safe_bottom_y(touch_target_size + 6.0) and pos.y <= viewport_size.y - safe_insets.w:
 			if pos.x < safe_insets.x + (viewport_size.x - safe_insets.x - safe_insets.z) * 0.5:
 				_confirm_outpost_placement()
 			else:
@@ -1395,7 +1395,7 @@ func _handle_tap(pos: Vector2) -> void:
 				outpost_placement_dragging = false
 			queue_redraw()
 			return
-		if pos.y >= _safe_bottom_y(150.0):
+		if pos.y >= _safe_bottom_y(touch_target_size + 126.0):
 			return
 		_begin_outpost_placement(_screen_to_world(pos), "hq")
 		outpost_placement_dragging = false
@@ -1422,7 +1422,7 @@ func _handle_tap(pos: Vector2) -> void:
 		return
 	if game_state != "playing":
 		return
-	if outpost_placement_active and pos.y >= _safe_bottom_y(260.0) and pos.y <= _safe_bottom_y(206.0):
+	if outpost_placement_active and pos.y >= _safe_bottom_y(260.0) and pos.y <= _safe_bottom_y(260.0 - touch_target_size):
 		if pos.x < safe_insets.x + (viewport_size.x - safe_insets.x - safe_insets.z) * 0.5:
 			_confirm_outpost_placement()
 		else:
@@ -1430,7 +1430,7 @@ func _handle_tap(pos: Vector2) -> void:
 			outpost_placement_dragging = false
 		queue_redraw()
 		return
-	if pos.x >= safe_insets.x + 18.0 and pos.x <= safe_insets.x + 210.0 and pos.y >= safe_insets.y + 434.0 and pos.y <= safe_insets.y + 490.0:
+	if pos.x >= safe_insets.x + 18.0 and pos.x <= safe_insets.x + 210.0 and pos.y >= safe_insets.y + 434.0 and pos.y <= safe_insets.y + 434.0 + touch_target_size:
 		_call_to_arms()
 		queue_redraw()
 		return
@@ -1449,41 +1449,43 @@ func _handle_tap(pos: Vector2) -> void:
 		return
 	var zoom_x: float = viewport_size.x - safe_insets.z - 112.0
 	var zoom_top: float = safe_insets.y + 220.0
-	if pos.x >= zoom_x and pos.x <= zoom_x + 94.0 and pos.y >= zoom_top and pos.y <= zoom_top + 56.0:
+	var zoom_bottom_top: float = zoom_top + touch_target_size + 6.0
+	if pos.x >= zoom_x and pos.x <= zoom_x + 94.0 and pos.y >= zoom_top and pos.y <= zoom_top + touch_target_size:
 		_zoom_camera(1.18, viewport_size * 0.5)
 		return
-	if pos.x >= zoom_x and pos.x <= zoom_x + 94.0 and pos.y >= zoom_top + 62.0 and pos.y <= zoom_top + 118.0:
+	if pos.x >= zoom_x and pos.x <= zoom_x + 94.0 and pos.y >= zoom_bottom_top and pos.y <= zoom_bottom_top + touch_target_size:
 		_zoom_camera(0.85, viewport_size * 0.5)
 		return
 	var hud_left: float = safe_insets.x + HUD_EDGE_PADDING
 	var hud_top: float = safe_insets.y + HUD_EDGE_PADDING
-	if pos.x >= hud_left and pos.x <= hud_left + 172.0 and pos.y >= hud_top + 196.0 and pos.y <= hud_top + 252.0:
+	if pos.x >= hud_left and pos.x <= hud_left + 172.0 and pos.y >= hud_top + 196.0 and pos.y <= hud_top + 196.0 + touch_target_size:
 		time_scale_index = (time_scale_index + 1) % TIME_SCALES.size()
 		queue_redraw()
 		return
-	if pos.x >= hud_left and pos.x <= hud_left + 172.0 and pos.y >= hud_top + 258.0 and pos.y <= hud_top + 314.0:
+	var sfx_top: float = hud_top + 196.0 + touch_target_size + 6.0
+	if pos.x >= hud_left and pos.x <= hud_left + 172.0 and pos.y >= sfx_top and pos.y <= sfx_top + touch_target_size:
 		sfx_enabled = not sfx_enabled
 		if not sfx_enabled:
 			audio_queue.clear()
 			audio_effect = ""
 		queue_redraw()
 		return
-	if Rect2(Vector2(safe_insets.x + DIAGNOSTIC_BUTTON.position.x, safe_insets.y + DIAGNOSTIC_BUTTON.position.y), DIAGNOSTIC_BUTTON.size).has_point(pos):
+	if Rect2(Vector2(safe_insets.x + DIAGNOSTIC_BUTTON.position.x, safe_insets.y + DIAGNOSTIC_BUTTON.position.y), Vector2(DIAGNOSTIC_BUTTON.size.x, touch_target_size)).has_point(pos):
 		diagnostics_enabled = not diagnostics_enabled
 		queue_redraw()
 		return
-	if not selected_structure_type.is_empty() and pos.y >= STRUCTURE_ACTION_TOP + safe_insets.y + 34.0 and pos.y <= STRUCTURE_ACTION_TOP + safe_insets.y + 84.0:
+	if not selected_structure_type.is_empty() and pos.y >= STRUCTURE_ACTION_TOP + safe_insets.y + 42.0 and pos.y <= STRUCTURE_ACTION_TOP + safe_insets.y + 42.0 + touch_target_size:
 		if pos.x >= safe_insets.x + 24.0 and pos.x <= safe_insets.x + 190.0:
 			_repair_selected_structure()
 			return
 		if pos.x >= safe_insets.x + 204.0 and pos.x <= safe_insets.x + 370.0:
 			_upgrade_selected_structure()
 			return
-	var bar_top: float = _safe_bottom_y(200.0)
+	var bar_top: float = _safe_bottom_y(_deployment_panel_height())
 	var safe_left: float = safe_insets.x
 	var safe_width: float = viewport_size.x - safe_insets.x - safe_insets.z
 	if pos.y >= bar_top and pos.x >= safe_left and pos.x <= safe_left + safe_width:
-		if pos.y <= bar_top + 48.0:
+		if pos.y <= bar_top + touch_target_size:
 			command_tab = 1 - command_tab
 			selected_deployment = 0
 			queue_redraw()
@@ -1671,13 +1673,13 @@ func _draw() -> void:
 			draw_set_transform(hq_origin, 0.0, Vector2(camera_zoom, camera_zoom))
 			_draw_placement_preview()
 			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-		var hq_panel_top: float = _safe_bottom_y(150.0)
+		var hq_panel_top: float = _safe_bottom_y(touch_target_size + 126.0)
 		draw_rect(Rect2(safe_insets.x, hq_panel_top, viewport_size.x - safe_insets.x - safe_insets.z, viewport_size.y - hq_panel_top), Color("#071713", 0.96))
 		_draw_text("SELECT HQ LOCATION", Vector2(safe_insets.x + 24.0, hq_panel_top + 24.0), 20, Color("#e8fff0"))
 		_draw_text(hq_hint, Vector2(safe_insets.x + 24.0, hq_panel_top + 48.0), 13, Color("#a9c8b7"))
 		if outpost_placement_active:
 			_draw_text("%.0f x %.0f  COST $%d  SHELTER %d  %s" % [outpost_placement_rect.size.x, outpost_placement_rect.size.y, _outpost_build_cost(outpost_placement_rect.size), maxi(12, roundi(outpost_placement_rect.size.x * outpost_placement_rect.size.y / 18000.0)), "VALID" if outpost_placement_valid else "BLOCKED"], Vector2(safe_insets.x + 24.0, hq_panel_top + 76.0), 12, Color("#e8fff0"))
-			_draw_outpost_placement_hud(_safe_bottom_y(60.0))
+			_draw_outpost_placement_hud(_safe_bottom_y(touch_target_size + 6.0))
 		return
 	var shake_offset := Vector2.ZERO
 	if shake_timer > 0.0:
