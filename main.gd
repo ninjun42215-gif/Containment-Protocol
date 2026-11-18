@@ -223,6 +223,7 @@ func _start_sector(index: int) -> void:
 			var spawn_point := Vector2(randf_range(district.position.x, district.end.x), randf_range(district.position.y, district.end.y))
 			if _is_open_world_position(spawn_point, 18.0):
 				civilians.append(spawn_point)
+				civilian_steering.append({})
 	message = "SCOUT THE CITY — SELECT PRIMARY HQ LOCATION"
 	message_timer = 6.0
 	camera_position = WORLD_SIZE * 0.5
@@ -265,7 +266,8 @@ func _process(delta: float) -> void:
 		wave_timer = 180.0
 	_shelter_flush_timer_step(sim_delta)
 	_update_supply_drops(sim_delta)
-	day_phase = "DAY" if wave <= 6 else ("DUSK" if wave <= 12 else ("NIGHT" if wave <= 24 else "DAWN"))
+	var phase_index: int = (maxi(wave, 1) - 1) / 6 % 3
+	day_phase = "DAY" if phase_index == 0 else ("DUSK" if phase_index == 1 else "NIGHT")
 
 	# Civilians evacuate through the street network; the grid is rebuilt once
 	# after movement so every zombie queries current civilian positions.
@@ -296,7 +298,6 @@ func _process(delta: float) -> void:
 				reached_safe_zone = true
 				break
 		if reached_safe_zone:
-			if reached_outpost_index >= 0:
 			civilians.remove_at(i)
 			if i < civilian_steering.size():
 				civilian_steering.remove_at(i)
@@ -779,7 +780,7 @@ func _input(event: InputEvent) -> void:
 			queue_redraw()
 
 func _handle_tap(pos: Vector2) -> void:
-		if game_state == "title":
+	if game_state == "title":
 		if pos.y >= viewport_size.y * 0.63 and FileAccess.file_exists(save_path):
 			_resume_operation()
 		else:
@@ -1072,6 +1073,10 @@ func _draw() -> void:
 	if airstrike_timer > 0.0 and visible_effect_rect.has_point(airstrike_marker):
 		draw_arc(airstrike_marker, 112.0, 0.0, TAU, 48, Color(1.0, 0.42, 0.12, airstrike_timer), 4.0)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	if day_phase == "DUSK":
+		draw_rect(Rect2(Vector2.ZERO, viewport_size), Color(0.30, 0.14, 0.05, 0.08))
+	elif day_phase == "NIGHT":
+		draw_rect(Rect2(Vector2.ZERO, viewport_size), Color(0.03, 0.06, 0.20, 0.18))
 	_draw_hud()
 	_draw_structure_actions()
 	_draw_minimap()
@@ -1128,7 +1133,7 @@ func _draw_title_screen() -> void:
 	else:
 		_draw_text("SELECT OPERATIONAL SECTOR", Vector2(viewport_size.x * 0.19, viewport_size.y * 0.42), 22, Color("#d8eee0"))
 		var names: Array[String] = ["01  DOWNTOWN GRID", "02  HIGHWAY CHOKEPOINT", "03  CENTRAL PLAZA"]
-		var details: Array[String] = ["BALANCED FOUR-BLOCK GRID  •  3 WAVES", "NARROW CENTRAL AVENUES  •  4 WAVES", "OPEN CENTER / OUTER COVER  •  5 WAVES"]
+		var details: Array[String] = ["DENSE URBAN GRID  •  30 WAVES", "HIGHWAY CORRIDORS  •  30 WAVES", "OPEN PLAZA DISTRICTS  •  30 WAVES"]
 		for index in range(3):
 			var y := viewport_size.y * 0.44 + float(index) * viewport_size.y * 0.12
 			draw_rect(Rect2(viewport_size.x * 0.10, y, viewport_size.x * 0.80, 96.0), Color("#18352a"))
@@ -1687,7 +1692,7 @@ func _nearest_evac_zone(position: Vector2) -> Vector2:
 	return nearest
 
 func _night_vision_multiplier() -> float:
-	return 0.8 if wave > 12 and wave <= 24 else 1.0
+	return 0.8 if day_phase == "NIGHT" else 1.0
 
 func _shelter_flush_timer_step(delta: float) -> void:
 	shelter_flush_timer -= delta
