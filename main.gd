@@ -36,7 +36,7 @@ const MAX_ACTIVE_ZOMBIES := 650
 const PENDING_WAVE_SPAWN_INTERVAL := 0.20
 const SAVE_VERSION := 6
 const PREPARATION_SECONDS := 60.0
-const GAME_MINUTES_PER_SECOND := 144.0
+const GAME_MINUTES_PER_SECOND := 2.4
 const MAX_TACTICAL_DECALS := 80
 const OUTPOST_MIN_SIZE := 220.0
 const OUTPOST_MAX_SIZE := 760.0
@@ -868,23 +868,23 @@ func _populate_ecology() -> void:
 	ecology_rng.seed = abs(campaign_map_seed) + 12017
 	var tree_districts: Array[int] = [1, 4, 5, 7]
 	for tree_index in range(260):
-		var district_index: int = tree_districts[tree_index % tree_districts.size()]
-		if district_index >= spawn_districts.size():
+		var tree_district_index: int = tree_districts[tree_index % tree_districts.size()]
+		if tree_district_index >= spawn_districts.size():
 			continue
-		var region: Rect2 = spawn_districts[district_index]
-		var candidate := Vector2(ecology_rng.randf_range(region.position.x, region.end.x), ecology_rng.randf_range(region.position.y, region.end.y))
+		var tree_region: Rect2 = spawn_districts[tree_district_index]
+		var candidate := Vector2(ecology_rng.randf_range(tree_region.position.x, tree_region.end.x), ecology_rng.randf_range(tree_region.position.y, tree_region.end.y))
 		if _is_open_world_position(candidate, 20.0):
 			trees.append({"pos": candidate, "alive": true, "work_timer": 3.0})
 	for herd_index in range(14):
-		var district_index: int = 4 if herd_index % 2 == 0 else 7
-		var region: Rect2 = spawn_districts[district_index]
-		var center := Vector2(ecology_rng.randf_range(region.position.x, region.end.x), ecology_rng.randf_range(region.position.y, region.end.y))
+		var herd_district_index: int = 4 if herd_index % 2 == 0 else 7
+		var herd_region: Rect2 = spawn_districts[herd_district_index]
+		var center := Vector2(ecology_rng.randf_range(herd_region.position.x, herd_region.end.x), ecology_rng.randf_range(herd_region.position.y, herd_region.end.y))
 		for animal_index in range(ecology_rng.randi_range(2, 4)):
 			var animal_pos := center + Vector2(ecology_rng.randf_range(-70.0, 70.0), ecology_rng.randf_range(-70.0, 70.0))
 			wildlife.append({"pos": animal_pos, "kind": "boar" if ecology_rng.randf() < 0.28 else "deer", "alive": true})
 	for camp_index in range(3):
-		var district_index: int = 5 if camp_index % 2 == 0 else 7
-		var camp_region: Rect2 = spawn_districts[district_index]
+		var camp_district_index: int = 5 if camp_index % 2 == 0 else 7
+		var camp_region: Rect2 = spawn_districts[camp_district_index]
 		var camp_pos := Vector2(ecology_rng.randf_range(camp_region.position.x, camp_region.end.x), ecology_rng.randf_range(camp_region.position.y, camp_region.end.y))
 		raider_camps.append({"pos": camp_pos, "raided": false, "food_stock": ecology_rng.randi_range(90, 160), "materials_stock": ecology_rng.randi_range(70, 130), "fuel_stock": ecology_rng.randi_range(35, 70)})
 
@@ -4316,8 +4316,6 @@ func _resume_operation() -> void:
 	last_upkeep_day = maxi(1, int(state.get("last_upkeep_day", int(state.get("survival_day", 1)))))
 	if state.has("trees"):
 		trees.assign(state["trees"])
-	elif not state.has("wildlife"):
-		_populate_ecology()
 	if state.has("wildlife"):
 		wildlife.assign(state["wildlife"])
 	if state.has("raider_camps"):
@@ -4366,6 +4364,8 @@ func _resume_operation() -> void:
 		buildings.assign(state["buildings"])
 	if state.has("spawn_districts"):
 		spawn_districts.assign(state["spawn_districts"])
+	if not state.has("trees"):
+		_populate_ecology()
 	if state.has("building_archetypes"):
 		building_archetypes.assign(state["building_archetypes"])
 	for building_index in range(building_archetypes.size()):
