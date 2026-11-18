@@ -835,7 +835,7 @@ func _generate_state_map() -> void:
 				rect.position.y = clampf(rect.position.y, region.position.y + 18.0, region.end.y - rect.size.y - 18.0)
 				var base_hp: float = 1800.0 if archetype == "HIGHRISE" else 900.0
 				buildings.append(rect)
-				building_archetypes.append({"type": archetype, "district": district_index, "cache_available": archetype == "WAREHOUSE", "cache_hold": 0.0, "hp": base_hp, "max_hp": base_hp, "destroyed": false, "fortified": false, "secured": false, "fortified_outpost_index": -1})
+				building_archetypes.append({"type": archetype, "district": district_index, "cache_available": archetype == "WAREHOUSE" or archetype == "SUPERMARKET", "cache_hold": 0.0, "hp": base_hp, "max_hp": base_hp, "destroyed": false, "fortified": false, "secured": false, "fortified_outpost_index": -1})
 	# A valid campaign always has visible structures, even if future road-clearance
 	# or district-generation rules reject every procedural candidate.
 	while buildings.size() < 8:
@@ -901,9 +901,9 @@ func _find_vehicle_spawn_position(map_rng: RandomNumberGenerator, region: Rect2,
 func _building_type_for_district(district_index: int, row: int, column: int) -> String:
 	match district_index:
 		0:
-			return "HIGHRISE" if (row + column) % 4 == 0 else "RESIDENTIAL"
+			return "SUPERMARKET" if row == 1 and column == 2 else ("HIGHRISE" if (row + column) % 4 == 0 else "RESIDENTIAL")
 		1:
-			return "RESIDENTIAL" if (row + column) % 3 != 0 else "HIGHRISE"
+			return "SUPERMARKET" if row == 0 and column == 1 else ("RESIDENTIAL" if (row + column) % 3 != 0 else "HIGHRISE")
 		2:
 			return "ARMORY" if column % 4 == 0 else "WAREHOUSE"
 		3:
@@ -999,7 +999,7 @@ func _update_building_effects(delta: float) -> void:
 					units[ally_index] = ally
 		units[unit_index] = unit
 	for building_index in range(buildings.size()):
-		if _building_type_at(building_index) != "WAREHOUSE":
+		if _building_type_at(building_index) != "WAREHOUSE" and _building_type_at(building_index) != "SUPERMARKET":
 			continue
 		var archetype: Dictionary = building_archetypes[building_index]
 		if not bool(archetype.get("cache_available", true)):
@@ -1015,8 +1015,13 @@ func _update_building_effects(delta: float) -> void:
 		archetype["cache_hold"] = hold_time
 		if hold_time >= WAREHOUSE_HOLD_TIME:
 			archetype["cache_available"] = false
-			funds += 100
-			message = "WAREHOUSE CACHE SECURED +$100"
+			if _building_type_at(building_index) == "SUPERMARKET":
+				food += 55
+				message = "SUPERMARKET SCAVENGED +55 FOOD"
+			else:
+				funds += 100
+				scrap += 20
+				message = "WAREHOUSE CACHE SECURED +$100 / M20"
 			message_timer = 2.0
 		building_archetypes[building_index] = archetype
 
@@ -1554,6 +1559,10 @@ func _draw_buildings() -> void:
 		var edge: Color = Color("#829db5")
 		var tag: String = "RES"
 		match archetype:
+			"SUPERMARKET":
+				fill = Color("#3d3a27")
+				edge = Color("#e1c36b")
+				tag = "MARKET"
 			"HOSPITAL":
 				fill = Color("#40232b")
 				edge = Color("#e45b70")
@@ -1591,6 +1600,12 @@ func _draw_buildings() -> void:
 			draw_rect(Rect2(center - Vector2(6.0, 20.0), Vector2(12.0, 40.0)), Color("#fff4f5"))
 		elif archetype == "ARMORY":
 			draw_line(building.position + Vector2(20.0, 20.0), building.end - Vector2(20.0, 20.0), edge, 5.0)
+		elif archetype == "SUPERMARKET":
+			var market_sign: Rect2 = Rect2(building.position + Vector2(20.0, 20.0), Vector2(building.size.x - 40.0, 28.0))
+			draw_rect(market_sign, Color("#e1c36b"))
+			_draw_text("FOOD MARKET", market_sign.position + Vector2(12.0, 20.0), 13, Color("#29271d"))
+			if bool(state.get("cache_available", false)):
+				_draw_text("+55 FOOD", building.get_center() + Vector2(-34.0, 12.0), 12, Color("#fff0b0"))
 		elif archetype == "WAREHOUSE":
 			for stripe in range(1, 4):
 				var stripe_x: float = building.position.x + building.size.x * float(stripe) / 4.0
@@ -1760,9 +1775,13 @@ func _update_auto_ops(delta: float) -> void:
 				if bool(cache_state.get("cache_available", false)) and position.distance_to(buildings[cache_index].get_center()) <= 72.0:
 					cache_state["cache_available"] = false
 					building_archetypes[cache_index] = cache_state
-					funds += 100
-					scrap += 20
-					world_callouts.append({"pos": buildings[cache_index].get_center(), "text": "+$100 / ⚙20", "life": 2.0})
+					if _building_type_at(cache_index) == "SUPERMARKET":
+						food += 55
+						world_callouts.append({"pos": buildings[cache_index].get_center(), "text": "+55 FOOD", "life": 2.0})
+					else:
+						funds += 100
+						scrap += 20
+						world_callouts.append({"pos": buildings[cache_index].get_center(), "text": "+$100 / M20", "life": 2.0})
 					unit["ai_task"] = ""
 					unit["move_target"] = null
 					units[unit_index] = unit
@@ -1887,7 +1906,7 @@ func _nearest_unreserved_warehouse(position: Vector2, radius: float, reserved: A
 	var best_index := -1
 	var best_distance: float = radius * radius
 	for index in range(buildings.size()):
-		if _building_type_at(index) != "WAREHOUSE" or index in reserved or not bool(building_archetypes[index].get("cache_available", false)):
+		if (_building_type_at(index) != "WAREHOUSE" and _building_type_at(index) != "SUPERMARKET") or index in reserved or not bool(building_archetypes[index].get("cache_available", false)):
 			continue
 		var distance: float = position.distance_squared_to(buildings[index].get_center())
 		if distance < best_distance:
@@ -3788,7 +3807,7 @@ func _shelter_flush_timer_step(delta: float) -> void:
 		var overcrowded: bool = sheltered >= int(float(outpost.get("capacity", 12)) * 0.75)
 		var interval: float = 11.25 if (defended or hospital_support) else (18.75 if overcrowded else 15.0)
 		if food <= 0:
-			interval *= 1.4
+			interval /= 0.6
 		if _has_constructed_building_near(outpost["pos"], "bakery", 180.0):
 			interval *= 0.85
 		outpost["evac_timer"] = float(outpost.get("evac_timer", interval)) - delta
