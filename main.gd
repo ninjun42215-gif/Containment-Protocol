@@ -1082,6 +1082,10 @@ func _draw_buildings() -> void:
 			for stripe in range(1, 4):
 				var stripe_x: float = building.position.x + building.size.x * float(stripe) / 4.0
 				draw_line(Vector2(stripe_x, building.position.y + 18.0), Vector2(stripe_x, building.end.y - 18.0), edge, 3.0)
+			if bool(building_archetypes[index].get("cache_available", false)):
+				var cache_center: Vector2 = building.get_center()
+				draw_rect(Rect2(cache_center - Vector2(14.0, 14.0), Vector2(28.0, 28.0)), Color("#d8b65b"))
+				_draw_text("$100", cache_center + Vector2(-15.0, 5.0), 13, Color("#fff0b0"))
 		elif archetype == "HIGHRISE":
 			for window_index in range(1, 4):
 				var window_x: float = building.position.x + building.size.x * float(window_index) / 4.0
@@ -1549,6 +1553,11 @@ func _draw() -> void:
 	_draw_grid()
 	_draw_evac_zone()
 	_draw_buildings()
+	for district_index in range(district_regions.size()):
+		var district_rect: Rect2 = district_regions[district_index]
+		if _camera_view_rect().intersects(district_rect):
+			var district_label: String = ["URBAN CORE", "SUBURBS", "INDUSTRIAL ZONE", "MEDICAL DISTRICT", "RURAL HIGHWAYS"][district_index]
+			_draw_text(district_label, Vector2(70.0, district_rect.position.y + 62.0), 24, Color(0.45, 0.75, 0.62, 0.6))
 	_draw_fog()
 	_draw_entities()
 	_draw_medevac()
