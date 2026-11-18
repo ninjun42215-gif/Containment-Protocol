@@ -216,7 +216,6 @@ func _start_sector(index: int) -> void:
 	civilians.clear()
 	zombies.clear()
 	units.clear()
-	vehicles.clear()
 	selected_vehicle_index = -1
 	auto_ops_enabled = true
 	barricades.clear()
@@ -1455,6 +1454,7 @@ func _draw_buildings() -> void:
 		if bool(state.get("destroyed", false)):
 			fill = Color("#171c20")
 			edge = Color("#596268")
+		draw_rect(Rect2(building.position + Vector2(10.0, 12.0), building.size), Color(0.0, 0.0, 0.0, 0.34))
 		draw_rect(building, fill)
 		draw_rect(building, edge, false, 5.0 if archetype == "HIGHRISE" else 3.0)
 		if archetype == "HIGHRISE":
@@ -1485,11 +1485,6 @@ func _draw_buildings() -> void:
 				var vent_pos: Vector2 = building.position + Vector2(26.0 + float(vent_index) * 34.0, 30.0)
 				draw_rect(Rect2(vent_pos, Vector2(16.0, 12.0)), Color("#17221f"))
 				draw_rect(Rect2(vent_pos, Vector2(16.0, 12.0)), edge, false, 1.5)
-		if archetype == "HOSPITAL":
-			var pad_center: Vector2 = building.get_center() + Vector2(building.size.x * 0.25, building.size.y * 0.24)
-			draw_circle(pad_center, 30.0, Color("#283a3a"))
-			draw_circle(pad_center, 30.0, Color("#b6d7d2"), false, 2.0)
-			_draw_text("H", pad_center + Vector2(-9.0, 9.0), 24, Color("#e8f7f2"))
 		var tag_size: int = 18 if building.size.x > 300.0 else 15
 		var tag_width: float = screen_font.get_string_size(tag, HORIZONTAL_ALIGNMENT_LEFT, -1.0, tag_size).x if screen_font != null else 70.0
 		if screen_font != null:
@@ -2797,6 +2792,7 @@ func _draw_entities() -> void:
 			draw_rect(roof.grow(-7.0), Color("#4de6a5"), false, 5.0)
 			var roof_range: float = 390.0 if _building_type_at(building_index) == "HIGHRISE" else 276.75
 			draw_arc(roof.get_center(), roof_range, 0.0, TAU, 48, Color("#4de6a5", 0.18), 2.0)
+			_draw_text("GARRISON", roof.get_center() + Vector2(-30.0, -18.0), 10, Color("#a6f4d0"))
 			var first_x: float = roof.get_center().x - float(count - 1) * 10.0
 			for pip in range(count):
 				draw_circle(Vector2(first_x + float(pip) * 20.0, roof.position.y + 30.0), 6.0, Color("#63f4cb"))
@@ -2818,6 +2814,8 @@ func _draw_entities() -> void:
 		else:
 			draw_rect(Rect2(vehicle_pos - Vector2(25.0, 14.0), Vector2(50.0, 28.0)), vehicle_color)
 			draw_rect(Rect2(vehicle_pos - Vector2(12.0, 9.0), Vector2(24.0, 18.0)), Color("#26352e"))
+			draw_circle(vehicle_pos, 5.0, Color("#202923"))
+			draw_line(vehicle_pos, vehicle_pos + Vector2(0.0, -18.0), Color("#202923"), 4.0)
 			if day_phase == "NIGHT":
 				draw_line(vehicle_pos + Vector2(25.0, -8.0), vehicle_pos + Vector2(72.0, -24.0), Color(1.0, 0.92, 0.58, 0.28), 8.0)
 				draw_line(vehicle_pos + Vector2(25.0, 8.0), vehicle_pos + Vector2(72.0, 24.0), Color(1.0, 0.92, 0.58, 0.28), 8.0)
@@ -2925,12 +2923,12 @@ func _draw_hud() -> void:
 	for recruit_rect in [inf_rect, sniper_rect]:
 		draw_rect(recruit_rect, Color("#183329"))
 		draw_rect(recruit_rect, Color("#6ccf91"), false, 2.0)
-	_draw_text("[INF $60]", inf_rect.position + Vector2(7.0, touch_target_size * 0.62), 12, Color("#e5f8eb"))
-	_draw_text("[SNIPER $110]", sniper_rect.position + Vector2(7.0, touch_target_size * 0.62), 11, Color("#e5f8eb"))
+	_draw_text("[RECRUIT INF $60]", inf_rect.position + Vector2(5.0, touch_target_size * 0.62), 10, Color("#e5f8eb"))
+	_draw_text("[RECRUIT SNIPER $110]", sniper_rect.position + Vector2(4.0, touch_target_size * 0.62), 9, Color("#e5f8eb"))
 	var engineer_rect := _engineer_button_rect()
 	draw_rect(engineer_rect, Color("#183329"))
 	draw_rect(engineer_rect, Color("#6ccf91"), false, 2.0)
-	_draw_text("[ENGINEER $85]", engineer_rect.position + Vector2(7.0, touch_target_size * 0.62), 11, Color("#e5f8eb"))
+	_draw_text("[RECRUIT ENG $85]", engineer_rect.position + Vector2(4.0, touch_target_size * 0.62), 10, Color("#e5f8eb"))
 	var salvage_rect := _salvage_button_rect()
 	draw_rect(salvage_rect, Color("#3a3420"))
 	draw_rect(salvage_rect, Color("#e4c66d"), false, 2.0)
