@@ -35,6 +35,8 @@ const FLARE_COST := 40
 const FLARE_LIFETIME := 6.0
 const FLARE_LURE_RADIUS := 220.0
 const AUDIO_SAMPLE_RATE := 22050.0
+const MAX_ACTIVE_ZOMBIES := 650
+const PENDING_WAVE_SPAWN_INTERVAL := 0.20
 
 const UNIT_DEPLOYMENTS := [
 	{"name": "INFANTRY", "detail": "SQUAD  $100", "cost": 100, "kind": "infantry"},
@@ -51,6 +53,8 @@ const BASE_DEPLOYMENTS := [
 
 var civilians: Array[Vector2] = []
 var zombies: Array[Dictionary] = []
+var pending_wave_spawns := 0
+var pending_wave_spawn_timer := 0.0
 var units: Array[Dictionary] = []
 var barricades: Array[Dictionary] = []
 var flares: Array[Dictionary] = []
@@ -412,7 +416,8 @@ func _process(delta: float) -> void:
 				civilian_steering.remove_at(infected_index)
 			_rebuild_spatial_grid(civilian_grid, civilians)
 			lost_count += 1
-			zombies.append({"pos": infected_pos, "kind": "shambler", "hp": 30.0, "max_hp": 30.0})
+			if zombies.size() < MAX_ACTIVE_ZOMBIES:
+				zombies.append({"pos": infected_pos, "kind": "shambler", "hp": 30.0, "max_hp": 30.0})
 			message = "CIVILIAN LOST"
 			message_timer = 1.4
 
@@ -428,6 +433,8 @@ func _process(delta: float) -> void:
 			message = "OUTPOST SUPPLY +$%d" % income_amount
 			message_timer = 0.8
 		outposts[outpost_index] = outpost
+
+	_spawn_pending_wave_spawns(sim_delta)
 
 	for turret_index in range(turrets.size() - 1, -1, -1):
 		var turret: Dictionary = turrets[turret_index]
@@ -475,7 +482,7 @@ func _process(delta: float) -> void:
 			_rebuild_zombie_spatial_grid()
 		units[unit_index] = unit
 
-	if wave >= 30 and zombies.is_empty() and civilians.is_empty() and medevac.is_empty() and _total_sheltered_civilians() == 0 and not endless_containment:
+	if wave >= 30 and zombies.is_empty() and pending_wave_spawns <= 0 and civilians.is_empty() and medevac.is_empty() and _total_sheltered_civilians() == 0 and not endless_containment:
 		game_state = "victory"
 		_save_operation()
 		message = "SECTOR SECURED"
@@ -691,6 +698,8 @@ func _spawn_wave() -> void:
 	# after the campaign ceiling so entity counts remain bounded on mobile.
 	var phase_multiplier: float = minf(1.0 + float(escalation_phase - 1) * 0.25, 3.0)
 	var count: int = mini(roundi(float(18 + wave * 8) * phase_multiplier), 900)
+	pending_wave_spawns += count
+	_spawn_pending_wave_spawns(0.0, true)
 	var brute_chance: float = clampf(0.08 + float(wave) * 0.008, 0.08, 0.32)
 	var spitter_chance: float = clampf(0.10 + float(wave) * 0.006, 0.10, 0.28)
 	var runner_chance: float = clampf(0.16 + float(wave) * 0.006, 0.16, 0.34)
@@ -714,11 +723,55 @@ func _spawn_wave() -> void:
 			hp = 180.0 + float(wave) * 15.0
 		elif kind == "spitter":
 			hp = 42.0 + float(wave) * 4.0
-		zombies.append({"pos": Vector2(x, y), "kind": kind, "hp": hp, "max_hp": hp, "wall_cooldown": 0.0})
+		if zombies.size() < MAX_ACTIVE_ZOMBIES:
+			zombies.append({"pos": Vector2(x, y), "kind": kind, "hp": hp, "max_hp": hp, "wall_cooldown": 0.0})
 	if wave % 5 == 0:
 		_spawn_refugee_wave()
 	message = "PHASE %d — HORDE WAVE %d INBOUND" % [ceili(float(wave) / 6.0), wave]
 	message_timer = 3.0
+
+
+func _spawn_pending_wave_spawns(delta: float, fill_available: bool = false) -> void:
+	if pending_wave_spawns <= 0:
+		pending_wave_spawn_timer = 0.0
+		return
+	if fill_available:
+		while pending_wave_spawns > 0 and zombies.size() < MAX_ACTIVE_ZOMBIES:
+			_spawn_one_wave_zombie()
+			pending_wave_spawns -= 1
+		pending_wave_spawn_timer = PENDING_WAVE_SPAWN_INTERVAL if pending_wave_spawns > 0 else 0.0
+		return
+	pending_wave_spawn_timer = maxf(0.0, pending_wave_spawn_timer - delta)
+	if pending_wave_spawn_timer > 0.0 or zombies.size() >= MAX_ACTIVE_ZOMBIES:
+		return
+	_spawn_one_wave_zombie()
+	pending_wave_spawns -= 1
+	pending_wave_spawn_timer = PENDING_WAVE_SPAWN_INTERVAL if pending_wave_spawns > 0 else 0.0
+
+func _spawn_one_wave_zombie() -> void:
+	if zombies.size() >= MAX_ACTIVE_ZOMBIES or spawn_districts.is_empty():
+		return
+	var district: Rect2 = spawn_districts[randi_range(0, spawn_districts.size() - 1)]
+	var spawn_point := Vector2(randf_range(district.position.x, district.end.x), randf_range(district.position.y, district.end.y))
+	var roll: float = randf()
+	var kind: String = "shambler"
+	var brute_chance: float = clampf(0.08 + float(wave) * 0.008, 0.08, 0.32)
+	var spitter_chance: float = clampf(0.10 + float(wave) * 0.006, 0.10, 0.28)
+	var runner_chance: float = clampf(0.16 + float(wave) * 0.006, 0.16, 0.34)
+	if wave >= 2 and roll < brute_chance:
+		kind = "brute"
+	elif wave >= 2 and roll < brute_chance + spitter_chance:
+		kind = "spitter"
+	elif roll < brute_chance + spitter_chance + runner_chance:
+		kind = "runner"
+	var hp: float = 30.0
+	if kind == "runner":
+		hp = 25.0
+	elif kind == "brute":
+		hp = 180.0 + float(wave) * 15.0
+	elif kind == "spitter":
+		hp = 42.0 + float(wave) * 4.0
+	zombies.append({"pos": spawn_point, "kind": kind, "hp": hp, "max_hp": hp, "wall_cooldown": 0.0})
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
@@ -1599,7 +1652,8 @@ func _spitter_burst(center: Vector2) -> void:
 			civilians.remove_at(index)
 			if index < civilian_steering.size():
 				civilian_steering.remove_at(index)
-			zombies.append({"pos": infected_position, "kind": "shambler", "hp": 30.0, "max_hp": 30.0})
+			if zombies.size() < MAX_ACTIVE_ZOMBIES:
+				zombies.append({"pos": infected_position, "kind": "shambler", "hp": 30.0, "max_hp": 30.0})
 			infected += 1
 	if infected > 0:
 		lost_count += infected
@@ -1916,7 +1970,7 @@ func _save_operation() -> void:
 	# Never replace a prior valid campaign with an incomplete HQ-placement state.
 	if not campaign_started or game_state == "hq_placement":
 		return
-	var state: Dictionary = {"version": 1, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "medevac": medevac, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "time_scale_index": time_scale_index, "day_phase": day_phase}
+	var state: Dictionary = {"version": 1, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "medevac": medevac, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer}
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify(_save_variant(state)))
@@ -1961,6 +2015,8 @@ func _resume_operation() -> void:
 		buildings.assign(state["buildings"])
 	if state.has("spawn_districts"):
 		spawn_districts.assign(state["spawn_districts"])
+	pending_wave_spawns = maxi(0, int(state.get("pending_wave_spawns", 0)))
+	pending_wave_spawn_timer = maxf(0.0, float(state.get("pending_wave_spawn_timer", 0.0)))
 	time_scale_index = clampi(int(state.get("time_scale_index", 0)), 0, TIME_SCALES.size() - 1)
 	day_phase = str(state.get("day_phase", "DAY"))
 	endless_containment = bool(state.get("endless_containment", false))
