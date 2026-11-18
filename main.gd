@@ -3150,7 +3150,7 @@ func _draw_placement_preview() -> void:
 		valid = false
 	if kind == "gate":
 		valid = funds >= GATE_COST
-		var tint := Color(0.2, 1.0, 0.48, 0.18) if valid else Color(1.0, 0.18, 0.2, 0.20)
+	var tint := Color(0.2, 1.0, 0.48, 0.18) if valid else Color(1.0, 0.18, 0.2, 0.20)
 	var line_tint := Color("#56f58f") if valid else Color("#ff555d")
 	draw_circle(preview_position, radius, tint)
 	draw_arc(preview_position, radius, 0.0, TAU, 56, line_tint, 2.5)
