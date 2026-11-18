@@ -169,8 +169,8 @@ var zombie_grid: Dictionary = {}
 var zombie_positions: Array[Vector2] = []
 var selected_unit_index := -1
 var time_scale_index := 0
-const TIME_SCALES := [1.0, 0.25, 0.0]
-const TIME_LABELS := ["1x", "0.25x", "PAUSE"]
+const TIME_SCALES := [1.0, 0.25]
+const TIME_LABELS := ["1x", "0.25x"]
 var bullet_tracers: Array[Dictionary] = []
 var muzzle_flashes: Array[Dictionary] = []
 var shockwaves: Array[Dictionary] = []
@@ -4168,6 +4168,8 @@ func _update_radio_transmission() -> void:
 		_:
 			radio_banner_text = "COMMAND LOG — DAY %d. VANCE REPORTS THE OUTER DEFENSE LINE IS FAILING." % survival_day
 	radio_log.append("DAY %d — %s" % [survival_day, radio_banner_text])
+	while radio_log.size() > 64:
+		radio_log.remove_at(0)
 	radio_banner_timer = 7.0
 
 func _draw_radio_banner() -> void:
