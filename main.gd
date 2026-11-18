@@ -603,7 +603,8 @@ func _process(delta: float) -> void:
 			if unit_position.distance_to(unit_waypoint) > 12.0:
 				var raw_unit_steering: Variant = unit.get("steering", {})
 				var unit_steering: Dictionary = raw_unit_steering if raw_unit_steering is Dictionary else {}
-				var unit_speed: float = 58.0 if str(unit.get("kind", "")) == "militia" else 52.0
+				var unit_kind_for_speed: String = str(unit.get("kind", ""))
+				var unit_speed: float = 60.0 if unit_kind_for_speed == "infantry" else (58.0 if unit_kind_for_speed == "militia" else (48.0 if unit_kind_for_speed == "engineer" else 52.0))
 				var unit_displacement: Vector2 = (unit_waypoint - unit_position).normalized() * unit_speed * sim_delta
 				unit["pos"] = _move_circle_with_buildings(unit_position, unit_displacement, 8.0, sim_delta, unit_waypoint, unit_steering)
 				unit["steering"] = unit_steering
@@ -1569,6 +1570,19 @@ func _find_unit_combat_target(position: Vector2, attack_range: float, sniper: bo
 				special_index = index
 		if special_index >= 0:
 			return special_index
+	else:
+		var melee_index: int = -1
+		var melee_distance: float = attack_range * attack_range
+		for index in range(zombies.size()):
+			var zombie: Dictionary = zombies[index]
+			if str(zombie.get("kind", "")) == "spitter":
+				continue
+			var distance: float = position.distance_squared_to(zombie["pos"])
+			if distance <= melee_distance:
+				melee_distance = distance
+				melee_index = index
+		if melee_index >= 0:
+			return melee_index
 	return _find_nearest_zombie(position, attack_range)
 
 func _update_auto_ops(delta: float) -> void:
