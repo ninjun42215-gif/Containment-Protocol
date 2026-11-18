@@ -318,8 +318,9 @@ func _process(delta: float) -> void:
 		for outpost in outposts:
 			if int(outpost.get("sheltered", 0)) >= int(outpost.get("capacity", 12)):
 				continue
+			var outpost_rect: Rect2 = outpost.get("rect", Rect2(outpost["pos"] - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
 			var outpost_distance: float = civilian.distance_squared_to(outpost["pos"])
-			if outpost_distance <= float(outpost["safe_radius"]) * float(outpost["safe_radius"]) and outpost_distance < nearest_outpost_distance:
+			if outpost_rect.grow(80.0).has_point(civilian) and outpost_distance < nearest_outpost_distance:
 				nearest_outpost_distance = outpost_distance
 				civilian_safe_target = outpost["pos"]
 		var direction: Vector2 = (civilian_safe_target - civilian).normalized()
@@ -333,7 +334,8 @@ func _process(delta: float) -> void:
 		var reached_outpost_index := -1
 		for outpost_index in range(outposts.size()):
 			var safe_outpost: Dictionary = outposts[outpost_index]
-			if civilian.distance_to(safe_outpost["pos"]) <= 28.0 and int(safe_outpost.get("sheltered", 0)) < int(safe_outpost.get("capacity", 12)):
+			var safe_rect: Rect2 = safe_outpost.get("rect", Rect2(safe_outpost["pos"] - Vector2(28.0, 28.0), Vector2(56.0, 56.0)))
+			if safe_rect.grow(-24.0).has_point(civilian) and int(safe_outpost.get("sheltered", 0)) < int(safe_outpost.get("capacity", 12)):
 				reached_outpost_index = outpost_index
 				reached_safe_zone = true
 				break
@@ -385,7 +387,9 @@ func _process(delta: float) -> void:
 		for wall_index in range(barricades.size() - 1, -1, -1):
 			var wall: Dictionary = barricades[wall_index]
 			var wall_pos: Vector2 = wall["pos"]
-			if zpos.distance_to(wall_pos) < 30.0:
+			var wall_rect: Rect2 = wall.get("rect", Rect2(wall_pos - Vector2(15.0, 15.0), Vector2(30.0, 30.0)))
+			var wall_nearest := Vector2(clampf(zpos.x, wall_rect.position.x, wall_rect.end.x), clampf(zpos.y, wall_rect.position.y, wall_rect.end.y))
+			if zpos.distance_to(wall_nearest) < 30.0
 				if zombie_kind == "brute":
 					var attack_cooldown: float = float(zombie.get("wall_cooldown", 0.0))
 					if attack_cooldown <= 0.0:
@@ -401,6 +405,21 @@ func _process(delta: float) -> void:
 						zombie["wall_cooldown"] = maxf(0.0, attack_cooldown - sim_delta)
 				else:
 					zpos -= (target - wall_pos).normalized() * 38.0 * sim_delta
+				break
+
+		for gate_index in range(gates.size() - 1, -1, -1):
+			var gate: Dictionary = gates[gate_index]
+			var gate_rect: Rect2 = gate["rect"]
+			var gate_nearest := Vector2(clampf(zpos.x, gate_rect.position.x, gate_rect.end.x), clampf(zpos.y, gate_rect.position.y, gate_rect.end.y))
+			if zpos.distance_to(gate_nearest) <= 30.0 and float(zombie.get("wall_cooldown", 0.0)) <= 0.0:
+				var gate_damage: float = 50.0 if zombie_kind == "brute" else 18.0
+				gate["hp"] = maxf(0.0, float(gate.get("hp", 500.0)) - gate_damage)
+				zombie["wall_cooldown"] = 1.0
+				if float(gate["hp"]) <= 0.0:
+					gates.remove_at(gate_index)
+					message = "PERIMETER GATE BREACHED"
+				else:
+					gates[gate_index] = gate
 				break
 
 		for turret_index in range(turrets.size() - 1, -1, -1):
@@ -724,6 +743,9 @@ func _confirm_outpost_placement() -> void:
 		primary_hq_position = center
 		evacuation_zones.clear()
 		evacuation_zones.append(center)
+		var hq_capacity: int = maxi(12, roundi(size.x * size.y / 18000.0))
+		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 300.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 1200.0, "max_hp": 1200.0, "level": 1, "capacity": hq_capacity, "sheltered": 0})
+		_create_outpost_perimeter(outpost_placement_rect, 0)
 		campaign_started = true
 		game_state = "playing"
 		wave_timer = 1.0
@@ -886,6 +908,22 @@ func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius:
 							remaining = tangent.normalized() * maxf(remaining.length(), displacement.length() * 0.65)
 							steering["tangent"] = tangent.normalized()
 							steering["lock_time"] = 0.35
+		for wall in barricades:
+			var wall_rect: Rect2 = wall.get("rect", Rect2(wall["pos"] - Vector2(15.0, 15.0), Vector2(30.0, 30.0)))
+			var closest_wall := Vector2(clampf(candidate.x, wall_rect.position.x, wall_rect.end.x), clampf(candidate.y, wall_rect.position.y, wall_rect.end.y))
+			var wall_offset: Vector2 = candidate - closest_wall
+			if wall_offset.length() < radius:
+				var wall_normal: Vector2 = wall_offset.normalized() if wall_offset.length_squared() > 0.001 else Vector2.UP
+				candidate = closest_wall + wall_normal * radius
+		for gate in gates:
+			if bool(gate.get("open", false)):
+				continue
+			var gate_rect: Rect2 = gate["rect"]
+			var closest_gate := Vector2(clampf(candidate.x, gate_rect.position.x, gate_rect.end.x), clampf(candidate.y, gate_rect.position.y, gate_rect.end.y))
+			var gate_offset: Vector2 = candidate - closest_gate
+			if gate_offset.length() < radius:
+				var gate_normal: Vector2 = gate_offset.normalized() if gate_offset.length_squared() > 0.001 else Vector2.UP
+				candidate = closest_gate + gate_normal * radius
 		position = candidate
 	return position
 
@@ -2130,13 +2168,20 @@ func _update_outpost_damage(delta: float) -> void:
 		var zombie_position: Vector2 = zombie["pos"]
 		for outpost_index in range(outposts.size() - 1, -1, -1):
 			var outpost: Dictionary = outposts[outpost_index]
-			if zombie_position.distance_squared_to(outpost["pos"]) > 34.0 * 34.0:
+			var outpost_rect: Rect2 = outpost.get("rect", Rect2(outpost["pos"] - Vector2(34.0, 34.0), Vector2(68.0, 68.0)))
+			if not outpost_rect.grow(26.0).has_point(zombie_position):
 				continue
 			var damage: float = 42.0 if str(zombie.get("kind", "shambler")) == "brute" else 18.0
 			outpost["hp"] = maxf(0.0, float(outpost.get("hp", 500.0)) - damage)
 			zombie["outpost_attack_cooldown"] = 1.0
 			if float(outpost["hp"]) <= 0.0:
 				_eject_outpost_shelter(outpost)
+				for wall_index in range(barricades.size() - 1, -1, -1):
+					if int(barricades[wall_index].get("outpost_index", -1)) == outpost_index:
+						barricades.remove_at(wall_index)
+				for gate_index in range(gates.size() - 1, -1, -1):
+					if int(gates[gate_index].get("outpost_index", -1)) == outpost_index:
+						gates.remove_at(gate_index)
 				outposts.remove_at(outpost_index)
 				message = "FORWARD OUTPOST DESTROYED — SHELTER EVACUATED"
 			else:
@@ -2238,6 +2283,8 @@ func _draw_supply_crates() -> void:
 			draw_line(crate_position + Vector2(-7.0, 0.0), crate_position + Vector2(7.0, 0.0), Color("#fff0b0"), 2.0)
 
 func _save_variant(value: Variant) -> Variant:
+	if value is Vector2i:
+		return {"__vector2i": [value.x, value.y]}
 	if value is Vector2:
 		return {"__vector2": [value.x, value.y]}
 	if value is Rect2:
@@ -2257,6 +2304,9 @@ func _save_variant(value: Variant) -> Variant:
 func _restore_variant(value: Variant) -> Variant:
 	if value is Dictionary:
 		var dictionary: Dictionary = value
+		if dictionary.has("__vector2i"):
+			var integer_coordinates: Array = dictionary["__vector2i"]
+			return Vector2i(int(integer_coordinates[0]), int(integer_coordinates[1]))
 		if dictionary.has("__vector2"):
 			var coordinates: Array = dictionary["__vector2"]
 			return Vector2(float(coordinates[0]), float(coordinates[1]))
@@ -2285,13 +2335,13 @@ func _has_valid_save() -> bool:
 	if not parsed is Dictionary:
 		return false
 	var state: Dictionary = parsed
-	if int(state.get("version", 0)) != 1:
+	if int(state.get("version", 0)) != SAVE_VERSION:
 		return false
 	if int(state.get("sector_index", -1)) < 0 or int(state.get("sector_index", -1)) > 2:
 		return false
 	if int(state.get("wave", -1)) < 0:
 		return false
-	var required_arrays: Array[String] = ["evacuation_zones", "civilians", "zombies", "units", "outposts", "turrets", "barricades"]
+	var required_arrays: Array[String] = ["evacuation_zones", "civilians", "zombies", "units", "outposts", "turrets", "barricades", "gates", "building_archetypes", "district_regions"]
 	for key in required_arrays:
 		if not state.has(key) or not state[key] is Array:
 			return false
@@ -2299,11 +2349,29 @@ func _has_valid_save() -> bool:
 	var saved_camera: Variant = state.get("camera_position")
 	return saved_hq is Dictionary and saved_hq.has("__vector2") and saved_camera is Dictionary and saved_camera.has("__vector2")
 
+func _serialize_spatial_grid(grid: Dictionary) -> Array[Dictionary]:
+	var serialized: Array[Dictionary] = []
+	for key in grid.keys():
+		var cell: Vector2i = key
+		var bucket: Array = grid[key]
+		serialized.append({"cell": cell, "indices": bucket.duplicate()})
+	return serialized
+
+func _restore_spatial_grid(grid: Dictionary, serialized: Array) -> void:
+	grid.clear()
+	for entry in serialized:
+		if not entry is Dictionary:
+			continue
+		var cell_value: Variant = entry.get("cell", Vector2i.ZERO)
+		var indices: Variant = entry.get("indices", [])
+		if cell_value is Vector2i and indices is Array:
+			grid[cell_value] = indices.duplicate()
+
 func _save_operation() -> void:
 	# Never replace a prior valid campaign with an incomplete HQ-placement state.
 	if not campaign_started or game_state == "hq_placement":
 		return
-	var state: Dictionary = {"version": 1, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "medevac": medevac, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer}
+	var state: Dictionary = {"version": SAVE_VERSION, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "medevac": medevac, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer}
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify(_save_variant(state)))
@@ -2348,6 +2416,18 @@ func _resume_operation() -> void:
 		buildings.assign(state["buildings"])
 	if state.has("spawn_districts"):
 		spawn_districts.assign(state["spawn_districts"])
+	if state.has("building_archetypes"):
+		building_archetypes.assign(state["building_archetypes"])
+	if state.has("district_regions"):
+		district_regions.assign(state["district_regions"])
+	if state.has("gates"):
+		gates.assign(state["gates"])
+	if state.has("warehouse_hold_timers"):
+		warehouse_hold_timers = state["warehouse_hold_timers"]
+	if state.has("zombie_grid_serialized"):
+		_restore_spatial_grid(zombie_grid, state["zombie_grid_serialized"])
+	if state.has("civilian_grid_serialized"):
+		_restore_spatial_grid(civilian_grid, state["civilian_grid_serialized"])
 	pending_wave_spawns = maxi(0, int(state.get("pending_wave_spawns", 0)))
 	if zombies.size() > MAX_ACTIVE_ZOMBIES:
 		pending_wave_spawns += zombies.size() - MAX_ACTIVE_ZOMBIES
@@ -2358,6 +2438,8 @@ func _resume_operation() -> void:
 	endless_containment = bool(state.get("endless_containment", false))
 	while civilian_steering.size() < civilians.size():
 		civilian_steering.append({})
+	_rebuild_zombie_spatial_grid()
+	_rebuild_spatial_grid(civilian_grid, civilians)
 	campaign_started = true
 	manual_paused = false
 	lifecycle_paused = false
