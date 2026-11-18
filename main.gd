@@ -1051,6 +1051,8 @@ func _input(event: InputEvent) -> void:
 		var touch := event as InputEventScreenTouch
 		if touch.pressed:
 			touch_points[touch.index] = touch.position
+			if touch.position.y < viewport_size.y - 270.0 and (game_state == "hq_placement" or (game_state == "playing" and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost")):
+				_begin_outpost_placement(_screen_to_world(touch.position), "hq" if game_state == "hq_placement" else "outpost")
 			if touch_points.size() == 1:
 				camera_drag_origin = touch.position
 				camera_last_position = touch.position
@@ -1065,7 +1067,9 @@ func _input(event: InputEvent) -> void:
 				previous_pinch_center = (first_point + second_point) * 0.5
 		else:
 			if touch_points.has(touch.index):
-				if touch_points.size() == 1 and not multi_touch_gesture and not camera_dragging and camera_drag_distance < CAMERA_DRAG_THRESHOLD:
+				if outpost_placement_active and outpost_placement_dragging:
+					outpost_placement_dragging = false
+				elif touch_points.size() == 1 and not multi_touch_gesture and not camera_dragging and camera_drag_distance < CAMERA_DRAG_THRESHOLD:
 					_handle_tap(touch.position)
 				touch_points.erase(touch.index)
 			if touch_points.is_empty():
@@ -1093,6 +1097,9 @@ func _input(event: InputEvent) -> void:
 			pinch_start_distance = distance
 			previous_pinch_center = center
 		else:
+			if outpost_placement_active and outpost_placement_dragging:
+				_update_outpost_placement(_screen_to_world(drag.position))
+				return
 			camera_drag_distance += drag.relative.length()
 			if camera_drag_distance > CAMERA_DRAG_THRESHOLD:
 				camera_dragging = true
@@ -1104,9 +1111,13 @@ func _input(event: InputEvent) -> void:
 		var mouse := event as InputEventMouseButton
 		if mouse.button_index == MOUSE_BUTTON_LEFT:
 			if mouse.pressed:
+				if mouse.position.y < viewport_size.y - 270.0 and (game_state == "hq_placement" or (game_state == "playing" and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost")):
+					_begin_outpost_placement(_screen_to_world(mouse.position), "hq" if game_state == "hq_placement" else "outpost")
 				camera_drag_origin = mouse.position
 				camera_drag_distance = 0.0
 				camera_dragging = false
+			elif outpost_placement_active and outpost_placement_dragging:
+				outpost_placement_dragging = false
 			elif not camera_dragging and camera_drag_distance < CAMERA_DRAG_THRESHOLD:
 				_handle_tap(mouse.position)
 		elif mouse.pressed and mouse.button_index == MOUSE_BUTTON_WHEEL_UP:
@@ -1118,7 +1129,9 @@ func _input(event: InputEvent) -> void:
 		camera_drag_distance += motion.relative.length()
 		if camera_drag_distance > CAMERA_DRAG_THRESHOLD:
 			camera_dragging = true
-		if camera_dragging:
+		if outpost_placement_active and outpost_placement_dragging:
+			_update_outpost_placement(_screen_to_world(motion.position))
+		elif camera_dragging:
 			camera_position -= motion.relative / camera_zoom
 			_clamp_camera()
 			queue_redraw()
@@ -1132,27 +1145,18 @@ func _handle_tap(pos: Vector2) -> void:
 		queue_redraw()
 		return
 	if game_state == "hq_placement":
-		if pos.y >= viewport_size.y - 70.0 and pos.x >= 24.0 and pos.x <= viewport_size.x - 24.0 and primary_hq_position.x >= 0.0:
-			campaign_started = true
-			game_state = "playing"
-			wave_timer = 1.0
-			_save_operation()
-			message = "PRIMARY HQ ESTABLISHED — OPERATION STARTED"
-			message_timer = 3.0
+		if outpost_placement_active and pos.y >= viewport_size.y - 112.0 and pos.y <= viewport_size.y - 58.0:
+			if pos.x < viewport_size.x * 0.5:
+				_confirm_outpost_placement()
+			else:
+				outpost_placement_active = false
+				outpost_placement_dragging = false
 			queue_redraw()
 			return
 		if pos.y >= viewport_size.y - 150.0:
 			return
-		var hq_world: Vector2 = _screen_to_world(pos)
-		if _is_open_world_position(hq_world, 32.0):
-			primary_hq_position = hq_world
-			evacuation_zones.clear()
-			evacuation_zones.append(hq_world)
-			message = "PRIMARY COMMAND HQ LOCATION LOCKED"
-			message_timer = 2.0
-		else:
-			message = "HQ MUST BE ON AN OPEN STREET"
-			message_timer = 1.5
+		_begin_outpost_placement(_screen_to_world(pos), "hq")
+		outpost_placement_dragging = false
 		queue_redraw()
 		return
 	if game_state == "sector_select":
@@ -1173,6 +1177,18 @@ func _handle_tap(pos: Vector2) -> void:
 		queue_redraw()
 		return
 	if game_state != "playing":
+		return
+	if outpost_placement_active and pos.y >= viewport_size.y - 260.0 and pos.y <= viewport_size.y - 206.0:
+		if pos.x < viewport_size.x * 0.5:
+			_confirm_outpost_placement()
+		else:
+			outpost_placement_active = false
+			outpost_placement_dragging = false
+		queue_redraw()
+		return
+	if pos.x >= 18.0 and pos.x <= 210.0 and pos.y >= 340.0 and pos.y <= 390.0:
+		_call_to_arms()
+		queue_redraw()
 		return
 	if manual_paused or lifecycle_paused:
 		if pos.x >= viewport_size.x * 0.2 and pos.x <= viewport_size.x * 0.8 and pos.y >= viewport_size.y * 0.52 and pos.y <= viewport_size.y * 0.68:
@@ -1261,6 +1277,24 @@ func _handle_tap(pos: Vector2) -> void:
 	var deployment: Dictionary = choices[selected_deployment]
 	var cost: int = int(deployment["cost"])
 	var kind: String = str(deployment["kind"])
+	if kind == "outpost":
+		if outposts.size() >= OUTPOST_MAX_COUNT:
+			message = "FORWARD OUTPOST LIMIT REACHED (6)"
+			message_timer = 1.5
+			return
+		_begin_outpost_placement(world_pos, "outpost")
+		outpost_placement_dragging = false
+		queue_redraw()
+		return
+	if kind == "gate":
+		if _try_place_gate(world_pos):
+			message = "PERIMETER GATE INSTALLED"
+			message_timer = 1.5
+		else:
+			message = "GATE MUST SNAP TO AN OUTPOST WALL — $90"
+			message_timer = 1.5
+		queue_redraw()
+		return
 	if funds < cost:
 		message = "INSUFFICIENT FUNDS"
 		message_timer = 1.5
@@ -1285,22 +1319,13 @@ func _handle_tap(pos: Vector2) -> void:
 			medevac = {"pos": Vector2(-90.0, world_pos.y), "target": world_pos, "phase": "inbound", "hp": MEDEVAC_HP, "landing_timer": MEDEVAC_LANDING_TIME, "onboard": 0, "attack_flash": 0.0}
 		"infantry", "sniper":
 			units.append({"pos": world_pos, "kind": kind, "cooldown": 0.1})
-		"outpost":
-			if outposts.size() >= OUTPOST_MAX_COUNT:
-				message = "FORWARD OUTPOST LIMIT REACHED (6)"
-				message_timer = 1.5
-				return
-			var outpost_cost := OUTPOST_COST + outposts.size() * OUTPOST_COST_STEP
-			if funds < outpost_cost:
-				message = "OUTPOST COST $%d — INSUFFICIENT FUNDS" % outpost_cost
-				message_timer = 1.5
-				return
-			outposts.append({"pos": world_pos, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": 175.0, "vision_radius": 260.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 500.0, "max_hp": 500.0, "level": 1, "capacity": 12, "sheltered": 0})
-			cost = outpost_cost
 		"turret":
+			world_pos = _snap_turret_to_outpost(world_pos)
 			turrets.append({"pos": world_pos, "hp": 250.0, "max_hp": 250.0, "cooldown": 0.1, "level": 1, "range": TURRET_RANGE, "vision_radius": TURRET_RANGE, "damage": 22.0, "fire_interval": 0.18})
 		"wall":
 			barricades.append({"pos": world_pos, "hp": 400.0, "max_hp": 400.0})
+		"gate":
+			pass
 	funds -= cost
 	message = str(deployment["name"]) + " DEPLOYED"
 	message_timer = 1.6
@@ -1694,6 +1719,15 @@ func _draw_hud() -> void:
 		draw_rect(Rect2(210.0, 274.0, 210.0, 52.0), Color("#0b1b17", 0.94))
 		_draw_text("FPS %d | ENT %d" % [fps_sample_value, entity_count], Vector2(220.0, 306.0), 14, Color("#a9c8b7"))
 
+func _draw_outpost_placement_hud(top: float) -> void:
+	var confirm_color: Color = Color("#245a3c") if outpost_placement_valid else Color("#5a292b")
+	draw_rect(Rect2(18.0, top, viewport_size.x * 0.5 - 27.0, 54.0), confirm_color)
+	draw_rect(Rect2(18.0, top, viewport_size.x * 0.5 - 27.0, 54.0), Color("#72d69a") if outpost_placement_valid else Color("#ff6868"), false, 2.0)
+	_draw_text("[CONFIRM BUILD ($%d)]" % _outpost_build_cost(outpost_placement_rect.size), Vector2(28.0, top + 33.0), 14, Color("#f0fff5"))
+	draw_rect(Rect2(viewport_size.x * 0.5 + 9.0, top, viewport_size.x * 0.5 - 27.0, 54.0), Color("#472a2a"))
+	draw_rect(Rect2(viewport_size.x * 0.5 + 9.0, top, viewport_size.x * 0.5 - 27.0, 54.0), Color("#d77b7b"), false, 2.0)
+	_draw_text("[CANCEL]", Vector2(viewport_size.x * 0.5 + 45.0, top + 33.0), 16, Color("#fff0f0"))
+
 func _draw_structure_actions() -> void:
 	if selected_structure_type.is_empty() or selected_structure_index < 0:
 		return
@@ -1873,6 +1907,8 @@ func _draw_placement_preview() -> void:
 	var valid := _is_valid_street_position(preview_position) and funds >= deployment_cost
 	if kind == "outpost" and outposts.size() >= OUTPOST_MAX_COUNT:
 		valid = false
+	if kind == "gate":
+		valid = funds >= GATE_COST
 	if kind == "medevac" and not medevac.is_empty():
 		valid = false
 	var tint := Color(0.2, 1.0, 0.48, 0.18) if valid else Color(1.0, 0.18, 0.2, 0.20)
@@ -1883,8 +1919,8 @@ func _draw_placement_preview() -> void:
 
 func _deployment_cost(kind: String) -> int:
 	if kind == "outpost":
-		return OUTPOST_COST + outposts.size() * OUTPOST_COST_STEP
-	return OUTPOST_COST if kind == "outpost" else int((UNIT_DEPLOYMENTS if command_tab == 0 else BASE_DEPLOYMENTS)[selected_deployment]["cost"])
+		return _outpost_build_cost(outpost_placement_rect.size)
+	return int((UNIT_DEPLOYMENTS if command_tab == 0 else BASE_DEPLOYMENTS)[selected_deployment]["cost"])
 
 func _deployment_range(kind: String) -> float:
 	match kind:
