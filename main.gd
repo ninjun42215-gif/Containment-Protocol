@@ -369,7 +369,6 @@ func _process(delta: float) -> void:
 				else:
 					zpos -= (target - wall_pos).normalized() * 38.0 * sim_delta
 				break
-		_update_outpost_damage(sim_delta)
 
 	for turret_index in range(turrets.size() - 1, -1, -1):
 			var nearby_turret: Dictionary = turrets[turret_index]
@@ -417,6 +416,7 @@ func _process(delta: float) -> void:
 			message = "CIVILIAN LOST"
 			message_timer = 1.4
 
+	_update_outpost_damage(sim_delta)
 	_rebuild_zombie_spatial_grid()
 	for outpost_index in range(outposts.size()):
 		var outpost: Dictionary = outposts[outpost_index]
