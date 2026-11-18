@@ -210,6 +210,7 @@ func _start_round() -> void:
 	_start_sector(sector_index)
 
 func _start_sector(index: int) -> void:
+	world_callouts.clear()
 	sector_index = clampi(index, 0, 2)
 	_configure_sector(sector_index)
 	civilians.clear()
@@ -1640,7 +1641,7 @@ func _update_auto_ops(delta: float) -> void:
 				next_task = "RETREAT"
 		if next_task.is_empty() and str(unit.get("kind", "")) == "engineer":
 			var repair_position: Vector2 = _nearest_damaged_structure(position, 650.0)
-			if repair_position != Vector2.INF:
+			if repair_position.x >= 0.0:
 				next_target = repair_position
 				next_task = "REPAIR"
 		if next_task.is_empty():
@@ -1740,7 +1741,7 @@ func _nearest_unreserved_crate(position: Vector2, radius: float, reserved: Array
 	return best_index
 
 func _nearest_damaged_structure(position: Vector2, radius: float) -> Vector2:
-	var best_position := Vector2.INF
+	var best_position := Vector2(-1.0, -1.0)
 	var best_distance: float = radius * radius
 	for structure in outposts:
 		if float(structure.get("hp", 0.0)) >= float(structure.get("max_hp", 1.0)):
@@ -1897,7 +1898,7 @@ func _salvage_nearest_vehicle() -> void:
 		message_timer = 1.5
 		return
 	var engineer_salvage: bool = _unit_near_vehicle_kind(vehicle["pos"], "engineer", 75.0)
-	var salvage_duration: float = 2.0 if engineer_salvage else 4.0
+	var salvage_duration: float = 4.0
 	vehicle["salvage_started"] = true
 	vehicle["salvage_duration"] = salvage_duration
 	vehicle["salvage_timer"] = salvage_duration
@@ -1976,7 +1977,7 @@ func _update_vehicles(delta: float) -> void:
 						var hit_zombie: Dictionary = zombies[zombie_index]
 						var knockback: Vector2 = (hit_zombie["pos"] - position).normalized()
 						hit_zombie["pos"] = position + knockback * 46.0
-					hit_zombie["hp"] = float(hit_zombie.get("hp", 30.0)) - 45.0
+						hit_zombie["hp"] = float(hit_zombie.get("hp", 30.0)) - 45.0
 						if float(hit_zombie["hp"]) <= 0.0:
 							zombies.remove_at(zombie_index)
 						else:
