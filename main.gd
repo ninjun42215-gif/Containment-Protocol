@@ -3300,6 +3300,10 @@ func _refresh_safe_area() -> void:
 	var screen_dpi: int = maxi(DisplayServer.screen_get_dpi(), 160)
 	touch_target_size = maxf(MIN_TOUCH_TARGET, 48.0 * float(screen_dpi) / 160.0 * maxf(viewport_scale.x, viewport_scale.y))
 	safe_insets = Vector4(float(safe_left_px) * viewport_scale.x, float(safe_top_px) * viewport_scale.y, float(safe_right_px) * viewport_scale.x, float(safe_bottom_px) * viewport_scale.y)
+	# Conservative logical minimums cover iOS Dynamic Island and Home Indicator
+	# when a platform driver reports only the physical display safe rectangle.
+	safe_insets.y = maxf(safe_insets.y, 62.0 * viewport_scale.y)
+	safe_insets.w = maxf(safe_insets.w, 34.0 * viewport_scale.y)
 	var max_horizontal_inset: float = viewport_size.x * 0.20
 	var max_vertical_inset: float = viewport_size.y * 0.20
 	safe_insets.x = minf(safe_insets.x, max_horizontal_inset)

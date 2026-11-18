@@ -32,9 +32,12 @@ jobs:
             https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_export_templates.tpz \
             --output godot-templates.tpz
           unzip -q godot-macos.zip
-          APP_PATH="$(find . -maxdepth 3 -name Godot.app -print -quit)"
+          APP_PATH="$(find . -maxdepth 4 -name Godot.app -print -quit)"
           test -n "$APP_PATH"
-          mv "$APP_PATH" Godot.app
+          if [[ "$APP_PATH" != "./Godot.app" && "$APP_PATH" != "Godot.app" ]]; then
+            mv "$APP_PATH" Godot.app
+          fi
+          test -x Godot.app/Contents/MacOS/Godot
           mkdir -p "$HOME/Library/Application Support/Godot/export_templates/4.3.stable"
           mkdir -p "$RUNNER_TEMP/godot-templates"
           unzip -q godot-templates.tpz -d "$RUNNER_TEMP/godot-templates"
