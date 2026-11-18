@@ -1138,7 +1138,7 @@ func _snap_turret_to_outpost(position: Vector2) -> Vector2:
 	return best_position
 
 func _try_place_gate(position: Vector2) -> bool:
-	if funds < GATE_COST:
+	if funds < GATE_COST or scrap < 15:
 		return false
 	for outpost_index in range(outposts.size()):
 		var rect: Rect2 = outposts[outpost_index]["rect"]
@@ -1179,6 +1179,7 @@ func _try_place_gate(position: Vector2) -> bool:
 					barricades.append({"pos": bottom_rect.get_center(), "rect": bottom_rect, "hp": float(wall["hp"]), "max_hp": float(wall["max_hp"]), "kind": "perimeter", "outpost_index": outpost_index})
 			gates.append({"pos": gate_rect.get_center(), "rect": gate_rect, "hp": 500.0, "max_hp": 500.0, "open": false, "outpost_index": outpost_index})
 			funds -= GATE_COST
+			scrap -= 15
 			_save_operation()
 			return true
 	return false
