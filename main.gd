@@ -384,6 +384,9 @@ func _process(delta: float) -> void:
 		var target: Vector2 = _nearest_evac_zone(zpos)
 		if target_index >= 0:
 			target = civilians[target_index]
+		var siege_building_index: int = int(zombie.get("siege_building", -1))
+		if siege_building_index >= 0 and siege_building_index < buildings.size() and not bool(building_archetypes[siege_building_index].get("destroyed", false)) and zpos.distance_to(buildings[siege_building_index].get_center()) <= 300.0:
+			target = buildings[siege_building_index].get_center()
 		var lure_index: int = _find_nearest_flare(zpos)
 		if lure_index >= 0:
 			target = flares[lure_index]["pos"]
@@ -408,6 +411,8 @@ func _process(delta: float) -> void:
 				zombie["medevac_cooldown"] = maxf(0.0, medevac_cooldown - sim_delta)
 		zpos = _move_circle_with_buildings(zpos, displacement, 10.0 if zombie_kind == "brute" else 7.0, sim_delta, target, zombie, true)
 		var contacted_building_index: int = _building_contact_index(zpos, 22.0)
+		if contacted_building_index < 0 and siege_building_index >= 0 and siege_building_index < buildings.size() and zpos.distance_to(buildings[siege_building_index].get_center()) <= 28.0:
+			contacted_building_index = siege_building_index
 		if contacted_building_index >= 0 and float(zombie.get("building_attack_cooldown", 0.0)) <= 0.0:
 			var has_garrison := false
 			for garrison_unit in units:
@@ -622,6 +627,12 @@ func _process(delta: float) -> void:
 					var edge_scale: float = maxf(horizontal_scale, vertical_scale)
 					firing_origin = roof.get_center() + fire_direction / maxf(edge_scale, 0.001) * 0.88
 			_add_bullet_tracer(firing_origin, target_pos)
+			if bool(unit.get("garrisoned", false)):
+				var firing_building_index: int = int(unit.get("garrison_building", -1))
+				if firing_building_index >= 0 and firing_building_index < buildings.size():
+					var marked_zombie: Dictionary = zombies[target_index]
+					marked_zombie["siege_building"] = firing_building_index
+					zombies[target_index] = marked_zombie
 			var unit_damage: float = 80.0 if is_sniper else (16.0 if is_militia else 35.0)
 			var fire_interval: float = 1.05 if is_sniper else (0.85 if is_militia else 0.62)
 			if _is_near_building_type(unit_pos, "ARMORY", ARMORY_RADIUS):
@@ -862,29 +873,11 @@ func _call_to_arms_cost() -> int:
 
 func _call_to_arms() -> void:
 	var source_outpost_index: int = _best_recruitment_outpost()
-	var source_position: Vector2 = primary_hq_position
-	var civilian_index: int = -1
-	if source_outpost_index >= 0:
-		source_position = outposts[source_outpost_index]["pos"]
-	else:
-		var nearest_distance: float = 180.0 * 180.0
-		for index in range(civilians.size()):
-			var hq_distance: float = civilians[index].distance_squared_to(primary_hq_position)
-			if hq_distance <= nearest_distance:
-				nearest_distance = hq_distance
-				civilian_index = index
-		for outpost_index in range(outposts.size()):
-			var outpost_position: Vector2 = outposts[outpost_index]["pos"]
-			for index in range(civilians.size()):
-				var outpost_distance: float = civilians[index].distance_squared_to(outpost_position)
-				if outpost_distance < nearest_distance:
-					nearest_distance = outpost_distance
-					civilian_index = index
-					source_position = outpost_position
-	if source_outpost_index < 0 and civilian_index < 0:
-		message = "NO RESCUED CIVILIAN AVAILABLE NEAR HQ OR OUTPOST"
-		message_timer = 1.5
+	if source_outpost_index < 0:
+		message = "CALL TO ARMS REQUIRES 1 SHELTERED OUTPOST SETTLER"
+		message_timer = 1.8
 		return
+	var source_position: Vector2 = outposts[source_outpost_index]["pos"]
 	var cost: int = roundi(float(CALL_TO_ARMS_COST) * (0.75 if _is_near_building_type(source_position, "ARMORY", ARMORY_RADIUS) else 1.0))
 	if funds < cost:
 		message = "CALL TO ARMS REQUIRES $%d" % cost
@@ -1985,6 +1978,19 @@ func _handle_tap(pos: Vector2) -> void:
 	if pos.y < safe_insets.y + 270.0:
 		return
 	var world_pos := _screen_to_world(pos)
+	if selected_vehicle_index >= 0 and selected_vehicle_index < vehicles.size() and bool(vehicles[selected_vehicle_index].get("active", false)):
+		vehicles[selected_vehicle_index]["move_target"] = world_pos
+		selected_vehicle_index = -1
+		message = "VEHICLE DESTINATION SET"
+		message_timer = 1.3
+		return
+	for vehicle_index in range(vehicles.size()):
+		if world_pos.distance_to(vehicles[vehicle_index]["pos"]) <= 48.0 and bool(vehicles[vehicle_index].get("active", false)):
+			selected_vehicle_index = vehicle_index
+			selected_unit_index = -1
+			message = "VEHICLE SELECTED — TAP DESTINATION"
+			message_timer = 1.6
+			return
 	var tapped_building: int = _building_index_at(world_pos)
 	if selected_unit_index >= 0 and selected_unit_index < units.size():
 		if tapped_building >= 0:
