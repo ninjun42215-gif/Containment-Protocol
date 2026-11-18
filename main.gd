@@ -273,7 +273,7 @@ func _process(delta: float) -> void:
 		_save_operation()
 	_shelter_flush_timer_step(sim_delta)
 	_update_supply_drops(sim_delta)
-	var phase_index: int = (maxi(wave, 1) - 1) / 6 % 3
+	var phase_index: int = int(float(maxi(wave, 1) - 1) / 6.0) % 3
 	day_phase = "DAY" if phase_index == 0 else ("DUSK" if phase_index == 1 else "NIGHT")
 
 	# Civilians evacuate through the street network; the grid is rebuilt once
@@ -681,7 +681,9 @@ func _draw_buildings() -> void:
 
 func _spawn_wave() -> void:
 	wave += 1
-	var count := 18 + wave * 8
+	var escalation_phase: int = int(float(wave - 1) / 6.0) + 1
+	var phase_multiplier: float = 1.0 + float(escalation_phase - 1) * 0.25
+	var count: int = roundi(float(18 + wave * 8) * phase_multiplier)
 	for i in range(count):
 		var district: Rect2 = spawn_districts[randi_range(0, spawn_districts.size() - 1)]
 		var spawn_point := Vector2(randf_range(district.position.x, district.end.x), randf_range(district.position.y, district.end.y))
@@ -1023,6 +1025,8 @@ func _execute_airstrike(center: Vector2) -> void:
 	for i in range(civilians.size() - 1, -1, -1):
 		if center.distance_to(civilians[i]) <= radius:
 			civilians.remove_at(i)
+			if i < civilian_steering.size():
+				civilian_steering.remove_at(i)
 			casualties += 1
 	if casualties > 0:
 		lost_count += casualties
@@ -1138,7 +1142,7 @@ func _draw_title_screen() -> void:
 		draw_rect(Rect2(viewport_size.x * 0.19, viewport_size.y * 0.51, viewport_size.x * 0.62, 100.0), Color("#1d4935"))
 		draw_rect(Rect2(viewport_size.x * 0.19, viewport_size.y * 0.51, viewport_size.x * 0.62, 100.0), Color("#75e6a0"), false, 3.0)
 		_draw_text("TAP TO SELECT SECTOR", Vector2(viewport_size.x * 0.27, viewport_size.y * 0.56), 22, Color("#f0fff5"))
-		if FileAccess.file_exists(save_path):
+		if _has_valid_save():
 			draw_rect(Rect2(viewport_size.x * 0.14, viewport_size.y * 0.66, viewport_size.x * 0.72, 78.0), Color("#294c3c"))
 			draw_rect(Rect2(viewport_size.x * 0.14, viewport_size.y * 0.66, viewport_size.x * 0.72, 78.0), Color("#e4c66d"), false, 2.0)
 			_draw_text("RESUME SAVED OPERATION", Vector2(viewport_size.x * 0.19, viewport_size.y * 0.71), 18, Color("#fff4c7"))
