@@ -554,6 +554,7 @@ func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius:
 	var position: Vector2 = origin
 	var remaining: Vector2 = displacement
 	var lock_time: float = maxf(0.0, float(steering.get("lock_time", 0.0)) - get_process_delta_time())
+	steering["lock_time"] = lock_time
 	var locked_tangent: Vector2 = steering.get("tangent", Vector2.ZERO)
 	if lock_time > 0.0 and locked_tangent.length_squared() > 0.001:
 		remaining = locked_tangent.normalized() * displacement.length()
@@ -1661,7 +1662,7 @@ func _update_audio() -> void:
 
 func _draw_end_screen() -> void:
 	draw_rect(Rect2(Vector2.ZERO, viewport_size), Color(0.01, 0.04, 0.03, 0.88))
-	var title := "SECTOR SECURED" if game_state == "victory" else "EVACUATION FAILED"
+	var title := "30-WAVE OPERATION SECURED" if game_state == "victory" else "EVACUATION FAILED"
 	var tint := Color("#72f0a2") if game_state == "victory" else Color("#ff6868")
 	_draw_text(title, Vector2(viewport_size.x * 0.13, viewport_size.y * 0.40), 38, tint)
 	_draw_text("SECTOR %02d — %s" % [sector_index + 1, sector_name.to_upper()], Vector2(viewport_size.x * 0.18, viewport_size.y * 0.44), 18, Color("#b9d9c6"))
@@ -1833,7 +1834,7 @@ func _has_valid_save() -> bool:
 func _save_operation() -> void:
 	if not campaign_started:
 		return
-	var state: Dictionary = {"version": 1, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "medevac": medevac, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment}
+	var state: Dictionary = {"version": 1, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "medevac": medevac, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "time_scale_index": time_scale_index, "day_phase": day_phase}
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify(_save_variant(state)))
