@@ -34,9 +34,9 @@ const FLARE_LURE_RADIUS := 220.0
 const AUDIO_SAMPLE_RATE := 22050.0
 const MAX_ACTIVE_ZOMBIES := 650
 const PENDING_WAVE_SPAWN_INTERVAL := 0.20
-const SAVE_VERSION := 5
+const SAVE_VERSION := 6
 const PREPARATION_SECONDS := 60.0
-const GAME_MINUTES_PER_SECOND := 2.0
+const GAME_MINUTES_PER_SECOND := 144.0
 const MAX_TACTICAL_DECALS := 80
 const OUTPOST_MIN_SIZE := 220.0
 const OUTPOST_MAX_SIZE := 760.0
@@ -56,12 +56,19 @@ const UNIT_DEPLOYMENTS := [
 const RECRUIT_DEPLOYMENTS := [
 	{"name": "INFANTRY", "detail": "$60", "cost": 60, "kind": "infantry"},
 	{"name": "SNIPER", "detail": "$110", "cost": 110, "kind": "sniper"},
-	{"name": "ENGINEER", "detail": "$85", "cost": 85, "kind": "engineer"}
+	{"name": "ENGINEER", "detail": "$85", "cost": 85, "kind": "engineer"},
+	{"name": "MEDIC", "detail": "$95", "cost": 95, "kind": "medic"},
+	{"name": "HEAVY", "detail": "$130", "cost": 130, "kind": "heavy"}
 ]
 const BASE_DEPLOYMENTS := [
 	{"name": "OUTPOST", "detail": "$220", "cost": OUTPOST_COST, "kind": "outpost"},
 	{"name": "TURRET", "detail": "$140", "cost": TURRET_COST, "kind": "turret"},
-	{"name": "WALL", "detail": "$75", "cost": WALL_COST, "kind": "wall"}, {"name": "GATE", "detail": "$90", "cost": GATE_COST, "kind": "gate"}
+	{"name": "WALL", "detail": "$75", "cost": WALL_COST, "kind": "wall"}, {"name": "GATE", "detail": "$90", "cost": GATE_COST, "kind": "gate"},
+	{"name": "FARM", "detail": "$80 / M45", "cost": 80, "kind": "farm"},
+	{"name": "BAKERY", "detail": "$120 / M70", "cost": 120, "kind": "bakery"},
+	{"name": "LIVESTOCK", "detail": "$100 / M60", "cost": 100, "kind": "livestock"},
+	{"name": "WATCHTOWER", "detail": "$90 / M50", "cost": 90, "kind": "watchtower"},
+	{"name": "FIELD CLINIC", "detail": "$110 / M65", "cost": 110, "kind": "clinic"}
 ]
 
 var civilians: Array[Vector2] = []
@@ -91,7 +98,16 @@ var campaign_started := false
 var campaign_start_grace_timer := 0.0
 var initial_civilian_count := 0
 var scrap := 120
+var food := 120
 var fuel := 300.0
+var last_upkeep_day := 1
+var trees: Array[Dictionary] = []
+var wildlife: Array[Dictionary] = []
+var raider_camps: Array[Dictionary] = []
+var constructed_buildings: Array[Dictionary] = []
+var cached_light_sources: Array[Dictionary] = []
+var radio_log: Array[String] = []
+var radio_log_open := false
 var endless_containment := false
 var day_phase := "DAY"
 var world_clock_minutes := 450.0
@@ -237,6 +253,13 @@ func _start_sector(index: int) -> void:
 	barricades.clear()
 	flares.clear()
 	tactical_decals.clear()
+	trees.clear()
+	wildlife.clear()
+	raider_camps.clear()
+	constructed_buildings.clear()
+	cached_light_sources.clear()
+	radio_log.clear()
+	radio_log_open = false
 	outposts.clear()
 	turrets.clear()
 	gates.clear()
@@ -252,6 +275,8 @@ func _start_sector(index: int) -> void:
 	campaign_start_grace_timer = 0.0
 	initial_civilian_count = 0
 	scrap = 120
+	food = 120
+	last_upkeep_day = 1
 	fuel = 300.0
 	endless_containment = true
 	world_clock_minutes = 450.0
@@ -343,6 +368,10 @@ func _process(delta: float) -> void:
 	elapsed += sim_delta
 	world_clock_minutes += sim_delta * GAME_MINUTES_PER_SECOND
 	survival_day = maxi(1, int(floor(world_clock_minutes / 1440.0)) + 1)
+	if survival_day > last_upkeep_day:
+		for upkeep_day in range(last_upkeep_day + 1, survival_day + 1):
+			_apply_daily_rations()
+		last_upkeep_day = survival_day
 	_update_day_phase()
 	_update_radio_transmission()
 	radio_banner_timer = maxf(0.0, radio_banner_timer - sim_delta)
@@ -350,6 +379,7 @@ func _process(delta: float) -> void:
 	campaign_start_grace_timer = maxf(0.0, campaign_start_grace_timer - sim_delta)
 	_update_vehicles(sim_delta)
 	_update_auto_ops(sim_delta)
+	_refresh_light_source_cache()
 	message_timer = maxf(0.0, message_timer - sim_delta)
 	airstrike_timer = maxf(0.0, airstrike_timer - sim_delta)
 	wave_timer -= sim_delta
@@ -430,6 +460,9 @@ func _process(delta: float) -> void:
 		var zombie_speed: float = 112.0 if zombie_kind == "runner" else 61.0
 		if zombie_kind == "brute":
 			zombie_speed = 34.0
+		if float(zombie.get("stagger_timer", 0.0)) > 0.0:
+			zombie["stagger_timer"] = maxf(0.0, float(zombie["stagger_timer"]) - sim_delta)
+			zombie_speed *= 0.55
 		if day_phase == "NIGHT" and not _is_position_illuminated(zpos):
 			zombie_speed *= 1.20
 		var displacement: Vector2 = (target - zpos).normalized() * zombie_speed * sim_delta
@@ -623,7 +656,7 @@ func _process(delta: float) -> void:
 				var raw_unit_steering: Variant = unit.get("steering", {})
 				var unit_steering: Dictionary = raw_unit_steering if raw_unit_steering is Dictionary else {}
 				var unit_kind_for_speed: String = str(unit.get("kind", ""))
-				var unit_speed: float = 60.0 if unit_kind_for_speed == "infantry" else (58.0 if unit_kind_for_speed == "militia" else (48.0 if unit_kind_for_speed == "engineer" else 52.0))
+				var unit_speed: float = 60.0 if unit_kind_for_speed == "infantry" else (58.0 if unit_kind_for_speed == "militia" else (48.0 if unit_kind_for_speed == "engineer" else (50.0 if unit_kind_for_speed == "heavy" else 52.0)))
 				var unit_displacement: Vector2 = (unit_waypoint - unit_position).normalized() * unit_speed * sim_delta
 				unit["pos"] = _move_circle_with_buildings(unit_position, unit_displacement, 8.0, sim_delta, unit_waypoint, unit_steering)
 				unit["facing"] = unit_displacement.normalized()
@@ -639,7 +672,8 @@ func _process(delta: float) -> void:
 		var unit_kind: String = str(unit["kind"])
 		var is_sniper: bool = unit_kind == "sniper"
 		var is_militia: bool = unit_kind == "militia"
-		var attack_range: float = 390.0 if is_sniper else (MILITIA_RANGE if is_militia else 205.0)
+		var is_heavy: bool = unit_kind == "heavy"
+		var attack_range: float = 390.0 if is_sniper else (MILITIA_RANGE if is_militia else (235.0 if is_heavy else 205.0))
 		if bool(unit.get("garrisoned", false)):
 			attack_range *= 1.35
 		var target_index: int = _find_unit_combat_target(unit_pos, attack_range, is_sniper)
@@ -664,8 +698,12 @@ func _process(delta: float) -> void:
 					marked_zombie["siege_building"] = firing_building_index
 					zombies[target_index] = marked_zombie
 			var unit_rank: int = clampi(int(unit.get("rank", 0)), 0, 3)
-			var unit_damage: float = 80.0 if is_sniper else (16.0 if is_militia else 35.0)
-			var fire_interval: float = (1.05 if is_sniper else (0.85 if is_militia else 0.62)) / (1.0 + float(unit_rank) * 0.10)
+			var unit_damage: float = 80.0 if is_sniper else (16.0 if is_militia else (25.0 if is_heavy else 35.0))
+			var fire_interval: float = (1.05 if is_sniper else (0.24 if is_heavy else (0.85 if is_militia else 0.62))) / (1.0 + float(unit_rank) * 0.10)
+			if is_heavy and str(zombies[target_index].get("kind", "")) == "brute":
+				var staggered_brute: Dictionary = zombies[target_index]
+				staggered_brute["stagger_timer"] = maxf(float(staggered_brute.get("stagger_timer", 0.0)), 0.65)
+				zombies[target_index] = staggered_brute
 			if _is_near_building_type(unit_pos, "ARMORY", ARMORY_RADIUS):
 				fire_interval /= 1.15
 			_damage_zombie(target_index, unit_damage, unit_index)
@@ -675,6 +713,8 @@ func _process(delta: float) -> void:
 			_queue_sfx("gunfire")
 			_rebuild_zombie_spatial_grid()
 		units[unit_index] = unit
+
+	_update_work_orders(sim_delta)
 
 	if wave >= 30 and zombies.is_empty() and pending_wave_spawns <= 0 and civilians.is_empty() and _total_sheltered_civilians() == 0 and not endless_containment:
 		game_state = "victory"
@@ -921,8 +961,16 @@ func _update_building_effects(delta: float) -> void:
 	for unit_index in range(units.size()):
 		var unit: Dictionary = units[unit_index]
 		var max_hp: float = float(unit.get("max_hp", 100.0))
-		if _is_near_building_type(unit["pos"], "HOSPITAL", HOSPITAL_REGEN_RADIUS):
+		if food > 0 and _is_near_building_type(unit["pos"], "HOSPITAL", HOSPITAL_REGEN_RADIUS):
 			unit["hp"] = minf(max_hp, float(unit.get("hp", max_hp)) + 2.0 * delta)
+		if str(unit.get("kind", "")) == "medic" and not bool(unit.get("garrisoned", false)):
+			for ally_index in range(units.size()):
+				if ally_index == unit_index:
+					continue
+				var ally: Dictionary = units[ally_index]
+				if unit["pos"].distance_squared_to(ally["pos"]) <= 110.0 * 110.0:
+					ally["hp"] = minf(float(ally.get("max_hp", 100.0)), float(ally.get("hp", 100.0)) + 6.0 * delta)
+					units[ally_index] = ally
 		units[unit_index] = unit
 	for building_index in range(buildings.size()):
 		if _building_type_at(building_index) != "WAREHOUSE":
@@ -1563,14 +1611,14 @@ func _outpost_recruit_spawn(outpost_index: int, fallback: Vector2) -> Vector2:
 	return outposts[outpost_index]["pos"] + Vector2(0.0, 118.0)
 
 func _recruit_unit(kind: String) -> void:
-	if kind != "infantry" and kind != "sniper" and kind != "engineer":
+	if kind != "infantry" and kind != "sniper" and kind != "engineer" and kind != "medic" and kind != "heavy":
 		return
 	var source_index: int = _best_recruitment_outpost()
 	if source_index < 0:
 		message = "REQUIRES 1 SHELTERED SETTLER IN AN OUTPOST"
 		message_timer = 2.0
 		return
-	var base_cost: int = 60 if kind == "infantry" else (110 if kind == "sniper" else 85)
+	var base_cost: int = 60 if kind == "infantry" else (110 if kind == "sniper" else (85 if kind == "engineer" else (95 if kind == "medic" else 130)))
 	var discounted: bool = _is_near_building_type(outposts[source_index]["pos"], "ARMORY", ARMORY_RADIUS)
 	var cost: int = roundi(float(base_cost) * (0.75 if discounted else 1.0))
 	if funds < cost:
@@ -2294,6 +2342,19 @@ func _handle_tap(pos: Vector2) -> void:
 		return
 	if game_state != "playing":
 		return
+	if _pause_button_rect().has_point(pos):
+		manual_paused = not manual_paused
+		lifecycle_paused = false
+		queue_redraw()
+		return
+	if _radio_log_button_rect().has_point(pos):
+		radio_log_open = not radio_log_open
+		queue_redraw()
+		return
+	if radio_log_open:
+		radio_log_open = false
+		queue_redraw()
+		return
 	if outpost_placement_active and pos.y >= _safe_bottom_y(260.0) and pos.y <= _safe_bottom_y(260.0 - touch_target_size):
 		if pos.x < safe_insets.x + (viewport_size.x - safe_insets.x - safe_insets.z) * 0.5:
 			_confirm_outpost_placement()
@@ -2639,6 +2700,7 @@ func _draw() -> void:
 	_draw_structure_actions()
 	_draw_selection_inspector()
 	_draw_radio_banner()
+	_draw_radio_log()
 	_draw_minimap()
 	_draw_deployment_bar()
 	if outpost_placement_active:
@@ -2986,14 +3048,22 @@ func _draw_minimap() -> void:
 func _draw_hud() -> void:
 	var hud_left: float = safe_insets.x + HUD_EDGE_PADDING
 	var hud_top: float = safe_insets.y + HUD_EDGE_PADDING
-	draw_rect(Rect2(hud_left, hud_top, 390.0, 160.0), Color("#0b1b17", 0.94))
+	draw_rect(Rect2(hud_left, hud_top, 500.0, 160.0), Color("#0b1b17", 0.94))
 	_draw_text("CONTAINMENT PROTOCOL", Vector2(hud_left + 16.0, hud_top + 34.0), 22, Color("#e2f4e9"))
 	if campaign_start_grace_timer > 0.0:
 		_draw_text("PREP  %02d:%02d" % [int(ceil(campaign_start_grace_timer)) / 60, int(ceil(campaign_start_grace_timer)) % 60], Vector2(hud_left + 255.0, hud_top + 34.0), 14, Color("#80e8b1"))
-	_draw_text("FUNDS $%d   SCRAP ⚙%d   FUEL ⛽%.0f" % [funds, scrap, fuel], Vector2(hud_left + 16.0, hud_top + 70.0), 15, Color("#f4d77b"))
+	_draw_text("FUNDS $%d   FOOD 🌾%d   MATS 🪵⚙%d   FUEL %.0f" % [funds, food, scrap, fuel], Vector2(hud_left + 16.0, hud_top + 70.0), 13, Color("#f4d77b"))
 	_draw_text("DAY %d  |  %s  |  WAVE %d" % [survival_day, _format_world_clock(), wave], Vector2(hud_left + 16.0, hud_top + 104.0), 15, Color("#ffad62"))
 	_draw_text("SAVED %d  LOST %d  HORDE %d/%d" % [saved_count, lost_count, zombies.size(), MAX_ACTIVE_ZOMBIES], Vector2(hud_left + 16.0, hud_top + 124.0), 13, Color("#9cbcaf"))
 	_draw_text("%s  |  POP %d  |  SAVED %d" % [day_phase, civilians.size() + _total_sheltered_civilians(), saved_count], Vector2(hud_left + 16.0, hud_top + 144.0), 12, Color("#a9c8b7"))
+	var pause_rect := _pause_button_rect()
+	draw_rect(pause_rect, Color("#472a2a") if not manual_paused else Color("#245a3c"))
+	draw_rect(pause_rect, Color("#e4c66d"), false, 2.0)
+	_draw_text("[PAUSE ||]" if not manual_paused else "[PLAY ▶]", pause_rect.position + Vector2(8.0, 29.0), 13, Color("#fff4c7"))
+	var log_rect := _radio_log_button_rect()
+	draw_rect(log_rect, Color("#183329"))
+	draw_rect(log_rect, Color("#6cb8d1"), false, 2.0)
+	_draw_text("[LOG %d]" % radio_log.size(), log_rect.position + Vector2(12.0, 29.0), 13, Color("#e4f4f6"))
 	if message_timer > 0.0:
 		_draw_text(message, Vector2(hud_left + 16.0, hud_top + 164.0), 14, Color("#ffbd76"))
 	draw_rect(Rect2(hud_left, hud_top + 196.0, 172.0, touch_target_size), Color("#183329"))
@@ -3702,6 +3772,25 @@ func _activate_rescue_broadcast() -> void:
 	message_timer = 2.4
 	world_callouts.append({"pos": outposts[target_index]["pos"], "text": "SOS BEACON", "life": 2.5})
 
+func _pause_button_rect() -> Rect2:
+	return Rect2(safe_insets.x + HUD_EDGE_PADDING + 350.0, safe_insets.y + HUD_EDGE_PADDING + 104.0, 130.0, 42.0)
+
+func _radio_log_button_rect() -> Rect2:
+	return Rect2(safe_insets.x + HUD_EDGE_PADDING + 350.0, safe_insets.y + HUD_EDGE_PADDING + 58.0, 130.0, 40.0)
+
+func _draw_radio_log() -> void:
+	if not radio_log_open:
+		return
+	var panel := Rect2(safe_insets.x + 22.0, safe_insets.y + 220.0, viewport_size.x - safe_insets.x - safe_insets.z - 44.0, minf(440.0, viewport_size.y * 0.48))
+	draw_rect(panel, Color("#0b171b", 0.97))
+	draw_rect(panel, Color("#6cb8d1"), false, 2.0)
+	_draw_text("THE LAZARUS FILES  //  COMMAND LOG", panel.position + Vector2(14.0, 28.0), 15, Color("#83d8ef"))
+	var visible_count: int = mini(7, radio_log.size())
+	for entry_index in range(visible_count):
+		var source_index: int = radio_log.size() - visible_count + entry_index
+		_draw_text(radio_log[source_index], panel.position + Vector2(14.0, 66.0 + float(entry_index) * 48.0), 11, Color("#e4f4f6"))
+	_draw_text("TAP ANYWHERE TO CLOSE", panel.position + Vector2(14.0, panel.size.y - 18.0), 10, Color("#83d8ef"))
+
 func _update_day_phase() -> void:
 	var minute_of_day: float = fposmod(world_clock_minutes, 1440.0)
 	if minute_of_day >= 1260.0 or minute_of_day < 300.0:
@@ -3717,15 +3806,20 @@ func _format_world_clock() -> String:
 	var minute_of_day: int = int(floor(fposmod(world_clock_minutes, 1440.0)))
 	return "%02d:%02d" % [int(minute_of_day / 60), minute_of_day % 60]
 
-func _is_position_illuminated(position: Vector2) -> bool:
+func _refresh_light_source_cache() -> void:
+	cached_light_sources.clear()
 	for outpost in outposts:
-		if position.distance_to(outpost["pos"]) <= float(outpost.get("floodlight_radius", 300.0)):
-			return true
+		var radius: float = float(outpost.get("floodlight_radius", 300.0))
+		cached_light_sources.append({"pos": outpost["pos"], "radius_squared": radius * radius})
 	for flare in flares:
-		if position.distance_to(flare["pos"]) <= FLARE_LURE_RADIUS:
-			return true
+		cached_light_sources.append({"pos": flare["pos"], "radius_squared": FLARE_LURE_RADIUS * FLARE_LURE_RADIUS})
 	for vehicle in vehicles:
-		if bool(vehicle.get("active", false)) and str(vehicle.get("kind", "")) != "helicopter" and position.distance_to(vehicle["pos"]) <= 140.0:
+		if bool(vehicle.get("active", false)) and str(vehicle.get("kind", "")) != "helicopter":
+			cached_light_sources.append({"pos": vehicle["pos"], "radius_squared": 140.0 * 140.0})
+
+func _is_position_illuminated(position: Vector2) -> bool:
+	for light in cached_light_sources:
+		if position.distance_squared_to(light["pos"]) <= float(light["radius_squared"]):
 			return true
 	return false
 
