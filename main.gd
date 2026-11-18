@@ -2962,6 +2962,9 @@ func _is_position_visible(world_position: Vector2) -> bool:
 	for flare in flares:
 		if world_position.distance_squared_to(flare["pos"]) <= 260.0 * 260.0:
 			return true
+	for building in constructed_buildings:
+		if str(building.get("kind", "")) == "watchtower" and world_position.distance_squared_to(building["pos"]) <= 520.0 * 520.0:
+			return true
 	return false
 
 func _draw_fog() -> void:
@@ -3327,18 +3330,20 @@ func _draw_deployment_bar() -> void:
 	var button_width: float = safe_width / float(choices.size())
 	var cards_top: float = top + touch_target_size + 6.0
 	var card_height: float = panel_height - touch_target_size - 6.0
+	var item_title_size: int = 9 if choices.size() > 6 else 13
+	var item_detail_size: int = 8 if choices.size() > 6 else 12
 	for i in range(choices.size()):
 		var x: float = safe_left + float(i) * button_width
 		var selected := i == selected_deployment
 		draw_rect(Rect2(x + 3.0, cards_top, button_width - 6.0, card_height), Color("#254538") if selected else Color("#12251f"))
 		draw_rect(Rect2(x + 3.0, cards_top, button_width - 6.0, card_height), Color("#72d69a") if selected else Color("#29443a"), false, 2.0)
 		var deployment: Dictionary = choices[i]
-		_draw_text(str(deployment["name"]), Vector2(x + 8.0, cards_top + card_height * 0.27), 13, Color("#e8fff0") if selected else Color("#b2c7bc"))
+		_draw_text(str(deployment["name"]), Vector2(x + 5.0, cards_top + card_height * 0.27), item_title_size, Color("#e8fff0") if selected else Color("#b2c7bc"))
 		var detail := str(deployment["detail"])
 		if str(deployment["kind"]) == "outpost":
 			detail = "$%d" % _deployment_cost("outpost")
-		_draw_text(detail, Vector2(x + 8.0, cards_top + card_height * 0.52), 12, Color("#f0cc77"))
-		_draw_text("TAP MAP", Vector2(x + 8.0, cards_top + card_height * 0.78), 10, Color("#8da99a"))
+		_draw_text(detail, Vector2(x + 5.0, cards_top + card_height * 0.52), item_detail_size, Color("#f0cc77"))
+		_draw_text("TAP MAP", Vector2(x + 5.0, cards_top + card_height * 0.78), 8 if choices.size() > 6 else 10, Color("#8da99a"))
 
 func _select_structure_at(world_position: Vector2) -> bool:
 	for index in range(outposts.size() - 1, -1, -1):
