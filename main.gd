@@ -25,11 +25,6 @@ const STRUCTURE_REPAIR_COST := 40
 const STRUCTURE_UPGRADE_COST := 150
 const DIAGNOSTIC_BUTTON := Rect2(210.0, 214.0, 94.0, 52.0)
 const STRUCTURE_ACTION_TOP := 350.0
-const MEDEVAC_COST := 250
-const MEDEVAC_HP := 150.0
-const MEDEVAC_RING := 95.0
-const MEDEVAC_CAPACITY := 8
-const MEDEVAC_LANDING_TIME := 3.0
 const GRID_CELL_SIZE := 64.0
 const UNIT_SELECT_RADIUS := 30.0
 const BUILDING_RADIUS := 11.0
@@ -75,7 +70,6 @@ var world_callouts: Array[Dictionary] = []
 var selected_vehicle_index := -1
 var barricades: Array[Dictionary] = []
 var flares: Array[Dictionary] = []
-var medevac: Dictionary = {}
 var sector_index := 0
 var sector_name := "Downtown Grid"
 var sector_wave_limit := 30
@@ -236,7 +230,6 @@ func _start_sector(index: int) -> void:
 	shelter_flush_timer = 15.0
 	supply_drop_timer = 150.0
 	day_phase = "DAY"
-	medevac.clear()
 	camera_position = scenario_camera_target
 	camera_zoom = 0.62
 	command_tab = 0
@@ -396,25 +389,6 @@ func _process(delta: float) -> void:
 		var lure_index: int = _find_nearest_flare(zpos)
 		if lure_index >= 0:
 			target = flares[lure_index]["pos"]
-		if not medevac.is_empty() and str(medevac.get("phase", "")) == "landed" and zpos.distance_to(medevac["pos"]) <= 150.0:
-			target = medevac["pos"]
-		var zombie_kind: String = str(zombie["kind"])
-		var speed := 112.0 if zombie_kind == "runner" else 61.0
-		if zombie_kind == "brute":
-			speed = 34.0
-		var displacement: Vector2 = (target - zpos).normalized() * speed * sim_delta
-		if not medevac.is_empty() and str(medevac.get("phase", "")) == "landed" and zpos.distance_to(medevac["pos"]) <= 34.0:
-			var medevac_cooldown: float = float(zombie.get("medevac_cooldown", 0.0))
-			if medevac_cooldown <= 0.0:
-				medevac["hp"] = maxf(0.0, float(medevac["hp"]) - (35.0 if zombie_kind == "brute" else 20.0))
-				zombie["medevac_cooldown"] = 1.0
-				if float(medevac["hp"]) <= 0.0:
-					lost_count += int(medevac.get("onboard", 0))
-					message = "MEDEVAC DESTROYED — ONBOARD LOST"
-					message_timer = 2.5
-					medevac.clear()
-			else:
-				zombie["medevac_cooldown"] = maxf(0.0, medevac_cooldown - sim_delta)
 		zpos = _move_circle_with_buildings(zpos, displacement, 10.0 if zombie_kind == "brute" else 7.0, sim_delta, target, zombie, true)
 		var contacted_building_index: int = _building_contact_index(zpos, 22.0)
 		if contacted_building_index < 0 and siege_building_index >= 0 and siege_building_index < buildings.size() and zpos.distance_to(buildings[siege_building_index].get_center()) <= 28.0:
@@ -654,11 +628,11 @@ func _process(delta: float) -> void:
 			_rebuild_zombie_spatial_grid()
 		units[unit_index] = unit
 
-	if wave >= 30 and zombies.is_empty() and pending_wave_spawns <= 0 and civilians.is_empty() and medevac.is_empty() and _total_sheltered_civilians() == 0 and not endless_containment:
+	if wave >= 30 and zombies.is_empty() and pending_wave_spawns <= 0 and civilians.is_empty() and _total_sheltered_civilians() == 0 and not endless_containment:
 		game_state = "victory"
 		_save_operation()
 		message = "SECTOR SECURED"
-	elif civilians.is_empty() and saved_count == 0 and lost_count > 0 and medevac.is_empty() and _total_sheltered_civilians() == 0:
+	elif civilians.is_empty() and saved_count == 0 and lost_count > 0 and _total_sheltered_civilians() == 0:
 		game_state = "defeat"
 		message = "EVACUATION FAILED"
 
@@ -2438,49 +2412,6 @@ func _handle_tap(pos: Vector2) -> void:
 	message_timer = 1.6
 	queue_redraw()
 
-func _update_medevac(delta: float) -> void:
-	if medevac.is_empty():
-		return
-	var phase: String = str(medevac["phase"])
-	var position: Vector2 = medevac["pos"]
-	if phase == "inbound":
-		var target: Vector2 = medevac["target"]
-		position.x = move_toward(position.x, target.x, 260.0 * delta)
-		if absf(position.x - target.x) <= 1.0:
-			position = target
-			medevac["phase"] = "landed"
-			medevac["landing_timer"] = MEDEVAC_LANDING_TIME
-			var extracted := 0
-			for civilian_index in range(civilians.size() - 1, -1, -1):
-				if extracted >= MEDEVAC_CAPACITY:
-					break
-				if position.distance_to(civilians[civilian_index]) <= MEDEVAC_RING:
-					civilians.remove_at(civilian_index)
-					if civilian_index < civilian_steering.size():
-						civilian_steering.remove_at(civilian_index)
-					extracted += 1
-			medevac["onboard"] = extracted
-			_flush_nearby_shelters(position)
-			if extracted > 0:
-				message = "MEDEVAC ABOARD — %d CIVILIANS" % extracted
-				message_timer = 2.0
-	elif phase == "landed":
-		medevac["landing_timer"] = float(medevac["landing_timer"]) - delta
-		medevac["attack_flash"] = maxf(0.0, float(medevac.get("attack_flash", 0.0)) - delta)
-		if float(medevac["landing_timer"]) <= 0.0:
-			var rescued: int = int(medevac.get("onboard", 0))
-			saved_count += rescued
-			funds += rescued * 40
-			message = "MEDEVAC LIFTED — +$%d" % (rescued * 40)
-			message_timer = 2.0
-			medevac["phase"] = "outbound"
-	elif phase == "outbound":
-		position.x += 260.0 * delta
-		if position.x > WORLD_SIZE.x + 100.0:
-			medevac.clear()
-			return
-	medevac["pos"] = position
-
 func _execute_airstrike(center: Vector2) -> void:
 	airstrike_marker = center
 	airstrike_timer = 0.8
@@ -2701,25 +2632,6 @@ func _draw_pause_overlay() -> void:
 	draw_rect(Rect2(viewport_size * 0.5 - Vector2(210.0, -10.0), Vector2(420.0, 100.0)), Color("#244a38"))
 	draw_rect(Rect2(viewport_size * 0.5 - Vector2(210.0, -10.0), Vector2(420.0, 100.0)), Color("#8ce5ad"), false, 3.0)
 	_draw_text("RESUME  /  BACK", viewport_size * 0.5 + Vector2(-115.0, 70.0), 24, Color("#f0fff5"))
-
-func _draw_medevac() -> void:
-	if medevac.is_empty():
-		return
-	var position: Vector2 = medevac["pos"]
-	var phase: String = str(medevac["phase"])
-	if phase == "landed":
-		draw_circle(position, MEDEVAC_RING, Color(0.12, 0.95, 0.42, 0.10))
-		draw_arc(position, MEDEVAC_RING, 0.0, TAU, 64, Color("#63f59a"), 3.0)
-		draw_arc(position, MEDEVAC_RING - 8.0, 0.0, TAU, 64, Color(0.45, 1.0, 0.65, 0.35), 1.0)
-	draw_line(position + Vector2(-34.0, -18.0), position + Vector2(34.0, -18.0), Color("#d7e8e1"), 3.0)
-	draw_line(position + Vector2(0.0, -18.0), position + Vector2(0.0, 18.0), Color("#d7e8e1"), 2.0)
-	draw_rect(Rect2(position + Vector2(-24.0, -9.0), Vector2(48.0, 18.0)), Color("#5ccf91"))
-	draw_circle(position + Vector2(24.0, 0.0), 8.0, Color("#b9e8d1"))
-	if phase == "landed":
-		var hp_ratio: float = clampf(float(medevac["hp"]) / MEDEVAC_HP, 0.0, 1.0)
-		draw_rect(Rect2(position + Vector2(-28.0, 25.0), Vector2(56.0, 5.0)), Color("#552b2b"))
-		draw_rect(Rect2(position + Vector2(-28.0, 25.0), Vector2(56.0 * hp_ratio, 5.0)), Color("#65ee96"))
-		_draw_text("ONBOARD %d/8" % int(medevac.get("onboard", 0)), position + Vector2(-40.0, 48.0), 11, Color("#aaffc5"))
 
 func _is_position_visible(world_position: Vector2) -> bool:
 	for zone in evacuation_zones:
@@ -3498,17 +3410,6 @@ func _shelter_flush_timer_step(delta: float) -> void:
 			message = "OUTPOST EVACUATION — %d CIVILIANS  +$%d" % [sheltered, sheltered * 35]
 			message_timer = 2.0
 
-func _flush_nearby_shelters(position: Vector2) -> void:
-	for index in range(outposts.size()):
-		if position.distance_to(outposts[index]["pos"]) <= 180.0:
-			var sheltered: int = int(outposts[index].get("sheltered", 0))
-			if sheltered > 0:
-				saved_count += sheltered
-				funds += sheltered * 35
-				outposts[index]["sheltered"] = 0
-				message = "MEDEVAC CLEARED OUTPOST — %d RESCUED" % sheltered
-				message_timer = 2.0
-
 func _spawn_refugee_wave() -> void:
 	for district in spawn_districts:
 		for refugee_index in range(10 + int(wave / 5) * 2):
@@ -3693,7 +3594,6 @@ func _resume_operation() -> void:
 	turrets.assign(state.get("turrets", []))
 	barricades.assign(state.get("barricades", []))
 	flares.assign(state.get("flares", []))
-	medevac = {}
 	camera_position = state.get("camera_position", WORLD_SIZE * 0.5)
 	camera_zoom = float(state.get("camera_zoom", 0.62))
 	elapsed = float(state.get("elapsed", 0.0))
