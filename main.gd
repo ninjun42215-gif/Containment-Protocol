@@ -16,6 +16,13 @@ const TURRET_COST := 140
 const WALL_COST := 75
 const OUTPOST_INCOME_INTERVAL := 5.0
 const TURRET_RANGE := 220.0
+const OUTPOST_COMMAND_RADIUS := 320.0
+const OUTPOST_MAX_COUNT := 4
+const OUTPOST_COST_STEP := 60
+const STRUCTURE_REPAIR_COST := 40
+const STRUCTURE_UPGRADE_COST := 150
+const DIAGNOSTIC_BUTTON := Rect2(210.0, 214.0, 94.0, 52.0)
+const STRUCTURE_ACTION_TOP := 350.0
 const MEDEVAC_COST := 250
 const MEDEVAC_HP := 150.0
 const MEDEVAC_RING := 95.0
@@ -105,6 +112,12 @@ var multi_touch_gesture := false
 var previous_pinch_center := Vector2.ZERO
 var command_tab := 0
 var viewport_size := VIEW_SIZE
+var selected_structure_type := ""
+var selected_structure_index := -1
+var diagnostics_enabled := false
+var fps_sample_timer := 0.0
+var fps_sample_value := 0
+var fps_frame_count := 0
 
 func _ready() -> void:
 	randomize()
@@ -170,6 +183,12 @@ func _start_sector(index: int) -> void:
 	game_state = "playing"
 	selected_deployment = 0
 	selected_unit_index = -1
+	selected_structure_type = ""
+	selected_structure_index = -1
+	diagnostics_enabled = false
+	fps_sample_timer = 0.0
+	fps_sample_value = 0
+	fps_frame_count = 0
 	time_scale_index = 0
 	bullet_tracers.clear()
 	muzzle_flashes.clear()
@@ -190,6 +209,13 @@ func _start_sector(index: int) -> void:
 
 func _process(delta: float) -> void:
 	_update_audio()
+	if delta > 0.0:
+		fps_frame_count += 1
+		fps_sample_timer += delta
+		if fps_sample_timer >= 0.5:
+			fps_sample_value = roundi(float(fps_frame_count) / fps_sample_timer)
+			fps_frame_count = 0
+			fps_sample_timer = 0.0
 	_update_combat_effects(delta)
 	if game_state != "playing":
 		queue_redraw()
@@ -219,20 +245,29 @@ func _process(delta: float) -> void:
 	for i in range(civilians.size() - 1, -1, -1):
 		var civilian: Vector2 = civilians[i]
 		var civilian_safe_target := _nearest_evac_zone(civilian)
+		var nearest_outpost_distance := INF
 		for outpost in outposts:
-			if civilian.distance_to(outpost["pos"]) <= float(outpost["safe_radius"]):
+			if int(outpost.get("safe_count", 0)) >= int(outpost.get("capacity", 8)):
+				continue
+			var outpost_distance: float = civilian.distance_squared_to(outpost["pos"])
+			if outpost_distance <= float(outpost["safe_radius"]) * float(outpost["safe_radius"]) and outpost_distance < nearest_outpost_distance:
+				nearest_outpost_distance = outpost_distance
 				civilian_safe_target = outpost["pos"]
-				break
 		var direction: Vector2 = (civilian_safe_target - civilian).normalized()
 		var displacement: Vector2 = direction * 43.0 * sim_delta
-		civilian = _move_circle_with_buildings(civilian, displacement, 5.5)
+		civilian = _move_circle_with_buildings(civilian, displacement, 5.5, civilian_safe_target)
 		civilians[i] = civilian
 		var reached_safe_zone := civilian.distance_to(_nearest_evac_zone(civilian)) <= EVAC_RADIUS
-		for outpost in outposts:
-			if civilian.distance_to(outpost["pos"]) <= 28.0:
+		var reached_outpost_index := -1
+		for outpost_index in range(outposts.size()):
+			var safe_outpost: Dictionary = outposts[outpost_index]
+			if civilian.distance_to(safe_outpost["pos"]) <= 28.0 and int(safe_outpost.get("safe_count", 0)) < int(safe_outpost.get("capacity", 8)):
+				reached_outpost_index = outpost_index
 				reached_safe_zone = true
 				break
 		if reached_safe_zone:
+			if reached_outpost_index >= 0:
+				outposts[reached_outpost_index]["safe_count"] = int(outposts[reached_outpost_index].get("safe_count", 0)) + 1
 			civilians.remove_at(i)
 			saved_count += 1
 			funds += 25
@@ -270,7 +305,7 @@ func _process(delta: float) -> void:
 					medevac.clear()
 			else:
 				zombie["medevac_cooldown"] = maxf(0.0, medevac_cooldown - sim_delta)
-		zpos = _move_circle_with_buildings(zpos, displacement, 10.0 if zombie_kind == "brute" else 7.0)
+		zpos = _move_circle_with_buildings(zpos, displacement, 10.0 if zombie_kind == "brute" else 7.0, target)
 
 		for wall_index in range(barricades.size() - 1, -1, -1):
 			var wall: Dictionary = barricades[wall_index]
@@ -341,9 +376,10 @@ func _process(delta: float) -> void:
 		var outpost: Dictionary = outposts[outpost_index]
 		outpost["income_timer"] = float(outpost["income_timer"]) - sim_delta
 		if float(outpost["income_timer"]) <= 0.0:
-			funds += 15
+			var income_amount := 25 if int(outpost.get("level", 1)) >= 2 else 15
+			funds += income_amount
 			outpost["income_timer"] = OUTPOST_INCOME_INTERVAL
-			message = "OUTPOST SUPPLY +$15"
+			message = "OUTPOST SUPPLY +$%d" % income_amount
 			message_timer = 0.8
 		outposts[outpost_index] = outpost
 
@@ -351,12 +387,26 @@ func _process(delta: float) -> void:
 		var turret: Dictionary = turrets[turret_index]
 		turret["cooldown"] = maxf(0.0, float(turret["cooldown"]) - sim_delta)
 		if float(turret["cooldown"]) <= 0.0:
-			var target_zombie := _find_nearest_zombie(turret["pos"], TURRET_RANGE)
+			var turret_range := float(turret.get("range", TURRET_RANGE))
+			var target_zombie := _find_nearest_zombie(turret["pos"], turret_range)
 			if target_zombie >= 0:
 				var turret_target: Vector2 = zombies[target_zombie]["pos"]
-				_add_bullet_tracer(turret["pos"], turret_target)
-				_damage_zombie(target_zombie, 22.0)
-				turret["cooldown"] = 0.18
+				var turret_damage := float(turret.get("damage", 22.0))
+				var base_interval := float(turret.get("fire_interval", 0.18))
+				var command_buff := false
+				for command_outpost in outposts:
+					if turret["pos"].distance_to(command_outpost["pos"]) <= OUTPOST_COMMAND_RADIUS:
+						command_buff = true
+						break
+				var fire_interval := base_interval * (0.8 if command_buff else 1.0)
+				if int(turret.get("level", 1)) >= 2:
+					var tracer_direction := (turret_target - turret["pos"]).normalized().orthogonal() * 5.0
+					_add_bullet_tracer(turret["pos"] + tracer_direction, turret_target + tracer_direction)
+					_add_bullet_tracer(turret["pos"] - tracer_direction, turret_target - tracer_direction)
+				else:
+					_add_bullet_tracer(turret["pos"], turret_target)
+				_damage_zombie(target_zombie, turret_damage)
+				turret["cooldown"] = fire_interval
 				zombie_grid = _build_zombie_spatial_grid()
 		turrets[turret_index] = turret
 
@@ -469,7 +519,7 @@ func _find_nearest_entity(grid: Dictionary, positions: Array[Vector2], origin: V
 func _find_nearest_zombie(origin: Vector2, radius: float) -> int:
 	return _find_nearest_entity(zombie_grid, zombie_positions, origin, radius)
 
-func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius: float) -> Vector2:
+func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius: float, target: Vector2 = Vector2.ZERO) -> Vector2:
 	var position: Vector2 = origin
 	var remaining: Vector2 = displacement
 	for iteration in range(2):
@@ -502,7 +552,29 @@ func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius:
 				candidate = closest + normal * radius
 				var into_wall: float = remaining.dot(normal)
 				if into_wall < 0.0:
+					var original_progress := remaining.dot((target - position).normalized()) if target != Vector2.ZERO else 0.0
 					remaining -= normal * into_wall
+					var tangent_progress := remaining.dot((target - candidate).normalized()) if target != Vector2.ZERO else remaining.length()
+					if target != Vector2.ZERO and original_progress > 0.0 and tangent_progress < original_progress * 0.35:
+						var corners: Array[Vector2] = [
+							building.position - Vector2(radius, radius),
+							Vector2(building.end.x + radius, building.position.y - radius),
+							building.end + Vector2(radius, radius),
+							Vector2(building.position.x - radius, building.end.y + radius)
+						]
+						var nearest_corner := corners[0]
+						var nearest_corner_distance := target.distance_squared_to(nearest_corner)
+						for corner in corners:
+							var corner_distance := target.distance_squared_to(corner)
+							if corner_distance < nearest_corner_distance:
+								nearest_corner = corner
+								nearest_corner_distance = corner_distance
+						var tangent := (nearest_corner - candidate).normalized()
+						tangent = tangent - normal * tangent.dot(normal)
+						if tangent.length_squared() > 0.001:
+							if tangent.dot(target - candidate) < 0.0:
+								tangent = -tangent
+							remaining = tangent.normalized() * maxf(remaining.length(), displacement.length() * 0.65)
 		position = candidate
 	return position
 
@@ -760,9 +832,19 @@ func _handle_tap(pos: Vector2) -> void:
 		"infantry", "sniper":
 			units.append({"pos": world_pos, "kind": kind, "cooldown": 0.1})
 		"outpost":
-			outposts.append({"pos": world_pos, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": 175.0, "vision_radius": 260.0, "hp": 500.0})
+			if outposts.size() >= OUTPOST_MAX_COUNT:
+				message = "OUTPOST LIMIT REACHED (4)"
+				message_timer = 1.5
+				return
+			var outpost_cost := OUTPOST_COST + outposts.size() * OUTPOST_COST_STEP
+			if funds < outpost_cost:
+				message = "OUTPOST COST $%d — INSUFFICIENT FUNDS" % outpost_cost
+				message_timer = 1.5
+				return
+			outposts.append({"pos": world_pos, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": 175.0, "vision_radius": 260.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 500.0, "max_hp": 500.0, "level": 1, "capacity": 8, "safe_count": 0})
+			cost = outpost_cost
 		"turret":
-			turrets.append({"pos": world_pos, "hp": 250.0, "max_hp": 250.0, "cooldown": 0.1})
+			turrets.append({"pos": world_pos, "hp": 250.0, "max_hp": 250.0, "cooldown": 0.1, "level": 1, "range": TURRET_RANGE, "damage": 22.0, "fire_interval": 0.18})
 		"wall":
 			barricades.append({"pos": world_pos, "hp": 400.0, "max_hp": 400.0})
 	funds -= cost
