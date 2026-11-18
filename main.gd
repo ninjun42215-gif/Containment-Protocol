@@ -153,6 +153,7 @@ var command_tab := 0
 var viewport_size := VIEW_SIZE
 var safe_insets := Vector4.ZERO
 var safe_area_rect := Rect2(Vector2.ZERO, VIEW_SIZE)
+var touch_target_size := MIN_TOUCH_TARGET
 var selected_structure_type := ""
 var selected_structure_index := -1
 var diagnostics_enabled := false
@@ -1270,7 +1271,7 @@ func _input(event: InputEvent) -> void:
 				if can_start_placement:
 					_begin_outpost_placement(touch_world, "hq" if game_state == "hq_placement" else "outpost")
 				elif outpost_placement_active:
-					if outpost_placement_rect.grow(maxf(24.0, MIN_TOUCH_TARGET * 0.5 / maxf(camera_zoom, 0.01))).has_point(touch_world):
+					if outpost_placement_rect.grow(maxf(24.0, touch_target_size * 0.5 / maxf(camera_zoom, 0.01))).has_point(touch_world):
 						_begin_outpost_resize(touch_world)
 					elif (game_state == "hq_placement" and touch.position.y >= _safe_bottom_y(150.0)) or (game_state == "playing" and touch.position.y >= _safe_bottom_y(260.0) and touch.position.y <= _safe_bottom_y(206.0)):
 						outpost_placement_gesture_mode = ""
@@ -1343,7 +1344,7 @@ func _input(event: InputEvent) -> void:
 				if can_start_placement:
 					_begin_outpost_placement(mouse_world, "hq" if game_state == "hq_placement" else "outpost")
 				elif outpost_placement_active:
-					if outpost_placement_rect.grow(maxf(24.0, MIN_TOUCH_TARGET * 0.5 / maxf(camera_zoom, 0.01))).has_point(mouse_world):
+					if outpost_placement_rect.grow(maxf(24.0, touch_target_size * 0.5 / maxf(camera_zoom, 0.01))).has_point(mouse_world):
 						_begin_outpost_resize(mouse_world)
 					elif (game_state == "hq_placement" and mouse.position.y >= _safe_bottom_y(150.0)) or (game_state == "playing" and mouse.position.y >= _safe_bottom_y(260.0) and mouse.position.y <= _safe_bottom_y(206.0)):
 						outpost_placement_gesture_mode = ""
@@ -2168,7 +2169,7 @@ func _draw_placement_preview() -> void:
 		var footprint_color: Color = Color("#55ef91") if outpost_placement_valid else Color("#ff5d62")
 		draw_rect(outpost_placement_rect, Color(footprint_color.r, footprint_color.g, footprint_color.b, 0.14))
 		draw_rect(outpost_placement_rect, footprint_color, false, 5.0)
-		var handle_radius: float = MIN_TOUCH_TARGET * 0.5 / maxf(camera_zoom, 0.01)
+		var handle_radius: float = touch_target_size * 0.5 / maxf(camera_zoom, 0.01)
 		var handle_points: Array[Vector2] = [outpost_placement_rect.position, Vector2(outpost_placement_rect.end.x, outpost_placement_rect.position.y), outpost_placement_rect.end, Vector2(outpost_placement_rect.position.x, outpost_placement_rect.end.y)]
 		for handle_point in handle_points:
 			draw_circle(handle_point, handle_radius, Color(footprint_color.r, footprint_color.g, footprint_color.b, 0.18))
@@ -2374,6 +2375,8 @@ func _refresh_safe_area() -> void:
 	var safe_right_px: int = clampi(screen_size.x - display_safe_area.end.x, 0, screen_size.x)
 	var safe_bottom_px: int = clampi(screen_size.y - display_safe_area.end.y, 0, screen_size.y)
 	var viewport_scale: Vector2 = viewport_size / Vector2(screen_size)
+	var screen_dpi: int = maxi(DisplayServer.screen_get_dpi(), 160)
+	touch_target_size = maxf(MIN_TOUCH_TARGET, 48.0 * float(screen_dpi) / 160.0 * maxf(viewport_scale.x, viewport_scale.y))
 	safe_insets = Vector4(float(safe_left_px) * viewport_scale.x, float(safe_top_px) * viewport_scale.y, float(safe_right_px) * viewport_scale.x, float(safe_bottom_px) * viewport_scale.y)
 	var max_horizontal_inset: float = viewport_size.x * 0.20
 	var max_vertical_inset: float = viewport_size.y * 0.20
@@ -2388,6 +2391,9 @@ func _safe_viewport_size() -> Vector2:
 
 func _safe_bottom_y(panel_height: float) -> float:
 	return maxf(safe_insets.y, viewport_size.y - safe_insets.w - panel_height)
+
+func _deployment_panel_height() -> float:
+	return maxf(200.0, touch_target_size + 146.0)
 
 func _camera_view_rect() -> Rect2:
 	var size: Vector2 = viewport_size / maxf(camera_zoom, 0.01)
