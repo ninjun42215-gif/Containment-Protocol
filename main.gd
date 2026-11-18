@@ -224,6 +224,11 @@ func _start_sector(index: int) -> void:
 			if _is_open_world_position(spawn_point, 18.0):
 				civilians.append(spawn_point)
 				civilian_steering.append({})
+	for district in spawn_districts:
+		for outbreak_index in range(6):
+			var outbreak_position := Vector2(randf_range(district.position.x, district.end.x), randf_range(district.position.y, district.end.y))
+			if _is_open_world_position(outbreak_position, 18.0):
+				zombies.append({"pos": outbreak_position, "kind": "shambler", "hp": 30.0, "max_hp": 30.0, "wall_cooldown": 0.0})
 	message = "SCOUT THE CITY — SELECT PRIMARY HQ LOCATION"
 	message_timer = 6.0
 	camera_position = WORLD_SIZE * 0.5
@@ -261,9 +266,11 @@ func _process(delta: float) -> void:
 	if wave < 30 and wave_timer <= 0.0:
 		_spawn_wave()
 		wave_timer = 180.0
+		_save_operation()
 	elif wave >= 30 and endless_containment and wave_timer <= 0.0:
 		_spawn_wave()
 		wave_timer = 180.0
+		_save_operation()
 	_shelter_flush_timer_step(sim_delta)
 	_update_supply_drops(sim_delta)
 	var phase_index: int = (maxi(wave, 1) - 1) / 6 % 3
@@ -698,7 +705,6 @@ func _spawn_wave() -> void:
 		zombies.append({"pos": Vector2(x, y), "kind": kind, "hp": hp, "max_hp": hp, "wall_cooldown": 0.0})
 	if wave % 5 == 0:
 		_spawn_refugee_wave()
-	_save_operation()
 	message = "PHASE %d — HORDE WAVE %d INBOUND" % [ceili(float(wave) / 6.0), wave]
 	message_timer = 3.0
 
@@ -781,7 +787,7 @@ func _input(event: InputEvent) -> void:
 
 func _handle_tap(pos: Vector2) -> void:
 	if game_state == "title":
-		if pos.y >= viewport_size.y * 0.63 and FileAccess.file_exists(save_path):
+		if pos.y >= viewport_size.y * 0.63 and _has_valid_save():
 			_resume_operation()
 		else:
 			game_state = "sector_select"
@@ -815,7 +821,14 @@ func _handle_tap(pos: Vector2) -> void:
 		queue_redraw()
 		return
 	if game_state == "victory" or game_state == "defeat":
-		game_state = "sector_select"
+		if game_state == "victory" and wave >= 30 and pos.y >= viewport_size.y * 0.66 and pos.y <= viewport_size.y * 0.82:
+			endless_containment = true
+			game_state = "playing"
+			wave_timer = 1.0
+			message = "ENDLESS CONTAINMENT ACTIVATED"
+			message_timer = 3.0
+		else:
+			game_state = "sector_select"
 		queue_redraw()
 		return
 	if game_state != "playing":
@@ -1210,7 +1223,7 @@ func _draw_entities() -> void:
 		draw_circle(civilian, 2.0, Color("#e3f8ff"))
 	for zombie in zombies:
 		var p: Vector2 = zombie["pos"]
-		if not visible_rect.has_point(p) or not _is_position_visible(p):
+		if not visible_rect.has_point(p) or (game_state != "hq_placement" and not _is_position_visible(p)):
 			continue
 		var kind: String = str(zombie["kind"])
 		if kind == "runner":
@@ -1652,6 +1665,10 @@ func _draw_end_screen() -> void:
 	_draw_text("CIVILIANS LOST: %d" % lost_count, Vector2(viewport_size.x * 0.26, viewport_size.y * 0.52), 22, Color("#e0a0a0"))
 	draw_rect(Rect2(viewport_size.x * 0.21, viewport_size.y * 0.57, viewport_size.x * 0.58, 90), Color("#244a38"))
 	draw_rect(Rect2(viewport_size.x * 0.21, viewport_size.y * 0.57, viewport_size.x * 0.58, 90), Color("#8ce5ad"), false, 3.0)
+	if wave >= 30 and game_state == "victory":
+		draw_rect(Rect2(viewport_size.x * 0.21, viewport_size.y * 0.68, viewport_size.x * 0.58, 72.0), Color("#3a3420"))
+		draw_rect(Rect2(viewport_size.x * 0.21, viewport_size.y * 0.68, viewport_size.x * 0.58, 72.0), Color("#e4c66d"), false, 2.0)
+		_draw_text("CONTINUE ENDLESS CONTAINMENT", Vector2(viewport_size.x * 0.245, viewport_size.y * 0.725), 16, Color("#fff4c7"))
 	_draw_text("RETURN TO SECTOR SELECT", Vector2(viewport_size.x * 0.25, viewport_size.y * 0.615), 20, Color("#f0fff5"))
 
 
@@ -1799,6 +1816,16 @@ func _restore_variant(value: Variant) -> Variant:
 		return restored_array
 	return value
 
+func _has_valid_save() -> bool:
+	if not FileAccess.file_exists(save_path):
+		return false
+	var save_file := FileAccess.open(save_path, FileAccess.READ)
+	if save_file == null:
+		return false
+	var parsed: Variant = JSON.parse_string(save_file.get_as_text())
+	save_file.close()
+	return parsed is Dictionary and int(parsed.get("version", 0)) == 1
+
 func _save_operation() -> void:
 	if not campaign_started:
 		return
@@ -1868,7 +1895,6 @@ func _draw_world_scene() -> void:
 	_draw_grid()
 	_draw_buildings()
 	_draw_evac_zone()
-	_draw_fog()
 	_draw_entities()
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
