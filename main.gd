@@ -71,6 +71,7 @@ var pending_wave_spawn_timer := 0.0
 var units: Array[Dictionary] = []
 var vehicles: Array[Dictionary] = []
 var auto_ops_enabled := true
+var selected_vehicle_index := -1
 var barricades: Array[Dictionary] = []
 var flares: Array[Dictionary] = []
 var medevac: Dictionary = {}
@@ -214,6 +215,7 @@ func _start_sector(index: int) -> void:
 	zombies.clear()
 	units.clear()
 	vehicles.clear()
+	selected_vehicle_index = -1
 	auto_ops_enabled = true
 	barricades.clear()
 	flares.clear()
