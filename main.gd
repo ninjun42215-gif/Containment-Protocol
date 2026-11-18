@@ -3998,19 +3998,22 @@ func _update_wildlife(delta: float) -> void:
 			continue
 		var position: Vector2 = animal["pos"]
 		var target_value: Variant = animal.get("wander_target", null)
-		if not target_value is Vector2 or position.distance_to(target_value) <= 12.0:
+		var target: Vector2 = position
+		var has_target: bool = target_value is Vector2
+		if has_target:
+			target = target_value
+		if not has_target or position.distance_to(target) <= 12.0:
 			var flee_direction := Vector2.ZERO
 			for unit in units:
 				var distance_squared: float = position.distance_squared_to(unit["pos"])
 				if distance_squared <= 110.0 * 110.0:
 					flee_direction += (position - unit["pos"]).normalized()
 			if flee_direction.length_squared() > 0.01:
-				target_value = position + flee_direction.normalized() * 170.0
+				target = position + flee_direction.normalized() * 170.0
 			else:
-				target_value = position + Vector2(randf_range(-115.0, 115.0), randf_range(-115.0, 115.0))
-			target_value.x = clampf(target_value.x, 24.0, WORLD_SIZE.x - 24.0)
-			target_value.y = clampf(target_value.y, 24.0, WORLD_SIZE.y - 24.0)
-		var target: Vector2 = target_value
+				target = position + Vector2(randf_range(-115.0, 115.0), randf_range(-115.0, 115.0))
+			target.x = clampf(target.x, 24.0, WORLD_SIZE.x - 24.0)
+			target.y = clampf(target.y, 24.0, WORLD_SIZE.y - 24.0)
 		var speed: float = 16.0 if str(animal.get("kind", "")) == "deer" else 10.0
 		var displacement: Vector2 = (target - position).normalized() * speed * delta
 		animal["pos"] = _move_circle_with_buildings(position, displacement, 5.0, delta, target, animal)
