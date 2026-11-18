@@ -1430,7 +1430,7 @@ func _handle_tap(pos: Vector2) -> void:
 			outpost_placement_dragging = false
 		queue_redraw()
 		return
-	if pos.x >= safe_insets.x + 18.0 and pos.x <= safe_insets.x + 210.0 and pos.y >= safe_insets.y + HUD_EDGE_PADDING + 434.0 and pos.y <= safe_insets.y + HUD_EDGE_PADDING + 434.0 + touch_target_size:
+	if pos.x >= safe_insets.x + HUD_EDGE_PADDING and pos.x <= safe_insets.x + HUD_EDGE_PADDING + 192.0 and pos.y >= _call_to_arms_top() and pos.y <= _call_to_arms_top() + touch_target_size:
 		_call_to_arms()
 		queue_redraw()
 		return
@@ -1474,7 +1474,7 @@ func _handle_tap(pos: Vector2) -> void:
 		diagnostics_enabled = not diagnostics_enabled
 		queue_redraw()
 		return
-	if not selected_structure_type.is_empty() and pos.y >= STRUCTURE_ACTION_TOP + safe_insets.y + 42.0 and pos.y <= STRUCTURE_ACTION_TOP + safe_insets.y + 42.0 + touch_target_size:
+	if not selected_structure_type.is_empty() and pos.y >= _structure_action_top() + 42.0 and pos.y <= _structure_action_top() + 42.0 + touch_target_size:
 		if pos.x >= safe_insets.x + 24.0 and pos.x <= safe_insets.x + 190.0:
 			_repair_selected_structure()
 			return
@@ -1968,10 +1968,11 @@ func _draw_hud() -> void:
 	_draw_text("FUNDS  $%d" % funds, Vector2(hud_left + 16.0, hud_top + 70.0), 21, Color("#f4d77b"))
 	_draw_text("SECTOR %02d  WAVE %d/%d" % [sector_index + 1, wave, sector_wave_limit], Vector2(hud_left + 16.0, hud_top + 104.0), 15, Color("#ffad62"))
 	_draw_text("SAVED %d  LOST %d  HORDE %d/%d" % [saved_count, lost_count, zombies.size(), MAX_ACTIVE_ZOMBIES], Vector2(hud_left + 16.0, hud_top + 124.0), 13, Color("#9cbcaf"))
-	draw_rect(Rect2(hud_left, hud_top + 434.0, 192.0, touch_target_size), Color("#33422a"))
-	draw_rect(Rect2(hud_left, hud_top + 434.0, 192.0, touch_target_size), Color("#d5c36b"), false, 2.0)
+	var call_to_arms_top: float = _call_to_arms_top()
+	draw_rect(Rect2(hud_left, call_to_arms_top, 192.0, touch_target_size), Color("#33422a"))
+	draw_rect(Rect2(hud_left, call_to_arms_top, 192.0, touch_target_size), Color("#d5c36b"), false, 2.0)
 	var militia_cost: int = _call_to_arms_cost()
-	_draw_text("CALL TO ARMS $%d" % militia_cost, Vector2(hud_left + 10.0, hud_top + 434.0 + touch_target_size * 0.62), 14, Color("#fff4c7"))
+	_draw_text("CALL TO ARMS $%d" % militia_cost, Vector2(hud_left + 10.0, call_to_arms_top + touch_target_size * 0.62), 14, Color("#fff4c7"))
 	_draw_text("%s  |  %s" % [day_phase, "ENDLESS" if endless_containment else "CAMPAIGN"], Vector2(hud_left + 16.0, hud_top + 144.0), 12, Color("#a9c8b7"))
 	if message_timer > 0.0:
 		_draw_text(message, Vector2(hud_left + 16.0, hud_top + 164.0), 14, Color("#ffbd76"))
@@ -2032,7 +2033,7 @@ func _draw_structure_actions() -> void:
 			structure_label = "REINFORCED WALL"
 		_:
 			return
-	var action_top: float = STRUCTURE_ACTION_TOP + safe_insets.y
+	var action_top: float = _structure_action_top()
 	var action_panel_height: float = touch_target_size + 52.0
 	draw_rect(Rect2(safe_insets.x + 18.0, action_top, 380.0, action_panel_height), Color("#0b1b17", 0.96))
 	_draw_text("%s  HP %d/%d" % [structure_label, roundi(structure_hp), roundi(structure_max_hp)], Vector2(safe_insets.x + 30.0, action_top + 24.0), 14, Color("#dcefe4"))
@@ -2402,6 +2403,12 @@ func _safe_bottom_y(panel_height: float) -> float:
 
 func _deployment_panel_height() -> float:
 	return maxf(200.0, touch_target_size + 146.0)
+
+func _call_to_arms_top() -> float:
+	return safe_insets.y + HUD_EDGE_PADDING + 196.0 + 2.0 * (touch_target_size + 6.0)
+
+func _structure_action_top() -> float:
+	return safe_insets.y + maxf(STRUCTURE_ACTION_TOP, HUD_EDGE_PADDING + 196.0 + 3.0 * (touch_target_size + 6.0))
 
 func _camera_view_rect() -> Rect2:
 	var size: Vector2 = viewport_size / maxf(camera_zoom, 0.01)
