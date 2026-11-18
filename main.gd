@@ -3221,7 +3221,7 @@ func _draw_hud() -> void:
 	_draw_text("CONTAINMENT PROTOCOL", Vector2(hud_left + 16.0, hud_top + 34.0), 22, Color("#e2f4e9"))
 	if campaign_start_grace_timer > 0.0:
 		_draw_text("PREP  %02d:%02d" % [int(ceil(campaign_start_grace_timer)) / 60, int(ceil(campaign_start_grace_timer)) % 60], Vector2(hud_left + 255.0, hud_top + 34.0), 14, Color("#80e8b1"))
-	_draw_text("FUNDS $%d   FOOD 🌾%d   MATS 🪵⚙%d   FUEL %.0f" % [funds, food, scrap, fuel], Vector2(hud_left + 16.0, hud_top + 70.0), 13, Color("#f4d77b"))
+	_draw_text("FUNDS $%d   FOOD 🌾%d   MATS 🪵⚙%d   FUEL ⛽%.0f" % [funds, food, scrap, fuel], Vector2(hud_left + 16.0, hud_top + 70.0), 13, Color("#f4d77b"))
 	_draw_text("DAY %d  |  %s  |  WAVE %d" % [survival_day, _format_world_clock(), wave], Vector2(hud_left + 16.0, hud_top + 104.0), 15, Color("#ffad62"))
 	_draw_text("SAVED %d  LOST %d  HORDE %d/%d" % [saved_count, lost_count, zombies.size(), MAX_ACTIVE_ZOMBIES], Vector2(hud_left + 16.0, hud_top + 124.0), 13, Color("#9cbcaf"))
 	_draw_text("%s  |  POP %d  |  SAVED %d" % [day_phase, civilians.size() + _total_sheltered_civilians(), saved_count], Vector2(hud_left + 16.0, hud_top + 144.0), 12, Color("#a9c8b7"))
@@ -4371,8 +4371,6 @@ func _resume_operation() -> void:
 		buildings.assign(state["buildings"])
 	if state.has("spawn_districts"):
 		spawn_districts.assign(state["spawn_districts"])
-	if not state.has("trees"):
-		_populate_ecology()
 	if state.has("building_archetypes"):
 		building_archetypes.assign(state["building_archetypes"])
 	for building_index in range(building_archetypes.size()):
@@ -4386,6 +4384,8 @@ func _resume_operation() -> void:
 		building_archetypes[building_index] = building_state
 	if state.has("district_regions"):
 		district_regions.assign(state["district_regions"])
+	if not state.has("trees"):
+		_populate_ecology()
 	if state.has("gates"):
 		gates.assign(state["gates"])
 	if state.has("tactical_decals"):
