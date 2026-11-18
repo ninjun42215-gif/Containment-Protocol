@@ -335,7 +335,8 @@ func _update_combat_effects(delta: float) -> void:
 	for i in range(shockwaves.size() - 1, -1, -1):
 		var effect: Dictionary = shockwaves[i]
 		effect["life"] = float(effect["life"]) - delta
-		effect["radius"] = minf(190.0, float(effect["radius"]) + 280.0 * delta)
+		if not bool(effect.get("toxic", false)):
+			effect["radius"] = minf(190.0, float(effect["radius"]) + 280.0 * delta)
 		if float(effect["life"]) <= 0.0:
 			shockwaves.remove_at(i)
 		else:
@@ -526,7 +527,8 @@ func _draw() -> void:
 		draw_arc(flare_pos, 18.0 * pulse, 0.0, TAU, 32, Color(1.0, 0.82, 0.22, 0.8), 2.0)
 	for wave_effect in shockwaves:
 		var alpha: float = clampf(float(wave_effect["life"]) / float(wave_effect["max_life"]), 0.0, 1.0)
-		draw_arc(wave_effect["pos"], float(wave_effect["radius"]), 0.0, TAU, 48, Color(1.0, 0.48, 0.16, alpha), 3.0)
+		var ring_color := Color(0.35, 1.0, 0.28, alpha) if bool(wave_effect.get("toxic", false)) else Color(1.0, 0.48, 0.16, alpha)
+		draw_arc(wave_effect["pos"], float(wave_effect["radius"]), 0.0, TAU, 48, ring_color, 3.0)
 	if game_state != "playing":
 		_draw_end_screen()
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
@@ -684,7 +686,7 @@ func _damage_zombie(index: int, damage: float) -> void:
 		_spitter_burst(dead_position)
 
 func _spitter_burst(center: Vector2) -> void:
-	shockwaves.append({"pos": center, "radius": 8.0, "life": 0.35, "max_life": 0.35})
+	shockwaves.append({"pos": center, "radius": 45.0, "life": 0.35, "max_life": 0.35, "toxic": true})
 	var infected := 0
 	for index in range(civilians.size() - 1, -1, -1):
 		if center.distance_to(civilians[index]) <= 45.0:
