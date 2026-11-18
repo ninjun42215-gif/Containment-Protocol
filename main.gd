@@ -1979,6 +1979,8 @@ func _update_vehicles(delta: float) -> void:
 					vehicle["salvage_timer"] = 4.0
 		else:
 			var speed: float = 280.0 if helicopter else 145.0
+			if fuel > 0.0 and fuel <= 30.0:
+				speed *= 0.5
 			if bool(vehicle.get("grounded", false)):
 				speed = 0.0
 			var moved := false
@@ -2041,7 +2043,7 @@ func _update_vehicles(delta: float) -> void:
 						else:
 							zombies[zombie_index] = hit_zombie
 			vehicle["cooldown"] = maxf(0.0, float(vehicle.get("cooldown", 0.0)) - delta)
-			if float(vehicle["cooldown"]) <= 0.0:
+			if float(vehicle["cooldown"]) <= 0.0 and not bool(vehicle.get("grounded", false)):
 				var target_zombie: int = _find_nearest_zombie(position, 260.0)
 				if target_zombie >= 0:
 					var zombie_target: Vector2 = zombies[target_zombie]["pos"]
@@ -3180,8 +3182,8 @@ func _repair_selected_structure() -> void:
 	queue_redraw()
 
 func _upgrade_selected_structure() -> void:
-	if funds < STRUCTURE_UPGRADE_COST:
-		message = "UPGRADE REQUIRES $150"
+	if funds < STRUCTURE_UPGRADE_COST or scrap < 15:
+		message = "UPGRADE REQUIRES $150 AND ⚙15"
 		message_timer = 1.2
 		return
 	var upgraded := false
@@ -3204,6 +3206,7 @@ func _upgrade_selected_structure() -> void:
 			upgraded = true
 	if upgraded:
 		funds -= STRUCTURE_UPGRADE_COST
+		scrap -= 15
 		message = "STRUCTURE UPGRADED TO LEVEL 2"
 	else:
 		message = "NO AVAILABLE UPGRADE"
