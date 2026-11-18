@@ -673,6 +673,14 @@ func _update_gate_states() -> void:
 		gate["open"] = should_open
 		gates[gate_index] = gate
 
+func _call_to_arms_cost() -> int:
+	var source_position: Vector2 = primary_hq_position
+	for outpost in outposts:
+		if int(outpost.get("sheltered", 0)) > 0:
+			source_position = outpost["pos"]
+			break
+	return roundi(float(CALL_TO_ARMS_COST) * (0.75 if _is_near_building_type(source_position, "ARMORY", ARMORY_RADIUS) else 1.0))
+
 func _call_to_arms() -> void:
 	var source_outpost_index: int = -1
 	for index in range(outposts.size()):
@@ -684,12 +692,22 @@ func _call_to_arms() -> void:
 	if source_outpost_index >= 0:
 		source_position = outposts[source_outpost_index]["pos"]
 	else:
+		var nearest_distance: float = 180.0 * 180.0
 		for index in range(civilians.size()):
-			if civilians[index].distance_to(source_position) <= 180.0:
+			var hq_distance: float = civilians[index].distance_squared_to(primary_hq_position)
+			if hq_distance <= nearest_distance:
+				nearest_distance = hq_distance
 				civilian_index = index
-				break
+		for outpost_index in range(outposts.size()):
+			var outpost_position: Vector2 = outposts[outpost_index]["pos"]
+			for index in range(civilians.size()):
+				var outpost_distance: float = civilians[index].distance_squared_to(outpost_position)
+				if outpost_distance < nearest_distance:
+					nearest_distance = outpost_distance
+					civilian_index = index
+					source_position = outpost_position
 	if source_outpost_index < 0 and civilian_index < 0:
-		message = "NO RESCUED CIVILIAN AVAILABLE NEAR HQ"
+		message = "NO RESCUED CIVILIAN AVAILABLE NEAR HQ OR OUTPOST"
 		message_timer = 1.5
 		return
 	var cost: int = roundi(float(CALL_TO_ARMS_COST) * (0.75 if _is_near_building_type(source_position, "ARMORY", ARMORY_RADIUS) else 1.0))
@@ -1094,22 +1112,33 @@ func _spawn_pending_wave_spawns(delta: float, fill_available: bool = false) -> v
 		return
 	if fill_available:
 		while pending_wave_spawns > 0 and zombies.size() < MAX_ACTIVE_ZOMBIES:
-			_spawn_one_wave_zombie()
+			if not _spawn_one_wave_zombie():
+				break
 			pending_wave_spawns -= 1
 		pending_wave_spawn_timer = PENDING_WAVE_SPAWN_INTERVAL if pending_wave_spawns > 0 else 0.0
 		return
 	pending_wave_spawn_timer = maxf(0.0, pending_wave_spawn_timer - delta)
 	if pending_wave_spawn_timer > 0.0 or zombies.size() >= MAX_ACTIVE_ZOMBIES:
 		return
-	_spawn_one_wave_zombie()
+	if not _spawn_one_wave_zombie():
+		pending_wave_spawn_timer = PENDING_WAVE_SPAWN_INTERVAL
+		return
 	pending_wave_spawns -= 1
 	pending_wave_spawn_timer = PENDING_WAVE_SPAWN_INTERVAL if pending_wave_spawns > 0 else 0.0
 
-func _spawn_one_wave_zombie() -> void:
+func _spawn_one_wave_zombie() -> bool:
 	if zombies.size() >= MAX_ACTIVE_ZOMBIES or spawn_districts.is_empty():
-		return
+		return false
 	var district: Rect2 = spawn_districts[randi_range(0, spawn_districts.size() - 1)]
-	var spawn_point := Vector2(randf_range(district.position.x, district.end.x), randf_range(district.position.y, district.end.y))
+	var spawn_point := Vector2.ZERO
+	var found_open_spawn := false
+	for attempt in range(16):
+		spawn_point = Vector2(randf_range(district.position.x, district.end.x), randf_range(district.position.y, district.end.y))
+		if _is_open_world_position(spawn_point, 18.0):
+			found_open_spawn = true
+			break
+	if not found_open_spawn:
+		return false
 	var roll: float = randf()
 	var kind: String = "shambler"
 	var brute_chance: float = clampf(0.08 + float(wave) * 0.008, 0.08, 0.32)
@@ -1129,6 +1158,7 @@ func _spawn_one_wave_zombie() -> void:
 	elif kind == "spitter":
 		hp = 42.0 + float(wave) * 4.0
 	zombies.append({"pos": spawn_point, "kind": kind, "hp": hp, "max_hp": hp, "wall_cooldown": 0.0})
+	return true
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
@@ -1507,7 +1537,7 @@ func _draw() -> void:
 		_draw_text("SELECT HQ LOCATION", Vector2(24.0, viewport_size.y - 134.0), 20, Color("#e8fff0"))
 		_draw_text(hq_hint, Vector2(24.0, viewport_size.y - 108.0), 13, Color("#a9c8b7"))
 		if outpost_placement_active:
-			_draw_text("%.0f x %.0f  COST $%d  SHELTER %d" % [outpost_placement_rect.size.x, outpost_placement_rect.size.y, _outpost_build_cost(outpost_placement_rect.size), maxi(12, roundi(outpost_placement_rect.size.x * outpost_placement_rect.size.y / 18000.0))], Vector2(24.0, viewport_size.y - 82.0), 12, Color("#e8fff0"))
+			_draw_text("%.0f x %.0f  COST $%d  SHELTER %d  %s" % [outpost_placement_rect.size.x, outpost_placement_rect.size.y, _outpost_build_cost(outpost_placement_rect.size), maxi(12, roundi(outpost_placement_rect.size.x * outpost_placement_rect.size.y / 18000.0)), "VALID" if outpost_placement_valid else "BLOCKED"], Vector2(24.0, viewport_size.y - 82.0), 12, Color("#e8fff0"))
 			_draw_outpost_placement_hud(viewport_size.y - 60.0)
 		return
 	var shake_offset := Vector2.ZERO
@@ -1788,7 +1818,7 @@ func _draw_hud() -> void:
 	_draw_text("SAVED %d  LOST %d  HORDE %d/%d" % [saved_count, lost_count, zombies.size(), MAX_ACTIVE_ZOMBIES], Vector2(34.0, 142.0), 13, Color("#9cbcaf"))
 	draw_rect(Rect2(18.0, 452.0, 192.0, 48.0), Color("#33422a"))
 	draw_rect(Rect2(18.0, 452.0, 192.0, 48.0), Color("#d5c36b"), false, 2.0)
-	var militia_cost: int = roundi(float(CALL_TO_ARMS_COST) * (0.75 if _is_near_building_type(primary_hq_position, "ARMORY", ARMORY_RADIUS) else 1.0))
+	var militia_cost: int = _call_to_arms_cost()
 	_draw_text("CALL TO ARMS $%d" % militia_cost, Vector2(28.0, 482.0), 14, Color("#fff4c7"))
 	_draw_text("%s  |  %s" % [day_phase, "ENDLESS" if endless_containment else "CAMPAIGN"], Vector2(34.0, 162.0), 12, Color("#a9c8b7"))
 	if message_timer > 0.0:
