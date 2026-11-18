@@ -3714,6 +3714,10 @@ func _shelter_flush_timer_step(delta: float) -> void:
 		var hospital_support: bool = _is_near_building_type(outpost["pos"], "HOSPITAL", HOSPITAL_REGEN_RADIUS)
 		var overcrowded: bool = sheltered >= int(float(outpost.get("capacity", 12)) * 0.75)
 		var interval: float = 11.25 if (defended or hospital_support) else (18.75 if overcrowded else 15.0)
+		if food <= 0:
+			interval *= 1.4
+		if _has_constructed_building_near(outpost["pos"], "bakery", 180.0):
+			interval *= 0.85
 		outpost["evac_timer"] = float(outpost.get("evac_timer", interval)) - delta
 		if float(outpost["evac_timer"]) <= 0.0:
 			saved_count += sheltered
@@ -3815,6 +3819,161 @@ func _activate_rescue_broadcast() -> void:
 	message = "RESCUE BEACON ACTIVE — CIVILIANS GUIDED TO OPEN GATE"
 	message_timer = 2.4
 	world_callouts.append({"pos": outposts[target_index]["pos"], "text": "SOS BEACON", "life": 2.5})
+
+func _nearest_tree(position: Vector2, radius: float) -> int:
+	var best_index := -1
+	var best_distance: float = radius * radius
+	for index in range(trees.size()):
+		if not bool(trees[index].get("alive", false)):
+			continue
+		var distance: float = position.distance_squared_to(trees[index]["pos"])
+		if distance <= best_distance:
+			best_distance = distance
+			best_index = index
+	return best_index
+
+func _nearest_wildlife(position: Vector2, radius: float) -> int:
+	var best_index := -1
+	var best_distance: float = radius * radius
+	for index in range(wildlife.size()):
+		if not bool(wildlife[index].get("alive", false)):
+			continue
+		var distance: float = position.distance_squared_to(wildlife[index]["pos"])
+		if distance <= best_distance:
+			best_distance = distance
+			best_index = index
+	return best_index
+
+func _has_constructed_building_near(position: Vector2, kind: String, radius: float) -> bool:
+	for building in constructed_buildings:
+		if str(building.get("kind", "")) == kind and position.distance_squared_to(building["pos"]) <= radius * radius:
+			return true
+	return false
+
+func _apply_daily_rations() -> void:
+	var daily_consumption: int = units.size() + _total_sheltered_civilians()
+	for building in constructed_buildings:
+		food += int(building.get("food_per_day", 0))
+	food = maxi(0, food - daily_consumption)
+	message = "DAY %d RATIONS: -%d FOOD  |  STOCKPILE %d" % [survival_day, daily_consumption, food]
+	message_timer = 3.0
+	_save_operation()
+
+func _update_work_orders(delta: float) -> void:
+	for unit_index in range(units.size()):
+		var unit: Dictionary = units[unit_index]
+		var work_kind: String = str(unit.get("work_kind", ""))
+		if work_kind.is_empty() or bool(unit.get("garrisoned", false)):
+			continue
+		var target_index: int = int(unit.get("work_target_index", -1))
+		var work_target := Vector2(-1.0, -1.0)
+		if work_kind == "chop" and target_index >= 0 and target_index < trees.size() and bool(trees[target_index].get("alive", false)):
+			work_target = trees[target_index]["pos"]
+		elif work_kind == "hunt" and target_index >= 0 and target_index < wildlife.size() and bool(wildlife[target_index].get("alive", false)):
+			work_target = wildlife[target_index]["pos"]
+		elif work_kind == "demolish" and target_index >= 0 and target_index < buildings.size() and not bool(building_archetypes[target_index].get("destroyed", false)):
+			var rect: Rect2 = buildings[target_index]
+			work_target = Vector2(clampf(unit["pos"].x, rect.position.x - 28.0, rect.end.x + 28.0), clampf(unit["pos"].y, rect.position.y - 28.0, rect.end.y + 28.0))
+		if work_target.x < 0.0:
+			unit["work_kind"] = ""
+			unit["move_target"] = null
+			units[unit_index] = unit
+			continue
+		if unit["pos"].distance_to(work_target) > 30.0:
+			unit["move_target"] = work_target
+			units[unit_index] = unit
+			continue
+		unit["move_target"] = null
+		var work_speed: float = 2.0 if str(unit.get("kind", "")) == "engineer" else 1.0
+		unit["work_timer"] = maxf(0.0, float(unit.get("work_timer", 3.0)) - delta * work_speed)
+		if float(unit["work_timer"]) <= 0.0:
+			match work_kind:
+				"chop":
+					trees[target_index]["alive"] = false
+					scrap += 15
+					world_callouts.append({"pos": work_target, "text": "+15 MATS", "life": 2.0})
+				"hunt":
+					wildlife[target_index]["alive"] = false
+					food += 30
+					world_callouts.append({"pos": work_target, "text": "+30 FOOD", "life": 2.0})
+				"demolish":
+					var salvage_amount: int = randi_range(40, 90)
+					building_archetypes[target_index]["destroyed"] = true
+					building_archetypes[target_index]["cache_available"] = false
+					scrap += salvage_amount
+					world_callouts.append({"pos": buildings[target_index].get_center(), "text": "+%d MATS" % salvage_amount, "life": 2.5})
+			unit["work_kind"] = ""
+			unit["work_target_index"] = -1
+			unit["ai_task"] = ""
+			unit["manual_order"] = false
+			unit["move_target"] = null
+		units[unit_index] = unit
+
+func _construct_survival_building(kind: String, position: Vector2) -> void:
+	var owner_index := -1
+	for index in range(outposts.size()):
+		var rect: Rect2 = outposts[index].get("rect", Rect2(outposts[index]["pos"] - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
+		if rect.grow(-30.0).has_point(position):
+			owner_index = index
+			break
+	if owner_index < 0:
+		message = "SURVIVAL BUILDINGS MUST BE INSIDE AN OUTPOST"
+		message_timer = 2.0
+		return
+	var cost_funds: int = 80 if kind == "farm" else (120 if kind == "bakery" else (100 if kind == "livestock" else (90 if kind == "watchtower" else 110)))
+	var cost_materials: int = 45 if kind == "farm" else (70 if kind == "bakery" else (60 if kind == "livestock" else (50 if kind == "watchtower" else 65)))
+	for city_index in range(buildings.size()):
+		if not bool(building_archetypes[city_index].get("destroyed", false)) and buildings[city_index].has_point(position):
+			message = "CLEAR THE FOOTPRINT BEFORE CONSTRUCTION"
+			message_timer = 1.8
+			return
+	for existing in constructed_buildings:
+		if position.distance_to(existing["pos"]) < 58.0:
+			message = "CONSTRUCTION FOOTPRINT OCCUPIED"
+			message_timer = 1.5
+			return
+	if funds < cost_funds or scrap < cost_materials:
+		message = "REQUIRES $%d AND %d MATS" % [cost_funds, cost_materials]
+		message_timer = 1.8
+		return
+	var food_yield: int = 18 if kind == "farm" else (32 if kind == "bakery" else (22 if kind == "livestock" else 0))
+	constructed_buildings.append({"kind": kind, "pos": position, "outpost_index": owner_index, "food_per_day": food_yield, "hp": 500.0})
+	funds -= cost_funds
+	scrap -= cost_materials
+	message = "%s CONSTRUCTED" % kind.to_upper()
+	message_timer = 2.0
+	_save_operation()
+
+func _interact_raider_camp(position: Vector2) -> void:
+	for index in range(raider_camps.size()):
+		var camp: Dictionary = raider_camps[index]
+		if position.distance_squared_to(camp["pos"]) > 70.0 * 70.0:
+			continue
+		if bool(camp.get("raided", false)):
+			message = "RAIDER CAMP ALREADY STRIPPED"
+			message_timer = 1.6
+			return
+		var nearby_squad := false
+		for unit in units:
+			if unit["pos"].distance_squared_to(camp["pos"]) <= 150.0 * 150.0:
+				nearby_squad = true
+				break
+		if nearby_squad:
+			food += int(camp.get("food_stock", 0))
+			scrap += int(camp.get("materials_stock", 0))
+			fuel = minf(300.0, fuel + float(camp.get("fuel_stock", 0)))
+			funds += 150
+			camp["raided"] = true
+			raider_camps[index] = camp
+			message = "RAIDER CACHE CAPTURED — FOOD / MATS / FUEL"
+		elif funds >= 100:
+			funds -= 100
+			food += 60
+			message = "TRADE COMPLETE — +60 FOOD"
+		else:
+			message = "TRADE REQUIRES $100 OR A SQUAD TO RAID"
+		message_timer = 2.2
+		return
 
 func _pause_button_rect() -> Rect2:
 	return Rect2(safe_insets.x + HUD_EDGE_PADDING + 350.0, safe_insets.y + HUD_EDGE_PADDING + 104.0, 130.0, 42.0)
