@@ -4,7 +4,7 @@ extends Node2D
 # Portrait 720x1280, drawn natively for low-overhead Android rendering.
 
 const VIEW_SIZE := Vector2(720.0, 1280.0)
-const WORLD_SIZE := Vector2(6000.0, 8800.0)
+const WORLD_SIZE := Vector2(10400.0, 15200.0)
 const BAR_TOP := 1080.0
 const EVAC_RADIUS := 76.0
 const MIN_ZOOM := 0.45
@@ -52,11 +52,8 @@ const ARMORY_RADIUS := 180.0
 const WAREHOUSE_HOLD_TIME := 4.0
 
 const UNIT_DEPLOYMENTS := [
-	{"name": "INFANTRY", "detail": "SQUAD  $100", "cost": 100, "kind": "infantry"},
-	{"name": "SNIPER", "detail": "TEAM  $200", "cost": 200, "kind": "sniper"},
 	{"name": "AIRSTRIKE", "detail": "$300", "cost": 300, "kind": "airstrike"},
-	{"name": "FLARE", "detail": "BEACON  $40", "cost": FLARE_COST, "kind": "flare"},
-	{"name": "MEDEVAC", "detail": "LIFT  $250", "cost": MEDEVAC_COST, "kind": "medevac"}
+	{"name": "FLARE", "detail": "BEACON  $40", "cost": FLARE_COST, "kind": "flare"}
 ]
 const BASE_DEPLOYMENTS := [
 	{"name": "OUTPOST", "detail": "$220", "cost": OUTPOST_COST, "kind": "outpost"},
@@ -71,6 +68,10 @@ var pending_wave_spawn_timer := 0.0
 var units: Array[Dictionary] = []
 var vehicles: Array[Dictionary] = []
 var auto_ops_enabled := true
+var highway_segments: Array[Dictionary] = []
+var secondary_road_segments: Array[Dictionary] = []
+var task_reservations: Dictionary = {}
+var world_callouts: Array[Dictionary] = []
 var selected_vehicle_index := -1
 var barricades: Array[Dictionary] = []
 var flares: Array[Dictionary] = []
@@ -709,12 +710,14 @@ func _generate_state_map() -> void:
 	vehicles.clear()
 	var map_rng := RandomNumberGenerator.new()
 	map_rng.seed = campaign_map_seed
-	for district_index in range(5):
-		var seed_point := Vector2(WORLD_SIZE.x * 0.5, WORLD_SIZE.y * 0.5)
+	for district_index in range(8):
+		var district_column: int = district_index % 2
+		var district_row: int = district_index / 2
+		var seed_point := Vector2((float(district_column) + 0.5) * WORLD_SIZE.x / 2.0 + map_rng.randf_range(-380.0, 380.0), (float(district_row) + 0.5) * WORLD_SIZE.y / 4.0 + map_rng.randf_range(-420.0, 420.0))
 		var found_seed := false
 		for attempt in range(120):
-			var candidate := Vector2(map_rng.randf_range(650.0, WORLD_SIZE.x - 650.0), map_rng.randf_range(650.0, WORLD_SIZE.y - 650.0))
-			var candidate_size := Vector2(2050.0, 2200.0)
+			var candidate := seed_point + Vector2(map_rng.randf_range(-280.0, 280.0), map_rng.randf_range(-300.0, 300.0))
+			var candidate_size := Vector2(3600.0, 2850.0)
 			var candidate_region_position := candidate - candidate_size * 0.5
 			candidate_region_position.x = clampf(candidate_region_position.x, 0.0, WORLD_SIZE.x - candidate_size.x)
 			candidate_region_position.y = clampf(candidate_region_position.y, 0.0, WORLD_SIZE.y - candidate_size.y)
@@ -731,7 +734,7 @@ func _generate_state_map() -> void:
 		if not found_seed:
 			seed_point = Vector2(map_rng.randf_range(700.0, WORLD_SIZE.x - 700.0), map_rng.randf_range(700.0, WORLD_SIZE.y - 700.0))
 		district_seed_points.append(seed_point)
-		var region_size := Vector2(2050.0, 2200.0)
+		var region_size := Vector2(3600.0, 2850.0)
 		var region_position := seed_point - region_size * 0.5
 		region_position.x = clampf(region_position.x, 0.0, WORLD_SIZE.x - region_size.x)
 		region_position.y = clampf(region_position.y, 0.0, WORLD_SIZE.y - region_size.y)
@@ -758,16 +761,34 @@ func _generate_state_map() -> void:
 				var base_hp: float = 1800.0 if archetype == "HIGHRISE" else 900.0
 				buildings.append(rect)
 				building_archetypes.append({"type": archetype, "district": district_index, "cache_available": archetype == "WAREHOUSE", "cache_hold": 0.0, "hp": base_hp, "max_hp": base_hp, "destroyed": false, "fortified": false, "secured": false, "fortified_outpost_index": -1})
-	for vehicle_index in range(map_rng.randi_range(4, 6)):
+	for road_index in range(3):
+		var road_y: float = WORLD_SIZE.y * float(road_index + 1) / 4.0
+		highway_segments.append({"from": Vector2(0.0, road_y), "to": Vector2(WORLD_SIZE.x, road_y), "width": 76.0})
+	for road_index in range(2):
+		var road_x: float = WORLD_SIZE.x * float(road_index + 1) / 3.0
+		highway_segments.append({"from": Vector2(road_x, 0.0), "to": Vector2(road_x, WORLD_SIZE.y), "width": 68.0})
+	for district_index in range(district_seed_points.size()):
+		var center: Vector2 = district_seed_points[district_index]
+		var nearest_road_y: float = roundf(center.y / (WORLD_SIZE.y / 4.0)) * (WORLD_SIZE.y / 4.0)
+		secondary_road_segments.append({"from": Vector2(center.x, center.y), "to": Vector2(center.x, nearest_road_y), "width": 24.0})
+	for vehicle_index in range(6):
 		var industrial_region: Rect2 = district_regions[2]
-		var humvee_pos := Vector2(map_rng.randf_range(industrial_region.position.x, industrial_region.end.x), map_rng.randf_range(industrial_region.position.y, industrial_region.end.y))
-		if _is_open_world_position(humvee_pos, 34.0):
-			vehicles.append({"kind": "humvee", "pos": humvee_pos, "hp": 350.0, "max_hp": 350.0, "active": false, "salvage_timer": 0.0, "salvage_cost": 120, "move_target": null, "onboard": 0, "cooldown": 0.0})
-	for helicopter_index in range(map_rng.randi_range(2, 3)):
+		var humvee_pos: Vector2 = _find_vehicle_spawn_position(map_rng, industrial_region, 34.0, vehicle_index, "humvee")
+		vehicles.append({"kind": "humvee", "pos": humvee_pos, "hp": 350.0, "max_hp": 350.0, "active": false, "salvage_timer": 4.0, "salvage_cost": 120, "move_target": null, "onboard": 0, "cooldown": 0.0, "salvage_started": false})
+	for helicopter_index in range(3):
 		var medical_region: Rect2 = district_regions[3]
-		var helicopter_pos := Vector2(map_rng.randf_range(medical_region.position.x, medical_region.end.x), map_rng.randf_range(medical_region.position.y, medical_region.end.y))
-		if _is_open_world_position(helicopter_pos, 42.0):
-			vehicles.append({"kind": "helicopter", "pos": helicopter_pos, "hp": 260.0, "max_hp": 260.0, "active": false, "salvage_timer": 0.0, "salvage_cost": 220, "move_target": null, "onboard": 0, "cooldown": 0.0})
+		var helicopter_pos: Vector2 = _find_vehicle_spawn_position(map_rng, medical_region, 42.0, helicopter_index, "helicopter")
+		vehicles.append({"kind": "helicopter", "pos": helicopter_pos, "hp": 260.0, "max_hp": 260.0, "active": false, "salvage_timer": 4.0, "salvage_cost": 220, "move_target": null, "onboard": 0, "cooldown": 0.0, "salvage_started": false})
+
+func _find_vehicle_spawn_position(map_rng: RandomNumberGenerator, region: Rect2, margin: float, spawn_index: int, kind: String) -> Vector2:
+	for attempt in range(80):
+		var candidate := Vector2(map_rng.randf_range(region.position.x + margin, region.end.x - margin), map_rng.randf_range(region.position.y + margin, region.end.y - margin))
+		if _is_open_world_position(candidate, margin):
+			return candidate
+	var road_x: float = WORLD_SIZE.x * float((spawn_index % 2) + 1) / 3.0
+	var road_y: float = WORLD_SIZE.y * float((spawn_index % 3) + 1) / 4.0
+	var fallback := Vector2(road_x + float(spawn_index % 2) * 110.0, road_y + float(spawn_index % 3) * 90.0)
+	return Vector2(clampf(fallback.x, margin, WORLD_SIZE.x - margin), clampf(fallback.y, margin, WORLD_SIZE.y - margin))
 
 func _building_type_for_district(district_index: int, row: int, column: int) -> String:
 	match district_index:
@@ -779,6 +800,10 @@ func _building_type_for_district(district_index: int, row: int, column: int) -> 
 			return "ARMORY" if column % 4 == 0 else "WAREHOUSE"
 		3:
 			return "HOSPITAL" if column % 3 == 0 else "RESIDENTIAL"
+		6:
+			return "HOSPITAL" if column == 0 else ("HIGHRISE" if row == 1 else "RESIDENTIAL")
+		7:
+			return "WAREHOUSE" if column % 2 == 0 else "RESIDENTIAL"
 		_:
 			return "WAREHOUSE" if column % 4 == 0 else "RESIDENTIAL"
 
@@ -2217,7 +2242,8 @@ func _draw() -> void:
 	for district_index in range(district_regions.size()):
 		var district_rect: Rect2 = district_regions[district_index]
 		if _camera_view_rect().intersects(district_rect):
-			var district_label: String = ["URBAN CORE", "SUBURBS", "INDUSTRIAL ZONE", "MEDICAL DISTRICT", "RURAL HIGHWAYS"][district_index]
+			var district_labels: Array[String] = ["URBAN CORE", "SUBURBS", "INDUSTRIAL ZONE", "MEDICAL DISTRICT", "RURAL HIGHWAYS", "LOGISTICS HUB", "CIVIC CENTER", "OUTER CORRIDOR"]
+			var district_label: String = district_labels[district_index] if district_index < district_labels.size() else "REGIONAL DISTRICT"
 			_draw_text(district_label, Vector2(70.0, district_rect.position.y + 62.0), 24, Color(0.45, 0.75, 0.62, 0.6))
 	_draw_fog()
 	_draw_entities()
@@ -2276,13 +2302,18 @@ func _draw_dashed_circle(center: Vector2, radius: float, tint: Color, segments: 
 		draw_line(start_point, end_point, tint, 2.0)
 
 func _draw_evac_zone() -> void:
+	var visible_rect: Rect2 = _camera_view_rect().grow(400.0)
 	for zone in evacuation_zones:
+		if not visible_rect.has_point(zone):
+			continue
 		draw_circle(zone, EVAC_RADIUS, Color(0.05, 0.55, 0.25, 0.18))
 		draw_arc(zone, EVAC_RADIUS, 0.0, TAU, 48, Color("#48e58b"), 3.0)
 		draw_arc(zone, EVAC_RADIUS - 12.0, 0.0, TAU, 48, Color(0.28, 0.85, 0.55, 0.35), 1.0)
 		var zone_label: String = "PRIMARY HQ" if zone.distance_squared_to(primary_hq_position) < 1.0 else "FORWARD SAFE ZONE"
 		_draw_text(zone_label, zone + Vector2(-45.0, 5.0), 13, Color("#8cf5b5"))
 	for outpost in outposts:
+		if not visible_rect.has_point(outpost["pos"]):
+			continue
 		draw_circle(outpost["pos"], float(outpost["safe_radius"]), Color(0.10, 0.65, 0.32, 0.035))
 		draw_arc(outpost["pos"], float(outpost["vision_radius"]), 0.0, TAU, 48, Color(0.25, 0.85, 0.48, 0.16), 1.0)
 		_draw_dashed_circle(outpost["pos"], OUTPOST_COMMAND_RADIUS, Color(0.35, 0.88, 0.55, 0.34), 48)
@@ -3206,13 +3237,16 @@ func _has_valid_save() -> bool:
 	if not parsed is Dictionary:
 		return false
 	var state: Dictionary = parsed
-	if int(state.get("version", 0)) != SAVE_VERSION:
+	if int(state.get("version", 0)) < 2 or int(state.get("version", 0)) > SAVE_VERSION:
 		return false
 	if int(state.get("sector_index", -1)) < 0 or int(state.get("sector_index", -1)) > 2:
 		return false
 	if int(state.get("wave", -1)) < 0:
 		return false
-	var required_arrays: Array[String] = ["evacuation_zones", "civilians", "zombies", "units", "vehicles", "outposts", "turrets", "barricades", "gates", "building_archetypes", "district_regions", "zombie_grid_serialized", "civilian_grid_serialized"]
+	var save_version: int = int(state.get("version", 0))
+	if save_version < 2 or save_version > SAVE_VERSION:
+		return false
+	var required_arrays: Array[String] = ["evacuation_zones", "civilians", "zombies", "units", "outposts", "turrets", "barricades", "gates", "building_archetypes", "district_regions", "zombie_grid_serialized", "civilian_grid_serialized"]
 	for key in required_arrays:
 		if not state.has(key) or not state[key] is Array:
 			return false
@@ -3264,7 +3298,7 @@ func _resume_operation() -> void:
 	_configure_sector(int(state.get("sector_index", 0)))
 	sector_index = int(state.get("sector_index", 0))
 	campaign_map_seed = int(state.get("campaign_map_seed", campaign_map_seed))
-	starting_district_index = clampi(int(state.get("starting_district_index", starting_district_index)), 0, 4)
+	starting_district_index = clampi(int(state.get("starting_district_index", starting_district_index)), 0, maxi(0, district_regions.size() - 1))
 	if state.has("district_seed_points"):
 		district_seed_points.assign(state["district_seed_points"])
 	wave = int(state.get("wave", 0))
@@ -3277,6 +3311,13 @@ func _resume_operation() -> void:
 	zombies.assign(state.get("zombies", []))
 	units.assign(state.get("units", []))
 	vehicles.assign(state.get("vehicles", []))
+	if int(state.get("version", SAVE_VERSION)) == 2:
+		vehicles.clear()
+		for unit_index in range(units.size()):
+			var migrated_unit: Dictionary = units[unit_index]
+			migrated_unit["manual_order"] = bool(migrated_unit.get("manual_order", false))
+			migrated_unit["ai_task"] = str(migrated_unit.get("ai_task", ""))
+			units[unit_index] = migrated_unit
 	auto_ops_enabled = bool(state.get("auto_ops_enabled", true))
 	outposts.assign(state.get("outposts", []))
 	turrets.assign(state.get("turrets", []))
@@ -3346,7 +3387,8 @@ func _draw_world_scene() -> void:
 	for district_index in range(district_regions.size()):
 		var district_rect: Rect2 = district_regions[district_index]
 		if _camera_view_rect().intersects(district_rect):
-			var district_label: String = ["URBAN CORE", "SUBURBS", "INDUSTRIAL ZONE", "MEDICAL DISTRICT", "RURAL HIGHWAYS"][district_index]
+			var district_labels: Array[String] = ["URBAN CORE", "SUBURBS", "INDUSTRIAL ZONE", "MEDICAL DISTRICT", "RURAL HIGHWAYS", "LOGISTICS HUB", "CIVIC CENTER", "OUTER CORRIDOR"]
+			var district_label: String = district_labels[district_index] if district_index < district_labels.size() else "REGIONAL DISTRICT"
 			_draw_text(district_label, Vector2(70.0, district_rect.position.y + 62.0), 24, Color(0.45, 0.75, 0.62, 0.6))
 	_draw_evac_zone()
 	_draw_entities()
