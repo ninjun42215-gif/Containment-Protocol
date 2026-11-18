@@ -473,11 +473,11 @@ func _process(delta: float) -> void:
 			zombie_grid = _build_zombie_spatial_grid()
 		units[unit_index] = unit
 
-	if wave >= 30 and zombies.is_empty() and medevac.is_empty() and not endless_containment:
+	if wave >= 30 and zombies.is_empty() and civilians.is_empty() and medevac.is_empty() and _total_sheltered_civilians() == 0 and not endless_containment:
 		game_state = "victory"
 		_save_operation()
 		message = "SECTOR SECURED"
-	elif civilians.is_empty() and saved_count == 0 and lost_count > 0 and medevac.is_empty():
+	elif civilians.is_empty() and saved_count == 0 and lost_count > 0 and medevac.is_empty() and _total_sheltered_civilians() == 0:
 		game_state = "defeat"
 		message = "EVACUATION FAILED"
 
@@ -802,6 +802,7 @@ func _handle_tap(pos: Vector2) -> void:
 			campaign_started = true
 			game_state = "playing"
 			wave_timer = 1.0
+			_save_operation()
 			message = "PRIMARY HQ ESTABLISHED — OPERATION STARTED"
 			message_timer = 3.0
 			queue_redraw()
@@ -1720,6 +1721,12 @@ func _nearest_evac_zone(position: Vector2) -> Vector2:
 
 func _night_vision_multiplier() -> float:
 	return 0.8 if day_phase == "NIGHT" else 1.0
+
+func _total_sheltered_civilians() -> int:
+	var total: int = 0
+	for outpost in outposts:
+		total += int(outpost.get("sheltered", 0))
+	return total
 
 func _shelter_flush_timer_step(delta: float) -> void:
 	shelter_flush_timer -= delta
