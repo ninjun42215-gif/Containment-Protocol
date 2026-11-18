@@ -101,6 +101,8 @@ var camera_drag_distance := 0.0
 var touch_points: Dictionary = {}
 var pinch_start_distance := 0.0
 var pinch_start_zoom := 1.0
+var multi_touch_gesture := false
+var previous_pinch_center := Vector2.ZERO
 var command_tab := 0
 var viewport_size := VIEW_SIZE
 
@@ -550,13 +552,19 @@ func _input(event: InputEvent) -> void:
 				camera_drag_distance = 0.0
 				camera_dragging = false
 			elif touch_points.size() == 2:
+				multi_touch_gesture = true
 				var points: Array = touch_points.values()
-				pinch_start_distance = (points[0] as Vector2).distance_to(points[1] as Vector2)
+				var first_point: Vector2 = points[0]
+				var second_point: Vector2 = points[1]
+				pinch_start_distance = first_point.distance_to(second_point)
+				previous_pinch_center = (first_point + second_point) * 0.5
 		else:
 			if touch_points.has(touch.index):
-				if touch_points.size() == 1 and not camera_dragging and camera_drag_distance < CAMERA_DRAG_THRESHOLD:
+				if touch_points.size() == 1 and not multi_touch_gesture and not camera_dragging and camera_drag_distance < CAMERA_DRAG_THRESHOLD:
 					_handle_tap(touch.position)
 				touch_points.erase(touch.index)
+			if touch_points.is_empty():
+				multi_touch_gesture = false
 			if touch_points.size() < 2:
 				pinch_start_distance = 0.0
 			if touch_points.size() == 1:
@@ -569,10 +577,16 @@ func _input(event: InputEvent) -> void:
 			touch_points[drag.index] = drag.position
 		if touch_points.size() >= 2:
 			var points: Array = touch_points.values()
-			var distance := (points[0] as Vector2).distance_to(points[1] as Vector2)
-			if pinch_start_distance > 0.0:
-				_zoom_camera(distance / pinch_start_distance, (points[0] + points[1]) * 0.5)
-				pinch_start_distance = distance
+			var first_point: Vector2 = points[0]
+			var second_point: Vector2 = points[1]
+			var center := (first_point + second_point) * 0.5
+			var distance := first_point.distance_to(second_point)
+			camera_position -= (center - previous_pinch_center) / camera_zoom
+			_clamp_camera()
+			if pinch_start_distance > 0.0 and distance > 1.0:
+				_zoom_camera(distance / pinch_start_distance, center)
+			pinch_start_distance = distance
+			previous_pinch_center = center
 		else:
 			camera_drag_distance += drag.relative.length()
 			if camera_drag_distance > CAMERA_DRAG_THRESHOLD:
