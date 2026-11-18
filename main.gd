@@ -367,7 +367,8 @@ func _process(delta: float) -> void:
 				continue
 			var outpost_rect: Rect2 = outpost.get("rect", Rect2(outpost["pos"] - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
 			var outpost_distance: float = civilian.distance_squared_to(outpost["pos"])
-			if outpost_rect.grow(80.0).has_point(civilian) and outpost_distance < nearest_outpost_distance:
+			var beacon_active: bool = float(outpost.get("rescue_beacon_timer", 0.0)) > 0.0 and outpost_distance <= 800.0 * 800.0
+			if (outpost_rect.grow(80.0).has_point(civilian) or beacon_active) and outpost_distance < nearest_outpost_distance:
 				nearest_outpost_distance = outpost_distance
 				civilian_safe_target = outpost["pos"]
 		var civilian_move_target: Vector2 = _outpost_gate_waypoint(civilian, civilian_safe_target)
@@ -563,6 +564,7 @@ func _process(delta: float) -> void:
 	_rebuild_zombie_spatial_grid()
 	for outpost_index in range(outposts.size()):
 		var outpost: Dictionary = outposts[outpost_index]
+		outpost["rescue_beacon_timer"] = maxf(0.0, float(outpost.get("rescue_beacon_timer", 0.0)) - sim_delta)
 		outpost["income_timer"] = float(outpost["income_timer"]) - sim_delta
 		if float(outpost["income_timer"]) <= 0.0:
 			var income_amount := 15 if int(outpost.get("level", 1)) >= 2 else 10
@@ -1038,7 +1040,7 @@ func _update_outpost_placement_from_anchor(world_position: Vector2) -> void:
 func _confirm_outpost_placement() -> void:
 	var size: Vector2 = outpost_placement_rect.size
 	var cost: int = _outpost_build_cost(size)
-	if not outpost_placement_valid or funds < cost:
+	if not outpost_placement_valid or funds < cost or scrap < 40:
 		message = "OUTPOST FOOTPRINT BLOCKED OR INSUFFICIENT FUNDS"
 		message_timer = 1.5
 		return
@@ -1049,7 +1051,7 @@ func _confirm_outpost_placement() -> void:
 		evacuation_zones.append(center)
 		var hq_capacity: int = maxi(12, roundi(size.x * size.y / 18000.0))
 		var hq_fortified_count: int = _fortify_enclosed_buildings(outpost_placement_rect, 0)
-		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 300.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 1200.0, "max_hp": 1200.0, "level": 1, "capacity": hq_capacity + hq_fortified_count * 8, "sheltered": 0, "fortified_buildings": _fortified_building_indices(0)})
+		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 300.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 1200.0, "max_hp": 1200.0, "level": 1, "capacity": hq_capacity + hq_fortified_count * 8, "sheltered": 0, "evac_timer": 11.25, "rescue_beacon_timer": 0.0, "fortified_buildings": _fortified_building_indices(0)})
 		_create_outpost_perimeter(outpost_placement_rect, 0)
 		game_state = "playing"
 		wave_timer = PREPARATION_SECONDS
@@ -1058,9 +1060,10 @@ func _confirm_outpost_placement() -> void:
 		var capacity: int = maxi(12, roundi(size.x * size.y / 18000.0))
 		var new_outpost_index: int = outposts.size()
 		var fortified_count: int = _fortify_enclosed_buildings(outpost_placement_rect, new_outpost_index)
-		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 260.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 900.0, "max_hp": 900.0, "level": 1, "capacity": capacity + fortified_count * 8, "sheltered": 0, "fortified_buildings": _fortified_building_indices(new_outpost_index)})
+		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 260.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 900.0, "max_hp": 900.0, "level": 1, "capacity": capacity + fortified_count * 8, "sheltered": 0, "evac_timer": 11.25, "rescue_beacon_timer": 0.0, "fortified_buildings": _fortified_building_indices(new_outpost_index)})
 		_create_outpost_perimeter(outpost_placement_rect, outposts.size() - 1)
 	funds -= cost
+	scrap -= 40
 	if outpost_placement_kind == "hq":
 		# The HQ, perimeter and evacuation zone are now registered before the campaign can tick.
 		campaign_started = not outposts.is_empty() and float(outposts[0].get("hp", 0.0)) > 0.0
@@ -1672,7 +1675,8 @@ func _update_auto_ops(delta: float) -> void:
 					cache_state["cache_available"] = false
 					building_archetypes[cache_index] = cache_state
 					funds += 100
-					world_callouts.append({"pos": buildings[cache_index].get_center(), "text": "+$100", "life": 2.0})
+					scrap += 20
+					world_callouts.append({"pos": buildings[cache_index].get_center(), "text": "+$100 / ⚙20", "life": 2.0})
 					unit["ai_task"] = ""
 					unit["move_target"] = null
 					units[unit_index] = unit
@@ -1681,7 +1685,9 @@ func _update_auto_ops(delta: float) -> void:
 			var crate_index: int = int(unit.get("ai_target_index", -1))
 			if crate_index >= 0 and crate_index < supply_crates.size() and position.distance_to(supply_crates[crate_index]["pos"]) <= 30.0:
 				funds += 80
-				world_callouts.append({"pos": supply_crates[crate_index]["pos"], "text": "+$80", "life": 2.0})
+				scrap += 15
+				fuel = minf(300.0, fuel + 15.0)
+				world_callouts.append({"pos": supply_crates[crate_index]["pos"], "text": "+$80 / ⚙15", "life": 2.0})
 				supply_crates.remove_at(crate_index)
 				unit["ai_task"] = ""
 				unit["move_target"] = null
@@ -1928,6 +1934,17 @@ func _update_vehicles(delta: float) -> void:
 		var vehicle: Dictionary = vehicles[index]
 		var position: Vector2 = vehicle["pos"]
 		var helicopter: bool = str(vehicle.get("kind", "")) == "helicopter"
+		if bool(vehicle.get("active", false)):
+			var at_refuel_outpost := false
+			for refuel_outpost in outposts:
+				if position.distance_to(refuel_outpost["pos"]) <= 115.0:
+					at_refuel_outpost = true
+					break
+			if at_refuel_outpost and vehicle.get("move_target", null) == null:
+				fuel = minf(300.0, fuel + delta * 5.0)
+			else:
+				fuel = maxf(0.0, fuel - (1.5 if helicopter else 0.8) * delta)
+			vehicle["grounded"] = fuel <= 0.0
 		if not bool(vehicle.get("active", false)):
 			if bool(vehicle.get("salvage_started", false)):
 				var holding_unit := false
@@ -1951,6 +1968,8 @@ func _update_vehicles(delta: float) -> void:
 					vehicle["salvage_timer"] = 4.0
 		else:
 			var speed: float = 280.0 if helicopter else 145.0
+			if bool(vehicle.get("grounded", false)):
+				speed = 0.0
 			var moved := false
 			var target_value: Variant = vehicle.get("move_target", null)
 			if int(vehicle.get("onboard", 0)) > 0 and not (target_value is Vector2):
@@ -2289,6 +2308,10 @@ func _handle_tap(pos: Vector2) -> void:
 		_recruit_unit("engineer")
 		queue_redraw()
 		return
+	if _rescue_broadcast_rect().has_point(pos):
+		_activate_rescue_broadcast()
+		queue_redraw()
+		return
 	if _salvage_button_rect().has_point(pos):
 		_salvage_nearest_vehicle()
 		queue_redraw()
@@ -2452,8 +2475,9 @@ func _handle_tap(pos: Vector2) -> void:
 			message_timer = 1.5
 		queue_redraw()
 		return
-	if funds < cost:
-		message = "INSUFFICIENT FUNDS"
+	var required_scrap: int = 25 if kind == "turret" else (10 if kind == "wall" else (15 if kind == "gate" else 0))
+	if funds < cost or scrap < required_scrap:
+		message = "INSUFFICIENT FUNDS / SCRAP"
 		message_timer = 1.5
 		queue_redraw()
 		return
@@ -2479,6 +2503,7 @@ func _handle_tap(pos: Vector2) -> void:
 		"gate":
 			pass
 	funds -= cost
+	scrap -= required_scrap
 	message = str(deployment["name"]) + " DEPLOYED"
 	message_timer = 1.6
 	queue_redraw()
@@ -2953,6 +2978,10 @@ func _draw_hud() -> void:
 	draw_rect(engineer_rect, Color("#183329"))
 	draw_rect(engineer_rect, Color("#6ccf91"), false, 2.0)
 	_draw_text("[RECRUIT ENG $85]", engineer_rect.position + Vector2(4.0, touch_target_size * 0.62), 10, Color("#e5f8eb"))
+	var beacon_rect := _rescue_broadcast_rect()
+	draw_rect(beacon_rect, Color("#243b4c"))
+	draw_rect(beacon_rect, Color("#75c9e8"), false, 2.0)
+	_draw_text("[RESCUE BEACON $75 / ⚙25]", beacon_rect.position + Vector2(4.0, touch_target_size * 0.62), 9, Color("#e5f8eb"))
 	var salvage_rect := _salvage_button_rect()
 	draw_rect(salvage_rect, Color("#3a3420"))
 	draw_rect(salvage_rect, Color("#e4c66d"), false, 2.0)
@@ -3076,8 +3105,8 @@ func _select_structure_at(world_position: Vector2) -> bool:
 	return false
 
 func _repair_selected_structure() -> void:
-	if funds < STRUCTURE_REPAIR_COST:
-		message = "REPAIR REQUIRES $40"
+	if funds < STRUCTURE_REPAIR_COST or scrap < 8:
+		message = "REPAIR REQUIRES $40 AND ⚙8"
 		message_timer = 1.2
 		return
 	var repaired := false
@@ -3105,6 +3134,7 @@ func _repair_selected_structure() -> void:
 				repaired = float(structure["hp"]) > old_hp
 	if repaired:
 		funds -= STRUCTURE_REPAIR_COST
+		scrap -= 8
 		message = "STRUCTURE REPAIRED +100 HP"
 	else:
 		message = "STRUCTURE ALREADY AT FULL HP"
@@ -3459,6 +3489,7 @@ func _update_outpost_damage(delta: float) -> void:
 			outpost["hp"] = maxf(0.0, float(outpost.get("hp", 500.0)) - damage)
 			zombie["outpost_attack_cooldown"] = 1.0
 			if float(outpost["hp"]) <= 0.0:
+				recent_outpost_loss_timer = 180.0
 				_eject_outpost_shelter(outpost)
 				for wall_index in range(barricades.size() - 1, -1, -1):
 					if int(barricades[wall_index].get("outpost_index", -1)) == outpost_index:
@@ -3508,18 +3539,29 @@ func _total_sheltered_civilians() -> int:
 	return total
 
 func _shelter_flush_timer_step(delta: float) -> void:
-	shelter_flush_timer -= delta
-	if shelter_flush_timer > 0.0:
-		return
-	shelter_flush_timer = 15.0
 	for index in range(outposts.size()):
-		var sheltered: int = int(outposts[index].get("sheltered", 0))
-		if sheltered > 0:
+		var outpost: Dictionary = outposts[index]
+		var sheltered: int = int(outpost.get("sheltered", 0))
+		if sheltered <= 0:
+			continue
+		var rect: Rect2 = outpost.get("rect", Rect2(outpost["pos"] - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
+		var defended := false
+		for defender in units:
+			if not bool(defender.get("garrisoned", false)) and rect.grow(24.0).has_point(defender["pos"]):
+				defended = true
+				break
+		var hospital_support: bool = _is_near_building_type(outpost["pos"], "HOSPITAL", HOSPITAL_REGEN_RADIUS)
+		var overcrowded: bool = sheltered >= int(float(outpost.get("capacity", 12)) * 0.75)
+		var interval: float = 11.25 if (defended or hospital_support) else (18.75 if overcrowded else 15.0)
+		outpost["evac_timer"] = float(outpost.get("evac_timer", interval)) - delta
+		if float(outpost["evac_timer"]) <= 0.0:
 			saved_count += sheltered
 			funds += sheltered * 35
-			outposts[index]["sheltered"] = 0
+			outpost["sheltered"] = 0
+			outpost["evac_timer"] = interval
 			message = "OUTPOST EVACUATION — %d CIVILIANS  +$%d" % [sheltered, sheltered * 35]
 			message_timer = 2.0
+		outposts[index] = outpost
 
 func _spawn_refugee_wave() -> void:
 	for district in spawn_districts:
@@ -3550,6 +3592,8 @@ func _update_supply_drops(delta: float) -> void:
 				break
 		if secured:
 			funds += 120
+			scrap += 15
+			fuel = minf(300.0, fuel + 25.0)
 			supply_crates.remove_at(crate_index)
 			message = "TACTICAL SUPPLY SECURED  +$120"
 			message_timer = 2.0
@@ -3563,6 +3607,29 @@ func _draw_supply_crates() -> void:
 			draw_rect(Rect2(crate_position - Vector2(11.0, 11.0), Vector2(22.0, 22.0)), Color("#d8b65b"))
 			draw_line(crate_position + Vector2(-7.0, 0.0), crate_position + Vector2(7.0, 0.0), Color("#fff0b0"), 2.0)
 
+
+
+func _rescue_broadcast_rect() -> Rect2:
+	return Rect2(safe_insets.x + HUD_EDGE_PADDING + 180.0, safe_insets.y + HUD_EDGE_PADDING + 196.0, 200.0, touch_target_size)
+
+func _activate_rescue_broadcast() -> void:
+	if funds < 75 or scrap < 25:
+		message = "RESCUE BEACON REQUIRES $75 AND ⚙25"
+		message_timer = 1.6
+		return
+	if outposts.is_empty():
+		message = "NO ACTIVE OUTPOST CAN RECEIVE THE BEACON"
+		message_timer = 1.6
+		return
+	var target_index: int = _nearest_outpost_index(camera_position)
+	if target_index < 0:
+		target_index = 0
+	funds -= 75
+	scrap -= 25
+	outposts[target_index]["rescue_beacon_timer"] = 30.0
+	message = "RESCUE BEACON ACTIVE — CIVILIANS GUIDED TO OPEN GATE"
+	message_timer = 2.4
+	world_callouts.append({"pos": outposts[target_index]["pos"], "text": "SOS BEACON", "life": 2.5})
 
 func _update_day_phase() -> void:
 	var minute_of_day: float = fposmod(world_clock_minutes, 1440.0)
@@ -3805,6 +3872,11 @@ func _resume_operation() -> void:
 		district_regions.assign(state["district_regions"])
 	if state.has("gates"):
 		gates.assign(state["gates"])
+	for outpost_index in range(outposts.size()):
+		var migrated_outpost: Dictionary = outposts[outpost_index]
+		migrated_outpost["evac_timer"] = float(migrated_outpost.get("evac_timer", 15.0))
+		migrated_outpost["rescue_beacon_timer"] = float(migrated_outpost.get("rescue_beacon_timer", 0.0))
+		outposts[outpost_index] = migrated_outpost
 	if state.has("warehouse_hold_timers"):
 		warehouse_hold_timers = state["warehouse_hold_timers"]
 	if state.has("zombie_grid_serialized"):
