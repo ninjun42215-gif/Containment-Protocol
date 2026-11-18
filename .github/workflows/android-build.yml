@@ -28,12 +28,14 @@ jobs:
           test -x "$JAVA_HOME/bin/java"
           test -d "$ANDROID_HOME"
 
-          # Godot 4.3 requires a complete Android SDK, not just the SDK
-          # directory bundled in the CI image. Install the versions listed
-          # in the Godot 4.3 Android export documentation.
+          # Install the Android SDK components expected by Godot 4.3.
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/cmdline-tools/bin/sdkmanager"
           test -x "$SDKMANAGER"
-          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses
+
+          # Use process substitution so the 'yes' helper's expected SIGPIPE
+          # does not fail this step under Bash pipefail (Build #8 exit 141).
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses < <(yes)
+
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
             "platform-tools" \
             "build-tools;34.0.0" \
@@ -42,6 +44,7 @@ jobs:
             "cmake;3.10.2.4988404" \
             "ndk;23.2.8568313"
 
+          # Godot 4.3 reads the per-major-version EditorSettings file.
           mkdir -p "$HOME/.config/godot"
           cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
           [gd_resource type="EditorSettings" format=3]
