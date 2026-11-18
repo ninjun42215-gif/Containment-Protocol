@@ -14,7 +14,7 @@ const MINIMAP_SIZE := Vector2(154.0, 190.0)
 const OUTPOST_COST := 220
 const TURRET_COST := 140
 const WALL_COST := 75
-const OUTPOST_INCOME_INTERVAL := 5.0
+const OUTPOST_INCOME_INTERVAL := 30.0
 const TURRET_RANGE := 220.0
 const OUTPOST_COMMAND_RADIUS := 320.0
 const OUTPOST_MAX_COUNT := 6
@@ -422,7 +422,7 @@ func _process(delta: float) -> void:
 		var outpost: Dictionary = outposts[outpost_index]
 		outpost["income_timer"] = float(outpost["income_timer"]) - sim_delta
 		if float(outpost["income_timer"]) <= 0.0:
-			var income_amount := 25 if int(outpost.get("level", 1)) >= 2 else 15
+			var income_amount := 15 if int(outpost.get("level", 1)) >= 2 else 10
 			funds += income_amount
 			outpost["income_timer"] = OUTPOST_INCOME_INTERVAL
 			message = "OUTPOST SUPPLY +$%d" % income_amount
