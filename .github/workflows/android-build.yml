@@ -102,8 +102,8 @@ jobs:
           [gd_resource type="EditorSettings" format=3]
 
           [resource]
-          export/android/android_sdk_path = String("$ANDROID_HOME")
-          export/android/java_sdk_path = String("$JAVA_HOME")
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/java_sdk_path = "$JAVA_HOME"
           EOF
           done
 
