@@ -1378,6 +1378,20 @@ func _is_open_world_position(position: Vector2, margin: float = 28.0) -> bool:
 			return false
 	return true
 
+func _is_vehicle_ground_position(position: Vector2) -> bool:
+	if not _is_valid_street_position(position):
+		return false
+	for wall in barricades:
+		var wall_rect: Rect2 = wall.get("rect", Rect2(wall["pos"] - Vector2(15.0, 15.0), Vector2(30.0, 30.0)))
+		if wall_rect.grow(8.0).has_point(position):
+			return false
+	for gate in gates:
+		if bool(gate.get("open", false)):
+			continue
+		if gate["rect"].grow(8.0).has_point(position):
+			return false
+	return true
+
 func _is_valid_street_position(position: Vector2) -> bool:
 	if position.x < 28.0 or position.x > WORLD_SIZE.x - 28.0 or position.y < 270.0 or position.y > WORLD_SIZE.y - 220.0:
 		return false
@@ -1944,7 +1958,7 @@ func _update_vehicles(delta: float) -> void:
 			if target_value is Vector2:
 				var target: Vector2 = target_value
 				var next_position: Vector2 = position.move_toward(target, speed * delta)
-				if helicopter or _is_valid_street_position(next_position):
+				if helicopter or _is_vehicle_ground_position(next_position):
 					moved = next_position.distance_squared_to(position) > 0.01
 					position = next_position
 					vehicle["pos"] = position
@@ -2349,6 +2363,7 @@ func _handle_tap(pos: Vector2) -> void:
 			_exit_unit_garrison(selected_unit_index, world_pos)
 			if _is_valid_street_position(world_pos):
 				units[selected_unit_index]["move_target"] = world_pos
+			units[selected_unit_index]["manual_order"] = true
 			message = "UNIT EXITED GARRISON"
 			message_timer = 1.5
 			selected_unit_index = -1
