@@ -703,6 +703,8 @@ func _scenario_initial_zombie_count(district_index: int) -> int:
 func _generate_state_map() -> void:
 	buildings.clear()
 	building_archetypes.clear()
+	highway_segments.clear()
+	secondary_road_segments.clear()
 	district_regions.clear()
 	spawn_districts.clear()
 	district_seed_points.clear()
@@ -829,7 +831,53 @@ func _is_near_building_type(position: Vector2, archetype: String, radius: float)
 			return true
 	return false
 
+func _update_engineer_repairs(delta: float) -> void:
+	for unit_index in range(units.size()):
+		var unit: Dictionary = units[unit_index]
+		if str(unit.get("kind", "")) != "engineer" or bool(unit.get("garrisoned", false)):
+			continue
+		var repair_target: Vector2 = unit["pos"]
+		var best_distance: float = 90.0 * 90.0
+		var target_kind: String = ""
+		var target_index: int = -1
+		for index in range(outposts.size()):
+			var distance: float = unit["pos"].distance_squared_to(outposts[index]["pos"])
+			if distance <= best_distance and float(outposts[index].get("hp", 0.0)) < float(outposts[index].get("max_hp", 1.0)):
+				best_distance = distance
+				target_kind = "outpost"
+				target_index = index
+		for index in range(barricades.size()):
+			var distance: float = unit["pos"].distance_squared_to(barricades[index]["pos"])
+			if distance <= best_distance and float(barricades[index].get("hp", 0.0)) < float(barricades[index].get("max_hp", 1.0)):
+				best_distance = distance
+				target_kind = "wall"
+				target_index = index
+		for index in range(gates.size()):
+			var distance: float = unit["pos"].distance_squared_to(gates[index]["pos"])
+			if distance <= best_distance and float(gates[index].get("hp", 0.0)) < float(gates[index].get("max_hp", 1.0)):
+				best_distance = distance
+				target_kind = "gate"
+				target_index = index
+		for index in range(turrets.size()):
+			var distance: float = unit["pos"].distance_squared_to(turrets[index]["pos"])
+			if distance <= best_distance and float(turrets[index].get("hp", 0.0)) < float(turrets[index].get("max_hp", 1.0)):
+				best_distance = distance
+				target_kind = "turret"
+				target_index = index
+		if target_index < 0:
+			continue
+		match target_kind:
+			"outpost":
+				outposts[target_index]["hp"] = minf(float(outposts[target_index]["max_hp"]), float(outposts[target_index]["hp"]) + 8.0 * delta)
+			"wall":
+				barricades[target_index]["hp"] = minf(float(barricades[target_index]["max_hp"]), float(barricades[target_index]["hp"]) + 8.0 * delta)
+			"gate":
+				gates[target_index]["hp"] = minf(float(gates[target_index]["max_hp"]), float(gates[target_index]["hp"]) + 8.0 * delta)
+			"turret":
+				turrets[target_index]["hp"] = minf(float(turrets[target_index]["max_hp"]), float(turrets[target_index]["hp"]) + 8.0 * delta)
+
 func _update_building_effects(delta: float) -> void:
+	_update_engineer_repairs(delta)
 	for unit_index in range(units.size()):
 		var unit: Dictionary = units[unit_index]
 		var max_hp: float = float(unit.get("max_hp", 100.0))
@@ -1464,12 +1512,14 @@ func _outpost_recruit_spawn(outpost_index: int, fallback: Vector2) -> Vector2:
 	return outposts[outpost_index]["pos"] + Vector2(0.0, 118.0)
 
 func _recruit_unit(kind: String) -> void:
+	if kind != "infantry" and kind != "sniper" and kind != "engineer":
+		return
 	var source_index: int = _best_recruitment_outpost()
 	if source_index < 0:
 		message = "REQUIRES 1 SHELTERED SETTLER IN AN OUTPOST"
 		message_timer = 2.0
 		return
-	var base_cost: int = 65 if kind == "infantry" else 110
+	var base_cost: int = 60 if kind == "infantry" else (110 if kind == "sniper" else 85)
 	var discounted: bool = _is_near_building_type(outposts[source_index]["pos"], "ARMORY", ARMORY_RADIUS)
 	var cost: int = roundi(float(base_cost) * (0.75 if discounted else 1.0))
 	if funds < cost:
@@ -1491,8 +1541,11 @@ func _ai_button_rect() -> Rect2:
 func _recruit_button_rect(index: int) -> Rect2:
 	return Rect2(Vector2(safe_insets.x + 390.0, safe_insets.y + 196.0 + float(index + 1) * (touch_target_size + 6.0)), Vector2(140.0, touch_target_size))
 
-func _salvage_button_rect() -> Rect2:
+func _engineer_button_rect() -> Rect2:
 	return Rect2(Vector2(safe_insets.x + 390.0, safe_insets.y + 196.0 + 3.0 * (touch_target_size + 6.0)), Vector2(140.0, touch_target_size))
+
+func _salvage_button_rect() -> Rect2:
+	return Rect2(Vector2(safe_insets.x + 390.0, safe_insets.y + 196.0 + 4.0 * (touch_target_size + 6.0)), Vector2(140.0, touch_target_size))
 
 func _find_unit_combat_target(position: Vector2, attack_range: float, sniper: bool) -> int:
 	if sniper:
@@ -1929,6 +1982,10 @@ func _handle_tap(pos: Vector2) -> void:
 		_recruit_unit("sniper")
 		queue_redraw()
 		return
+	if _engineer_button_rect().has_point(pos):
+		_recruit_unit("engineer")
+		queue_redraw()
+		return
 	if _salvage_button_rect().has_point(pos):
 		_salvage_nearest_vehicle()
 		queue_redraw()
@@ -2111,13 +2168,7 @@ func _handle_tap(pos: Vector2) -> void:
 		"flare":
 			flares.append({"pos": world_pos, "life": FLARE_LIFETIME, "phase": 0.0})
 			_queue_sfx("flare")
-		"medevac":
-			if not medevac.is_empty():
-				message = "MEDEVAC ALREADY ACTIVE"
-				message_timer = 1.5
-				return
-			medevac = {"pos": Vector2(-90.0, world_pos.y), "target": world_pos, "phase": "inbound", "hp": MEDEVAC_HP, "landing_timer": MEDEVAC_LANDING_TIME, "onboard": 0, "attack_flash": 0.0}
-		"infantry", "sniper":
+		"infantry", "sniper", "engineer":
 			_recruit_unit(kind)
 			return
 		"turret":
@@ -2496,11 +2547,17 @@ func _draw_entities() -> void:
 			continue
 		var unit_kind: String = str(unit["kind"])
 		var sniper: bool = unit_kind == "sniper"
+		var engineer: bool = unit_kind == "engineer"
 		var militia: bool = unit_kind == "militia"
-		var tint := Color("#c6d46b") if militia else (Color("#6bdc9a") if not sniper else Color("#8ab6ff"))
+		var tint := Color("#e0b66c") if engineer else (Color("#c6d46b") if militia else (Color("#6bdc9a") if not sniper else Color("#8ab6ff")))
 		draw_rect(Rect2(p - Vector2(9, 9), Vector2(18, 18)), tint)
 		if militia:
 			_draw_text("M", p + Vector2(-4.0, 4.0), 11, Color("#1b2410"))
+		elif engineer:
+			_draw_text("E", p + Vector2(-4.0, 4.0), 11, Color("#1b2410"))
+		var task_label: String = str(unit.get("ai_task", ""))
+		if not task_label.is_empty():
+			_draw_text(task_label, p + Vector2(-25.0, -15.0), 9, Color("#b5f3d2"))
 		draw_arc(p, (390.0 if sniper else (MILITIA_RANGE if militia else 205.0)) * _night_vision_multiplier(), 0.0, TAU, 48, Color(tint.r, tint.g, tint.b, 0.10), 1.0)
 		if unit_index == selected_unit_index:
 			draw_arc(p, 24.0, 0.0, TAU, 32, Color("#fff28a"), 3.0)
@@ -2583,6 +2640,10 @@ func _draw_hud() -> void:
 		draw_rect(recruit_rect, Color("#6ccf91"), false, 2.0)
 	_draw_text("[RECRUIT INF]", inf_rect.position + Vector2(7.0, touch_target_size * 0.62), 12, Color("#e5f8eb"))
 	_draw_text("[RECRUIT SNIPER]", sniper_rect.position + Vector2(7.0, touch_target_size * 0.62), 11, Color("#e5f8eb"))
+	var engineer_rect := _engineer_button_rect()
+	draw_rect(engineer_rect, Color("#183329"))
+	draw_rect(engineer_rect, Color("#6ccf91"), false, 2.0)
+	_draw_text("[RECRUIT ENG]", engineer_rect.position + Vector2(7.0, touch_target_size * 0.62), 12, Color("#e5f8eb"))
 	var salvage_rect := _salvage_button_rect()
 	draw_rect(salvage_rect, Color("#3a3420"))
 	draw_rect(salvage_rect, Color("#e4c66d"), false, 2.0)
@@ -2802,9 +2863,7 @@ func _draw_placement_preview() -> void:
 		valid = false
 	if kind == "gate":
 		valid = funds >= GATE_COST
-	if kind == "medevac" and not medevac.is_empty():
-		valid = false
-	var tint := Color(0.2, 1.0, 0.48, 0.18) if valid else Color(1.0, 0.18, 0.2, 0.20)
+		var tint := Color(0.2, 1.0, 0.48, 0.18) if valid else Color(1.0, 0.18, 0.2, 0.20)
 	var line_tint := Color("#56f58f") if valid else Color("#ff555d")
 	draw_circle(preview_position, radius, tint)
 	draw_arc(preview_position, radius, 0.0, TAU, 56, line_tint, 2.5)
@@ -2825,8 +2884,6 @@ func _deployment_range(kind: String) -> float:
 			return 112.0
 		"flare":
 			return FLARE_LURE_RADIUS
-		"medevac":
-			return MEDEVAC_RING
 		"wall":
 			return 30.0
 		"outpost":
