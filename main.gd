@@ -1255,6 +1255,9 @@ func _input(event: InputEvent) -> void:
 				elif outpost_placement_active:
 					if outpost_placement_rect.grow(24.0).has_point(touch_world):
 						_begin_outpost_resize(touch_world)
+					elif (game_state == "hq_placement" and touch.position.y >= viewport_size.y - 150.0) or (game_state == "playing" and touch.position.y >= viewport_size.y - 260.0 and touch.position.y <= viewport_size.y - 206.0):
+						outpost_placement_gesture_mode = ""
+						outpost_placement_dragging = false
 					else:
 						outpost_placement_gesture_mode = "pan"
 						outpost_placement_dragging = true
@@ -1325,6 +1328,9 @@ func _input(event: InputEvent) -> void:
 				elif outpost_placement_active:
 					if outpost_placement_rect.grow(24.0).has_point(mouse_world):
 						_begin_outpost_resize(mouse_world)
+					elif (game_state == "hq_placement" and mouse.position.y >= viewport_size.y - 150.0) or (game_state == "playing" and mouse.position.y >= viewport_size.y - 260.0 and mouse.position.y <= viewport_size.y - 206.0):
+						outpost_placement_gesture_mode = ""
+						outpost_placement_dragging = false
 					else:
 						outpost_placement_gesture_mode = "pan"
 						outpost_placement_dragging = true
