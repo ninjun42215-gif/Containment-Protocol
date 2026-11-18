@@ -3125,7 +3125,17 @@ func _draw_entities() -> void:
 		var militia: bool = unit_kind == "militia"
 		var medic: bool = unit_kind == "medic"
 		var heavy: bool = unit_kind == "heavy"
-		var tint := Color("#e0b66c") if engineer else (Color("#79d4e6") if medic else (Color("#cf6d58") if heavy else (Color("#c6d46b") if militia else (Color("#6bdc9a") if not sniper else Color("#8ab6ff"))))
+		var tint := Color("#6bdc9a")
+		if engineer:
+			tint = Color("#e0b66c")
+		elif medic:
+			tint = Color("#79d4e6")
+		elif heavy:
+			tint = Color("#cf6d58")
+		elif militia:
+			tint = Color("#c6d46b")
+		elif sniper:
+			tint = Color("#8ab6ff")
 		draw_rect(Rect2(p - Vector2(9, 9), Vector2(18, 18)), tint)
 		var veteran_rank: int = clampi(int(unit.get("rank", 0)), 0, 3)
 		for chevron in range(veteran_rank):
