@@ -1860,9 +1860,14 @@ func _update_auto_ops(delta: float) -> void:
 			if shelter_index >= 0 and _building_garrison_count(shelter_index) < (8 if _building_type_at(shelter_index) == "HIGHRISE" else 4):
 				_garrison_unit(unit_index, shelter_index, false)
 				continue
-		if not next_task.is_empty() and position.distance_to(next_target) > 24.0:
-			unit["move_target"] = next_target
+		if not next_task.is_empty():
 			unit["ai_task"] = next_task
+			if position.distance_to(next_target) > 24.0:
+				unit["move_target"] = next_target
+			elif next_task == "CHOP" or next_task == "HUNT":
+				unit["work_kind"] = "chop" if next_task == "CHOP" else "hunt"
+				unit["work_target_index"] = int(unit.get("ai_target_index", -1))
+				unit["work_timer"] = 3.0
 		units[unit_index] = unit
 
 func _nearest_outpost_gate_position(outpost_index: int, from_position: Vector2) -> Vector2:
@@ -2683,7 +2688,7 @@ func _handle_tap(pos: Vector2) -> void:
 		return
 	var required_scrap: int = 25 if kind == "turret" else (10 if kind == "wall" else (15 if kind == "gate" else 0))
 	if funds < cost or scrap < required_scrap:
-		message = "INSUFFICIENT FUNDS / SCRAP"
+		message = "INSUFFICIENT FUNDS / MATS"
 		message_timer = 1.5
 		queue_redraw()
 		return
@@ -4301,6 +4306,8 @@ func _resume_operation() -> void:
 	last_upkeep_day = maxi(1, int(state.get("last_upkeep_day", int(state.get("survival_day", 1)))))
 	if state.has("trees"):
 		trees.assign(state["trees"])
+	elif not state.has("wildlife"):
+		_populate_ecology()
 	if state.has("wildlife"):
 		wildlife.assign(state["wildlife"])
 	if state.has("raider_camps"):
