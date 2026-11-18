@@ -7,7 +7,11 @@ const VIEW_SIZE := Vector2(720.0, 1280.0)
 const BAR_TOP := 1080.0
 const EVAC_ZONE := Vector2(360.0, 205.0)
 const EVAC_RADIUS := 76.0
-const MAX_WAVES := 5
+const MEDEVAC_COST := 250
+const MEDEVAC_HP := 150.0
+const MEDEVAC_RING := 95.0
+const MEDEVAC_CAPACITY := 8
+const MEDEVAC_LANDING_TIME := 3.0
 const GRID_CELL_SIZE := 64.0
 const UNIT_SELECT_RADIUS := 30.0
 const BUILDING_RADIUS := 11.0
@@ -21,7 +25,8 @@ const DEPLOYMENTS := [
 	{"name": "BARRICADE", "detail": "WALL  $75", "cost": 75, "kind": "barricade"},
 	{"name": "SNIPER", "detail": "TEAM  $200", "cost": 200, "kind": "sniper"},
 	{"name": "AIRSTRIKE", "detail": "$300", "cost": 300, "kind": "airstrike"},
-	{"name": "TACTICAL FLARE", "detail": "BEACON  $40", "cost": FLARE_COST, "kind": "flare"}
+	{"name": "TACTICAL FLARE", "detail": "BEACON  $40", "cost": FLARE_COST, "kind": "flare"},
+	{"name": "MEDEVAC", "detail": "LIFT  $250", "cost": MEDEVAC_COST, "kind": "medevac"}
 ]
 
 var civilians: Array[Vector2] = []
@@ -29,6 +34,12 @@ var zombies: Array[Dictionary] = []
 var units: Array[Dictionary] = []
 var barricades: Array[Dictionary] = []
 var flares: Array[Dictionary] = []
+var medevac: Dictionary = {}
+var sector_index := 0
+var sector_name := "Downtown Grid"
+var sector_wave_limit := 3
+var manual_paused := false
+var lifecycle_paused := false
 var preview_position := Vector2.ZERO
 var preview_active := false
 var sfx_enabled := true
@@ -68,17 +79,51 @@ var shake_strength := 0.0
 func _ready() -> void:
 	randomize()
 	screen_font = ThemeDB.fallback_font
-	_setup_city()
+	_configure_sector(0)
 	_setup_audio()
-	_start_round()
+	game_state = "title"
 	queue_redraw()
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_APPLICATION_PAUSED:
+		lifecycle_paused = true
+		manual_paused = true
+		audio_queue.clear()
+		audio_effect = ""
+		audio_samples_left = 0
+		if audio_player != null:
+			audio_player.stop()
+		queue_redraw()
+	elif what == NOTIFICATION_APPLICATION_FOCUS_IN:
+		if audio_player != null and sfx_enabled:
+			audio_player.play()
+		queue_redraw()
+	elif what == NOTIFICATION_WM_GO_BACK_REQUEST:
+		if game_state == "title":
+			game_state = "sector_select"
+		elif game_state == "sector_select":
+			game_state = "title"
+		elif game_state == "playing":
+			manual_paused = not manual_paused
+			lifecycle_paused = false
+		else:
+			game_state = "sector_select"
+		queue_redraw()
+
 func _start_round() -> void:
+	_start_sector(sector_index)
+
+func _start_sector(index: int) -> void:
+	sector_index = clampi(index, 0, 2)
+	_configure_sector(sector_index)
 	civilians.clear()
 	zombies.clear()
 	units.clear()
 	barricades.clear()
 	flares.clear()
+	medevac.clear()
+	manual_paused = false
+	lifecycle_paused = false
 	funds = 300
 	saved_count = 0
 	lost_count = 0
@@ -100,14 +145,19 @@ func _start_round() -> void:
 	message_timer = 4.0
 	for i in range(45):
 		civilians.append(Vector2(randf_range(52.0, 668.0), randf_range(510.0, 1030.0)))
+	message = "%s — SECURE THE EVACUATION ZONE" % sector_name
+	message_timer = 3.0
 
 func _process(delta: float) -> void:
 	_update_audio()
 	_update_combat_effects(delta)
-	_update_flares(delta)
 	if game_state != "playing":
 		queue_redraw()
 		return
+	if manual_paused or lifecycle_paused:
+		queue_redraw()
+		return
+	_update_flares(delta)
 
 	var sim_delta: float = delta * TIME_SCALES[time_scale_index]
 	if sim_delta <= 0.0:
@@ -115,11 +165,12 @@ func _process(delta: float) -> void:
 		return
 
 	elapsed += sim_delta
+	_update_medevac(sim_delta)
 	message_timer = maxf(0.0, message_timer - sim_delta)
 	airstrike_timer = maxf(0.0, airstrike_timer - sim_delta)
 	wave_timer -= sim_delta
 
-	if wave < MAX_WAVES and wave_timer <= 0.0:
+	if wave < sector_wave_limit and wave_timer <= 0.0:
 		_spawn_wave()
 		wave_timer = 18.0
 
@@ -149,11 +200,25 @@ func _process(delta: float) -> void:
 		var lure_index: int = _find_nearest_flare(zpos)
 		if lure_index >= 0:
 			target = flares[lure_index]["pos"]
+		if not medevac.is_empty() and str(medevac.get("phase", "")) == "landed" and zpos.distance_to(medevac["pos"]) <= 150.0:
+			target = medevac["pos"]
 		var zombie_kind: String = str(zombie["kind"])
 		var speed := 112.0 if zombie_kind == "runner" else 61.0
 		if zombie_kind == "brute":
 			speed = 34.0
 		var displacement: Vector2 = (target - zpos).normalized() * speed * sim_delta
+		if not medevac.is_empty() and str(medevac.get("phase", "")) == "landed" and zpos.distance_to(medevac["pos"]) <= 34.0:
+			var medevac_cooldown: float = float(zombie.get("medevac_cooldown", 0.0))
+			if medevac_cooldown <= 0.0:
+				medevac["hp"] = maxf(0.0, float(medevac["hp"]) - (35.0 if zombie_kind == "brute" else 20.0))
+				zombie["medevac_cooldown"] = 1.0
+				if float(medevac["hp"]) <= 0.0:
+					lost_count += int(medevac.get("onboard", 0))
+					message = "MEDEVAC DESTROYED — ONBOARD LOST"
+					message_timer = 2.5
+					medevac.clear()
+			else:
+				zombie["medevac_cooldown"] = maxf(0.0, medevac_cooldown - sim_delta)
 		zpos = _move_circle_with_buildings(zpos, displacement, 10.0 if zombie_kind == "brute" else 7.0)
 
 		for wall_index in range(barricades.size() - 1, -1, -1):
@@ -210,10 +275,10 @@ func _process(delta: float) -> void:
 			zombie_grid = _build_zombie_spatial_grid()
 		units[unit_index] = unit
 
-	if wave >= MAX_WAVES and zombies.is_empty() and civilians.is_empty():
+	if wave >= sector_wave_limit and zombies.is_empty() and civilians.is_empty() and medevac.is_empty():
 		game_state = "victory"
 		message = "SECTOR SECURED"
-	elif civilians.is_empty() and saved_count == 0 and lost_count > 0:
+	elif civilians.is_empty() and saved_count == 0 and lost_count > 0 and medevac.is_empty():
 		game_state = "defeat"
 		message = "EVACUATION FAILED"
 
@@ -221,13 +286,37 @@ func _process(delta: float) -> void:
 
 
 func _setup_city() -> void:
-	buildings = [
-		Rect2(48.0, 330.0, 190.0, 112.0),
-		Rect2(482.0, 326.0, 190.0, 132.0),
-		Rect2(58.0, 650.0, 174.0, 142.0),
-		Rect2(488.0, 670.0, 184.0, 138.0),
-		Rect2(270.0, 866.0, 180.0, 104.0)
-	]
+	_configure_sector(sector_index)
+
+func _configure_sector(index: int) -> void:
+	match index:
+		0:
+			sector_name = "Downtown Grid"
+			sector_wave_limit = 3
+			buildings = [
+				Rect2(48.0, 330.0, 190.0, 112.0),
+				Rect2(482.0, 326.0, 190.0, 132.0),
+				Rect2(58.0, 650.0, 174.0, 142.0),
+				Rect2(488.0, 670.0, 184.0, 138.0)
+			]
+		1:
+			sector_name = "Highway Chokepoint"
+			sector_wave_limit = 4
+			buildings = [
+				Rect2(24.0, 320.0, 220.0, 180.0),
+				Rect2(476.0, 320.0, 220.0, 180.0),
+				Rect2(24.0, 690.0, 220.0, 180.0),
+				Rect2(476.0, 690.0, 220.0, 180.0)
+			]
+		_:
+			sector_name = "Central Plaza"
+			sector_wave_limit = 5
+			buildings = [
+				Rect2(34.0, 300.0, 142.0, 118.0),
+				Rect2(544.0, 300.0, 142.0, 118.0),
+				Rect2(34.0, 830.0, 142.0, 118.0),
+				Rect2(544.0, 830.0, 142.0, 118.0)
+			]
 
 func _cell_for(position: Vector2) -> Vector2i:
 	return Vector2i(floori(position.x / GRID_CELL_SIZE), floori(position.y / GRID_CELL_SIZE))
@@ -390,9 +479,27 @@ func _input(event: InputEvent) -> void:
 		_handle_tap(event.position)
 
 func _handle_tap(pos: Vector2) -> void:
+	if game_state == "title":
+		game_state = "sector_select"
+		queue_redraw()
+		return
+	if game_state == "sector_select":
+		if pos.y >= 570.0 and pos.y < 1005.0:
+			var selected_sector := clampi(int((pos.y - 570.0) / 145.0), 0, 2)
+			_start_sector(selected_sector)
+		queue_redraw()
+		return
+	if game_state == "victory" or game_state == "defeat":
+		game_state = "sector_select"
+		queue_redraw()
+		return
 	if game_state != "playing":
-		if pos.y > 900.0:
-			_start_round()
+		return
+	if manual_paused or lifecycle_paused:
+		if pos.x >= 150.0 and pos.x <= 570.0 and pos.y >= 700.0 and pos.y <= 810.0:
+			manual_paused = false
+			lifecycle_paused = false
+		queue_redraw()
 		return
 	if pos.x >= 520.0 and pos.y >= 145.0 and pos.y <= 206.0:
 		time_scale_index = (time_scale_index + 1) % TIME_SCALES.size()
@@ -406,8 +513,8 @@ func _handle_tap(pos: Vector2) -> void:
 		queue_redraw()
 		return
 	if pos.y >= BAR_TOP:
-		var button_width := VIEW_SIZE.x / 5.0
-		selected_deployment = clampi(int(pos.x / button_width), 0, 4)
+		var button_width := VIEW_SIZE.x / 6.0
+		selected_deployment = clampi(int(pos.x / button_width), 0, 5)
 		message = str(DEPLOYMENTS[selected_deployment]["name"]) + " SELECTED"
 		message_timer = 1.2
 		queue_redraw()
@@ -464,6 +571,14 @@ func _handle_tap(pos: Vector2) -> void:
 		funds -= cost
 		message = "TACTICAL FLARE DEPLOYED"
 		_queue_sfx("flare")
+	elif kind == "medevac":
+		if not medevac.is_empty():
+			message = "MEDEVAC ALREADY ACTIVE"
+			message_timer = 1.5
+			return
+		medevac = {"pos": Vector2(-90.0, pos.y), "target": pos, "phase": "inbound", "hp": MEDEVAC_HP, "landing_timer": MEDEVAC_LANDING_TIME, "onboard": 0, "attack_flash": 0.0}
+		funds -= cost
+		message = "MEDEVAC INBOUND"
 	elif kind == "barricade":
 		barricades.append({"pos": pos, "hp": 100.0, "max_hp": 100.0})
 		funds -= cost
@@ -478,6 +593,46 @@ func _handle_tap(pos: Vector2) -> void:
 		message = "INFANTRY SQUAD DEPLOYED"
 	message_timer = 1.6
 	queue_redraw()
+
+func _update_medevac(delta: float) -> void:
+	if medevac.is_empty():
+		return
+	var phase: String = str(medevac["phase"])
+	var position: Vector2 = medevac["pos"]
+	if phase == "inbound":
+		var target: Vector2 = medevac["target"]
+		position.x = move_toward(position.x, target.x, 260.0 * delta)
+		if absf(position.x - target.x) <= 1.0:
+			position = target
+			medevac["phase"] = "landed"
+			medevac["landing_timer"] = MEDEVAC_LANDING_TIME
+			var extracted := 0
+			for civilian_index in range(civilians.size() - 1, -1, -1):
+				if extracted >= MEDEVAC_CAPACITY:
+					break
+				if position.distance_to(civilians[civilian_index]) <= MEDEVAC_RING:
+					civilians.remove_at(civilian_index)
+					extracted += 1
+			medevac["onboard"] = extracted
+			if extracted > 0:
+				message = "MEDEVAC ABOARD — %d CIVILIANS" % extracted
+				message_timer = 2.0
+	elif phase == "landed":
+		medevac["landing_timer"] = float(medevac["landing_timer"]) - delta
+		medevac["attack_flash"] = maxf(0.0, float(medevac.get("attack_flash", 0.0)) - delta)
+		if float(medevac["landing_timer"]) <= 0.0:
+			var rescued: int = int(medevac.get("onboard", 0))
+			saved_count += rescued
+			funds += rescued * 40
+			message = "MEDEVAC LIFTED — +$%d" % (rescued * 40)
+			message_timer = 2.0
+			medevac["phase"] = "outbound"
+	elif phase == "outbound":
+		position.x += 260.0 * delta
+		if position.x > VIEW_SIZE.x + 100.0:
+			medevac.clear()
+			return
+	medevac["pos"] = position
 
 func _execute_airstrike(center: Vector2) -> void:
 	airstrike_marker = center
@@ -505,6 +660,11 @@ func _execute_airstrike(center: Vector2) -> void:
 	message_timer = 2.5
 
 func _draw() -> void:
+	if game_state == "title" or game_state == "sector_select":
+		draw_rect(Rect2(Vector2.ZERO, VIEW_SIZE), Color("#07110f"))
+		_draw_grid()
+		_draw_title_screen()
+		return
 	var shake_offset := Vector2.ZERO
 	if shake_timer > 0.0:
 		shake_offset = Vector2(randf_range(-shake_strength, shake_strength), randf_range(-shake_strength, shake_strength))
@@ -514,9 +674,12 @@ func _draw() -> void:
 	_draw_evac_zone()
 	_draw_buildings()
 	_draw_entities()
+	_draw_medevac()
 	_draw_placement_preview()
 	_draw_hud()
 	_draw_deployment_bar()
+	if manual_paused or lifecycle_paused:
+		_draw_pause_overlay()
 	if airstrike_timer > 0.0:
 		draw_arc(airstrike_marker, 112.0, 0.0, TAU, 48, Color(1.0, 0.42, 0.12, airstrike_timer), 4.0)
 	for flare in flares:
@@ -545,6 +708,54 @@ func _draw_evac_zone() -> void:
 	draw_arc(EVAC_ZONE, EVAC_RADIUS, 0.0, TAU, 48, Color("#48e58b"), 3.0)
 	draw_arc(EVAC_ZONE, EVAC_RADIUS - 12.0, 0.0, TAU, 48, Color(0.28, 0.85, 0.55, 0.35), 1.0)
 	_draw_text("EVAC ZONE", EVAC_ZONE + Vector2(-48, 5), 15, Color("#8cf5b5"))
+
+func _draw_title_screen() -> void:
+	draw_rect(Rect2(32.0, 210.0, 656.0, 820.0), Color(0.02, 0.07, 0.055, 0.96))
+	draw_rect(Rect2(32.0, 210.0, 656.0, 820.0), Color("#4d7964"), false, 2.0)
+	_draw_text("CONTAINMENT", Vector2(95.0, 330.0), 42, Color("#e4f6e9"))
+	_draw_text("PROTOCOL", Vector2(205.0, 385.0), 42, Color("#79e7a4"))
+	_draw_text("TACTICAL EVACUATION COMMAND", Vector2(122.0, 445.0), 18, Color("#a9c8b7"))
+	if game_state == "title":
+		draw_rect(Rect2(140.0, 650.0, 440.0, 100.0), Color("#1d4935"))
+		draw_rect(Rect2(140.0, 650.0, 440.0, 100.0), Color("#75e6a0"), false, 3.0)
+		_draw_text("TAP TO SELECT SECTOR", Vector2(190.0, 710.0), 22, Color("#f0fff5"))
+	else:
+		_draw_text("SELECT OPERATIONAL SECTOR", Vector2(135.0, 535.0), 22, Color("#d8eee0"))
+		var names: Array[String] = ["01  DOWNTOWN GRID", "02  HIGHWAY CHOKEPOINT", "03  CENTRAL PLAZA"]
+		var details: Array[String] = ["BALANCED FOUR-BLOCK GRID  •  3 WAVES", "NARROW CENTRAL AVENUES  •  4 WAVES", "OPEN CENTER / OUTER COVER  •  5 WAVES"]
+		for index in range(3):
+			var y := 570.0 + float(index) * 145.0
+			draw_rect(Rect2(72.0, y, 576.0, 112.0), Color("#18352a"))
+			draw_rect(Rect2(72.0, y, 576.0, 112.0), Color("#69b98a"), false, 2.0)
+			_draw_text(names[index], Vector2(95.0, y + 43.0), 20, Color("#e8fff0"))
+			_draw_text(details[index], Vector2(95.0, y + 78.0), 13, Color("#a9c8b7"))
+	_draw_text("ANDROID TACTICAL RESPONSE UNIT", Vector2(150.0, 1090.0), 15, Color("#648675"))
+
+func _draw_pause_overlay() -> void:
+	draw_rect(Rect2(0.0, 0.0, 720.0, 1280.0), Color(0.01, 0.04, 0.03, 0.78))
+	_draw_text("SIMULATION PAUSED", Vector2(165.0, 590.0), 30, Color("#e8fff0"))
+	draw_rect(Rect2(150.0, 700.0, 420.0, 100.0), Color("#244a38"))
+	draw_rect(Rect2(150.0, 700.0, 420.0, 100.0), Color("#8ce5ad"), false, 3.0)
+	_draw_text("RESUME  /  BACK", Vector2(245.0, 760.0), 24, Color("#f0fff5"))
+
+func _draw_medevac() -> void:
+	if medevac.is_empty():
+		return
+	var position: Vector2 = medevac["pos"]
+	var phase: String = str(medevac["phase"])
+	if phase == "landed":
+		draw_circle(position, MEDEVAC_RING, Color(0.12, 0.95, 0.42, 0.10))
+		draw_arc(position, MEDEVAC_RING, 0.0, TAU, 64, Color("#63f59a"), 3.0)
+		draw_arc(position, MEDEVAC_RING - 8.0, 0.0, TAU, 64, Color(0.45, 1.0, 0.65, 0.35), 1.0)
+	draw_line(position + Vector2(-34.0, -18.0), position + Vector2(34.0, -18.0), Color("#d7e8e1"), 3.0)
+	draw_line(position + Vector2(0.0, -18.0), position + Vector2(0.0, 18.0), Color("#d7e8e1"), 2.0)
+	draw_rect(Rect2(position + Vector2(-24.0, -9.0), Vector2(48.0, 18.0)), Color("#5ccf91"))
+	draw_circle(position + Vector2(24.0, 0.0), 8.0, Color("#b9e8d1"))
+	if phase == "landed":
+		var hp_ratio: float = clampf(float(medevac["hp"]) / MEDEVAC_HP, 0.0, 1.0)
+		draw_rect(Rect2(position + Vector2(-28.0, 25.0), Vector2(56.0, 5.0)), Color("#552b2b"))
+		draw_rect(Rect2(position + Vector2(-28.0, 25.0), Vector2(56.0 * hp_ratio, 5.0)), Color("#65ee96"))
+		_draw_text("ONBOARD %d/8" % int(medevac.get("onboard", 0)), position + Vector2(-40.0, 48.0), 11, Color("#aaffc5"))
 
 func _draw_entities() -> void:
 	for civilian in civilians:
@@ -589,7 +800,7 @@ func _draw_hud() -> void:
 	draw_rect(Rect2(18, 18, 684, 126), Color("#0b1b17"))
 	_draw_text("CONTAINMENT PROTOCOL", Vector2(34, 52), 23, Color("#e2f4e9"))
 	_draw_text("FUNDS  $%d" % funds, Vector2(34, 88), 21, Color("#f4d77b"))
-	_draw_text("WAVE %d/%d" % [wave, MAX_WAVES], Vector2(245, 88), 18, Color("#ffad62"))
+	_draw_text("SECTOR %02d  WAVE %d/%d" % [sector_index + 1, wave, sector_wave_limit], Vector2(245, 88), 16, Color("#ffad62"))
 	_draw_text("SAVED %d   LOST %d   HORDE %d" % [saved_count, lost_count, zombies.size()], Vector2(34, 122), 17, Color("#9cbcaf"))
 	if message_timer > 0.0:
 		_draw_text(message, Vector2(34, 177), 16, Color("#ffbd76"))
@@ -603,8 +814,8 @@ func _draw_hud() -> void:
 func _draw_deployment_bar() -> void:
 	draw_rect(Rect2(0, BAR_TOP, 720, 200), Color("#0b1715"))
 	draw_line(Vector2(0, BAR_TOP), Vector2(720, BAR_TOP), Color("#45665a"), 2.0)
-	for i in range(5):
-		var button_width := VIEW_SIZE.x / 5.0
+	for i in range(6):
+		var button_width := VIEW_SIZE.x / 6.0
 		var x := float(i) * button_width
 		var selected := i == selected_deployment
 		var bg := Color("#254538") if selected else Color("#12251f")
@@ -612,12 +823,14 @@ func _draw_deployment_bar() -> void:
 		draw_rect(Rect2(x + 3, BAR_TOP + 10, button_width - 6.0, 178), Color("#72d69a") if selected else Color("#29443a"), false, 2.0)
 		var deployment: Dictionary = DEPLOYMENTS[i]
 		var title_color := Color("#e8fff0") if selected else Color("#b2c7bc")
-		_draw_text(str(deployment["name"]), Vector2(x + 9, BAR_TOP + 53), 14, title_color)
-		_draw_text(str(deployment["detail"]), Vector2(x + 9, BAR_TOP + 91), 13, Color("#f0cc77"))
+		_draw_text(str(deployment["name"]), Vector2(x + 6, BAR_TOP + 53), 12, title_color)
+		_draw_text(str(deployment["detail"]), Vector2(x + 6, BAR_TOP + 91), 11, Color("#f0cc77"))
 		var hint := "TAP MAP" if i != 3 else "TAP TARGET"
 		if i == 4:
 			hint = "TAP TO DROP"
-		_draw_text(hint, Vector2(x + 9, BAR_TOP + 133), 11, Color("#8da99a"))
+		elif i == 5:
+			hint = "TAP STREET"
+		_draw_text(hint, Vector2(x + 6, BAR_TOP + 133), 10, Color("#8da99a"))
 
 func _update_preview_position(position: Vector2) -> void:
 	preview_position = position
@@ -631,6 +844,8 @@ func _draw_placement_preview() -> void:
 	var kind: String = str(deployment["kind"])
 	var radius := _deployment_range(kind)
 	var valid := _is_valid_street_position(preview_position) and funds >= int(deployment["cost"])
+	if kind == "medevac" and not medevac.is_empty():
+		valid = false
 	var tint := Color(0.2, 1.0, 0.48, 0.18) if valid else Color(1.0, 0.18, 0.2, 0.20)
 	var line_tint := Color("#56f58f") if valid else Color("#ff555d")
 	draw_circle(preview_position, radius, tint)
@@ -647,6 +862,8 @@ func _deployment_range(kind: String) -> float:
 			return 112.0
 		"flare":
 			return FLARE_LURE_RADIUS
+		"medevac":
+			return MEDEVAC_RING
 		"barricade":
 			return 30.0
 	return 30.0
@@ -771,11 +988,12 @@ func _draw_end_screen() -> void:
 	var title := "SECTOR SECURED" if game_state == "victory" else "EVACUATION FAILED"
 	var tint := Color("#72f0a2") if game_state == "victory" else Color("#ff6868")
 	_draw_text(title, Vector2(95, 510), 38, tint)
-	_draw_text("CIVILIANS SAVED: %d" % saved_count, Vector2(190, 575), 22, Color("#e0eee5"))
-	_draw_text("CIVILIANS LOST: %d" % lost_count, Vector2(190, 615), 22, Color("#e0a0a0"))
-	draw_rect(Rect2(150, 700, 420, 90), Color("#244a38"))
-	draw_rect(Rect2(150, 700, 420, 90), Color("#8ce5ad"), false, 3.0)
-	_draw_text("PLAY AGAIN", Vector2(278, 755), 27, Color("#f0fff5"))
+	_draw_text("SECTOR %02d — %s" % [sector_index + 1, sector_name.to_upper()], Vector2(130, 555), 18, Color("#b9d9c6"))
+	_draw_text("CIVILIANS SAVED: %d" % saved_count, Vector2(190, 615), 22, Color("#e0eee5"))
+	_draw_text("CIVILIANS LOST: %d" % lost_count, Vector2(190, 655), 22, Color("#e0a0a0"))
+	draw_rect(Rect2(150, 730, 420, 90), Color("#244a38"))
+	draw_rect(Rect2(150, 730, 420, 90), Color("#8ce5ad"), false, 3.0)
+	_draw_text("RETURN TO SECTOR SELECT", Vector2(176, 785), 20, Color("#f0fff5"))
 
 func _draw_text(value: String, position: Vector2, size: int, color: Color) -> void:
 	if screen_font != null:
