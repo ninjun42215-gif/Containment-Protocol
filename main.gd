@@ -810,7 +810,7 @@ func _handle_tap(pos: Vector2) -> void:
 		if pos.y >= viewport_size.y - 150.0:
 			return
 		var hq_world: Vector2 = _screen_to_world(pos)
-		if _is_open_world_position(hq_world, 95.0):
+		if _is_open_world_position(hq_world, 32.0):
 			primary_hq_position = hq_world
 			evacuation_zones.clear()
 			evacuation_zones.append(hq_world)
@@ -1273,7 +1273,7 @@ func _draw_entities() -> void:
 		var sniper: bool = unit["kind"] == "sniper"
 		var tint := Color("#6bdc9a") if not sniper else Color("#8ab6ff")
 		draw_rect(Rect2(p - Vector2(9, 9), Vector2(18, 18)), tint)
-		draw_arc(p, 390.0 if sniper else 205.0, 0.0, TAU, 48, Color(tint.r, tint.g, tint.b, 0.10), 1.0)
+		draw_arc(p, (390.0 if sniper else 205.0) * _night_vision_multiplier(), 0.0, TAU, 48, Color(tint.r, tint.g, tint.b, 0.10), 1.0)
 		if unit_index == selected_unit_index:
 			draw_arc(p, 24.0, 0.0, TAU, 32, Color("#fff28a"), 3.0)
 	for tracer in bullet_tracers:
