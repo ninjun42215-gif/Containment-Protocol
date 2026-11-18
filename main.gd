@@ -1052,7 +1052,6 @@ func _draw() -> void:
 	_draw_buildings()
 	_draw_fog()
 	_draw_entities()
-	_draw_supply_crates()
 	_draw_medevac()
 	_draw_placement_preview()
 	var visible_effect_rect := _camera_view_rect().grow(220.0)
@@ -1567,6 +1566,8 @@ func _spitter_burst(center: Vector2) -> void:
 		if center.distance_to(civilians[index]) <= 45.0:
 			var infected_position: Vector2 = civilians[index]
 			civilians.remove_at(index)
+			if index < civilian_steering.size():
+				civilian_steering.remove_at(index)
 			zombies.append({"pos": infected_position, "kind": "shambler", "hp": 30.0, "max_hp": 30.0})
 			infected += 1
 	if infected > 0:
@@ -1841,7 +1842,13 @@ func _resume_operation() -> void:
 	shelter_flush_timer = float(state.get("shelter_flush_timer", 15.0))
 	supply_drop_timer = float(state.get("supply_drop_timer", 150.0))
 	supply_crates.assign(state.get("supply_crates", []))
-	civilian_steering.assign(state.get("civilian_steering", []))	
+	civilian_steering.assign(state.get("civilian_steering", []))
+	if state.has("buildings"):
+		buildings.assign(state["buildings"])
+	if state.has("spawn_districts"):
+		spawn_districts.assign(state["spawn_districts"])
+	time_scale_index = clampi(int(state.get("time_scale_index", 0)), 0, TIME_SCALES.size() - 1)
+	day_phase = str(state.get("day_phase", "DAY"))
 	endless_containment = bool(state.get("endless_containment", false))
 	while civilian_steering.size() < civilians.size():
 		civilian_steering.append({})
@@ -1904,7 +1911,9 @@ func _nearest_evac_zone(position: Vector2) -> Vector2:
 	return nearest
 
 func _night_vision_multiplier() -> float:
-	return 0.8 if wave > 12 and wave <= 24 else 1.0
+	return 0.8 if day_phase == "NIGHT" else 1.0
 
+
+func _draw_text(value: String, position: Vector2, size: int, color: Color) -> void:
 	if screen_font != null:
 		draw_string(screen_font, position, value, HORIZONTAL_ALIGNMENT_LEFT, -1.0, size, color)
