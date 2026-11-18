@@ -4,7 +4,7 @@ extends Node2D
 # Portrait 720x1280, drawn natively for low-overhead Android rendering.
 
 const VIEW_SIZE := Vector2(720.0, 1280.0)
-const WORLD_SIZE := Vector2(2200.0, 3200.0)
+const WORLD_SIZE := Vector2(3000.0, 4400.0)
 const BAR_TOP := 1080.0
 const EVAC_RADIUS := 76.0
 const MIN_ZOOM := 0.45
@@ -17,7 +17,7 @@ const WALL_COST := 75
 const OUTPOST_INCOME_INTERVAL := 5.0
 const TURRET_RANGE := 220.0
 const OUTPOST_COMMAND_RADIUS := 320.0
-const OUTPOST_MAX_COUNT := 4
+const OUTPOST_MAX_COUNT := 6
 const OUTPOST_COST_STEP := 60
 const STRUCTURE_REPAIR_COST := 40
 const STRUCTURE_UPGRADE_COST := 150
@@ -57,7 +57,16 @@ var flares: Array[Dictionary] = []
 var medevac: Dictionary = {}
 var sector_index := 0
 var sector_name := "Downtown Grid"
-var sector_wave_limit := 3
+var sector_wave_limit := 30
+var primary_hq_position := Vector2(-1.0, -1.0)
+var shelter_flush_timer := 15.0
+var supply_drop_timer := 150.0
+var supply_crates: Array[Dictionary] = []
+var civilian_steering: Array[Dictionary] = []
+var campaign_started := false
+var endless_containment := false
+var day_phase := "DAY"
+var save_path := "user://containment_save.json"
 var manual_paused := false
 var lifecycle_paused := false
 var preview_position := Vector2.ZERO
@@ -131,6 +140,7 @@ func _ready() -> void:
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_APPLICATION_PAUSED:
+		_save_operation()
 		lifecycle_paused = true
 		manual_paused = true
 		audio_queue.clear()
@@ -168,6 +178,15 @@ func _start_sector(index: int) -> void:
 	flares.clear()
 	outposts.clear()
 	turrets.clear()
+	supply_crates.clear()
+	civilian_steering.clear()
+	evacuation_zones.clear()
+	primary_hq_position = Vector2(-1.0, -1.0)
+	campaign_started = false
+	endless_containment = false
+	shelter_flush_timer = 15.0
+	supply_drop_timer = 150.0
+	day_phase = "DAY"
 	medevac.clear()
 	camera_position = WORLD_SIZE * 0.5
 	camera_zoom = 0.62
@@ -178,9 +197,9 @@ func _start_sector(index: int) -> void:
 	saved_count = 0
 	lost_count = 0
 	wave = 0
-	wave_timer = 2.0
+	wave_timer = 180.0
 	elapsed = 0.0
-	game_state = "playing"
+	game_state = "hq_placement"
 	selected_deployment = 0
 	selected_unit_index = -1
 	selected_structure_type = ""
@@ -204,8 +223,10 @@ func _start_sector(index: int) -> void:
 			var spawn_point := Vector2(randf_range(district.position.x, district.end.x), randf_range(district.position.y, district.end.y))
 			if _is_open_world_position(spawn_point, 18.0):
 				civilians.append(spawn_point)
-	message = "%s — SECURE THE EVACUATION ZONE" % sector_name
-	message_timer = 3.0
+	message = "SCOUT THE CITY — SELECT PRIMARY HQ LOCATION"
+	message_timer = 6.0
+	camera_position = WORLD_SIZE * 0.5
+	_clamp_camera()
 
 func _process(delta: float) -> void:
 	_update_audio()
@@ -236,18 +257,24 @@ func _process(delta: float) -> void:
 	airstrike_timer = maxf(0.0, airstrike_timer - sim_delta)
 	wave_timer -= sim_delta
 
-	if wave < sector_wave_limit and wave_timer <= 0.0:
+	if wave < 30 and wave_timer <= 0.0:
 		_spawn_wave()
-		wave_timer = 18.0
+		wave_timer = 180.0
+	elif wave >= 30 and endless_containment and wave_timer <= 0.0:
+		_spawn_wave()
+		wave_timer = 180.0
+	_shelter_flush_timer_step(sim_delta)
+	_update_supply_drops(sim_delta)
+	day_phase = "DAY" if wave <= 6 else ("DUSK" if wave <= 12 else ("NIGHT" if wave <= 24 else "DAWN"))
 
 	# Civilians evacuate through the street network; the grid is rebuilt once
 	# after movement so every zombie queries current civilian positions.
 	for i in range(civilians.size() - 1, -1, -1):
 		var civilian: Vector2 = civilians[i]
-		var civilian_safe_target := _nearest_evac_zone(civilian)
+		var civilian_safe_target: Vector2 = _nearest_evac_zone(civilian)
 		var nearest_outpost_distance := INF
 		for outpost in outposts:
-			if int(outpost.get("safe_count", 0)) >= int(outpost.get("capacity", 8)):
+			if int(outpost.get("sheltered", 0)) >= int(outpost.get("capacity", 12)):
 				continue
 			var outpost_distance: float = civilian.distance_squared_to(outpost["pos"])
 			if outpost_distance <= float(outpost["safe_radius"]) * float(outpost["safe_radius"]) and outpost_distance < nearest_outpost_distance:
@@ -255,23 +282,30 @@ func _process(delta: float) -> void:
 				civilian_safe_target = outpost["pos"]
 		var direction: Vector2 = (civilian_safe_target - civilian).normalized()
 		var displacement: Vector2 = direction * 43.0 * sim_delta
-		civilian = _move_circle_with_buildings(civilian, displacement, 5.5, civilian_safe_target)
+		var civilian_steer: Dictionary = civilian_steering[i] if i < civilian_steering.size() else {}
+		civilian = _move_circle_with_buildings(civilian, displacement, 5.5, civilian_safe_target, civilian_steer)
+		if i < civilian_steering.size():
+			civilian_steering[i] = civilian_steer
 		civilians[i] = civilian
 		var reached_safe_zone := civilian.distance_to(_nearest_evac_zone(civilian)) <= EVAC_RADIUS
 		var reached_outpost_index := -1
 		for outpost_index in range(outposts.size()):
 			var safe_outpost: Dictionary = outposts[outpost_index]
-			if civilian.distance_to(safe_outpost["pos"]) <= 28.0 and int(safe_outpost.get("safe_count", 0)) < int(safe_outpost.get("capacity", 8)):
+			if civilian.distance_to(safe_outpost["pos"]) <= 28.0 and int(safe_outpost.get("sheltered", 0)) < int(safe_outpost.get("capacity", 12)):
 				reached_outpost_index = outpost_index
 				reached_safe_zone = true
 				break
 		if reached_safe_zone:
 			if reached_outpost_index >= 0:
-				outposts[reached_outpost_index]["safe_count"] = int(outposts[reached_outpost_index].get("safe_count", 0)) + 1
 			civilians.remove_at(i)
-			saved_count += 1
-			funds += 25
-			message = "CIVILIAN EVACUATED  +$25"
+			if i < civilian_steering.size():
+				civilian_steering.remove_at(i)
+			if reached_outpost_index >= 0:
+				outposts[reached_outpost_index]["sheltered"] = int(outposts[reached_outpost_index].get("sheltered", 0)) + 1
+			else:
+				saved_count += 1
+				funds += 35
+			message = "CIVILIAN SHELTERED / EVACUATED  +$35"
 			message_timer = 1.1
 
 	civilian_grid = _build_spatial_grid(civilians)
@@ -305,7 +339,7 @@ func _process(delta: float) -> void:
 					medevac.clear()
 			else:
 				zombie["medevac_cooldown"] = maxf(0.0, medevac_cooldown - sim_delta)
-		zpos = _move_circle_with_buildings(zpos, displacement, 10.0 if zombie_kind == "brute" else 7.0, target)
+		zpos = _move_circle_with_buildings(zpos, displacement, 10.0 if zombie_kind == "brute" else 7.0, target, zombie)
 
 		for wall_index in range(barricades.size() - 1, -1, -1):
 			var wall: Dictionary = barricades[wall_index]
@@ -365,6 +399,8 @@ func _process(delta: float) -> void:
 		if infected_index >= 0:
 			var infected_pos: Vector2 = civilians[infected_index]
 			civilians.remove_at(infected_index)
+			if infected_index < civilian_steering.size():
+				civilian_steering.remove_at(infected_index)
 			civilian_grid = _build_spatial_grid(civilians)
 			lost_count += 1
 			zombies.append({"pos": infected_pos, "kind": "shambler", "hp": 30.0, "max_hp": 30.0})
@@ -429,7 +465,7 @@ func _process(delta: float) -> void:
 			zombie_grid = _build_zombie_spatial_grid()
 		units[unit_index] = unit
 
-	if wave >= sector_wave_limit and zombies.is_empty() and civilians.is_empty() and medevac.is_empty():
+	if wave >= 30 and zombies.is_empty() and medevac.is_empty() and not endless_containment:
 		game_state = "victory"
 		message = "SECTOR SECURED"
 	elif civilians.is_empty() and saved_count == 0 and lost_count > 0 and medevac.is_empty():
@@ -446,31 +482,18 @@ func _configure_sector(index: int) -> void:
 	match index:
 		0:
 			sector_name = "Downtown Grid"
-			sector_wave_limit = 3
-			buildings = [
-				Rect2(48.0, 330.0, 190.0, 112.0),
-				Rect2(482.0, 326.0, 190.0, 132.0),
-				Rect2(58.0, 650.0, 174.0, 142.0),
-				Rect2(488.0, 670.0, 184.0, 138.0)
-			]
+			sector_wave_limit = 30
+			buildings = _generate_city_blocks(0)
 		1:
 			sector_name = "Highway Chokepoint"
-			sector_wave_limit = 4
-			buildings = [
-				Rect2(24.0, 320.0, 220.0, 180.0),
-				Rect2(476.0, 320.0, 220.0, 180.0),
-				Rect2(24.0, 690.0, 220.0, 180.0),
-				Rect2(476.0, 690.0, 220.0, 180.0)
-			]
+			sector_wave_limit = 30
+			buildings = _generate_city_blocks(1)
 		_:
 			sector_name = "Central Plaza"
-			sector_wave_limit = 5
-			buildings = [
-				Rect2(34.0, 300.0, 142.0, 118.0),
-				Rect2(544.0, 300.0, 142.0, 118.0),
-				Rect2(34.0, 830.0, 142.0, 118.0),
-				Rect2(544.0, 830.0, 142.0, 118.0)
-			]
+			sector_wave_limit = 30
+			buildings = _generate_city_blocks(2)
+
+	spawn_districts = [Rect2(80.0, 80.0, 720.0, 720.0), Rect2(2200.0, 80.0, 720.0, 720.0), Rect2(80.0, 3600.0, 720.0, 720.0), Rect2(2200.0, 3600.0, 720.0, 720.0)]
 
 func _cell_for(position: Vector2) -> Vector2i:
 	return Vector2i(floori(position.x / GRID_CELL_SIZE), floori(position.y / GRID_CELL_SIZE))
@@ -519,9 +542,13 @@ func _find_nearest_entity(grid: Dictionary, positions: Array[Vector2], origin: V
 func _find_nearest_zombie(origin: Vector2, radius: float) -> int:
 	return _find_nearest_entity(zombie_grid, zombie_positions, origin, radius)
 
-func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius: float, target: Vector2 = Vector2.ZERO) -> Vector2:
+func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius: float, target: Vector2 = Vector2.ZERO, steering: Dictionary = {}) -> Vector2:
 	var position: Vector2 = origin
 	var remaining: Vector2 = displacement
+	var lock_time: float = maxf(0.0, float(steering.get("lock_time", 0.0)) - get_process_delta_time())
+	var locked_tangent: Vector2 = steering.get("tangent", Vector2.ZERO)
+	if lock_time > 0.0 and locked_tangent.length_squared() > 0.001:
+		remaining = locked_tangent.normalized() * displacement.length()
 	for iteration in range(2):
 		var candidate: Vector2 = position + remaining
 		for building in buildings:
@@ -575,11 +602,38 @@ func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius:
 							if tangent.dot(target - candidate) < 0.0:
 								tangent = -tangent
 							remaining = tangent.normalized() * maxf(remaining.length(), displacement.length() * 0.65)
+							steering["tangent"] = tangent.normalized()
+							steering["lock_time"] = 0.35
 		position = candidate
 	return position
 
+
+func _generate_city_blocks(style: int) -> Array[Rect2]:
+	var result: Array[Rect2] = []
+	var cell_w: float = 300.0 if style == 1 else 250.0
+	var cell_h: float = 340.0 if style == 2 else 300.0
+	for row in range(1, 14):
+		for col in range(1, 11):
+			if (row + col + style) % 5 == 0:
+				continue
+			var width: float = cell_w * randf_range(0.58, 0.82)
+			var height: float = cell_h * randf_range(0.55, 0.80)
+			var x: float = float(col) * (cell_w + 25.0) + randf_range(4.0, 18.0)
+			var y: float = float(row) * (cell_h + 18.0) + randf_range(3.0, 16.0)
+			if x + width < WORLD_SIZE.x - 20.0 and y + height < WORLD_SIZE.y - 20.0:
+				result.append(Rect2(x, y, width, height))
+	return result
+
+func _is_open_world_position(position: Vector2, margin: float = 28.0) -> bool:
+	if position.x < margin or position.x > WORLD_SIZE.x - margin or position.y < margin or position.y > WORLD_SIZE.y - margin:
+		return false
+	for building in buildings:
+		if building.grow(margin).has_point(position):
+			return false
+	return true
+
 func _is_valid_street_position(position: Vector2) -> bool:
-	if position.x < 28.0 or position.x > 692.0 or position.y < 270.0 or position.y > 1060.0:
+	if position.x < 28.0 or position.x > WORLD_SIZE.x - 28.0 or position.y < 270.0 or position.y > WORLD_SIZE.y - 220.0:
 		return false
 	for building in buildings:
 		var expanded := building.grow(UNIT_SELECT_RADIUS)
@@ -619,7 +673,7 @@ func _draw_buildings() -> void:
 
 func _spawn_wave() -> void:
 	wave += 1
-	var count := 14 + wave * 5
+	var count := 18 + wave * 8
 	for i in range(count):
 		var district: Rect2 = spawn_districts[randi_range(0, spawn_districts.size() - 1)]
 		var spawn_point := Vector2(randf_range(district.position.x, district.end.x), randf_range(district.position.y, district.end.y))
@@ -641,8 +695,11 @@ func _spawn_wave() -> void:
 		elif kind == "spitter":
 			hp = 42.0 + float(wave) * 4.0
 		zombies.append({"pos": Vector2(x, y), "kind": kind, "hp": hp, "max_hp": hp, "wall_cooldown": 0.0})
-	message = "HORDE WAVE %d INBOUND" % wave
-	message_timer = 2.5
+	if wave % 5 == 0:
+		_spawn_refugee_wave()
+	_save_operation()
+	message = "PHASE %d — HORDE WAVE %d INBOUND" % [ceili(float(wave) / 6.0), wave]
+	message_timer = 3.0
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
@@ -722,8 +779,32 @@ func _input(event: InputEvent) -> void:
 			queue_redraw()
 
 func _handle_tap(pos: Vector2) -> void:
-	if game_state == "title":
-		game_state = "sector_select"
+		if game_state == "title":
+		if pos.y >= viewport_size.y * 0.63 and FileAccess.file_exists(save_path):
+			_resume_operation()
+		else:
+			game_state = "sector_select"
+		queue_redraw()
+		return
+	if game_state == "hq_placement":
+		if pos.y >= viewport_size.y - 170.0 and primary_hq_position.x >= 0.0:
+			campaign_started = true
+			game_state = "playing"
+			wave_timer = 1.0
+			message = "PRIMARY HQ ESTABLISHED — OPERATION STARTED"
+			message_timer = 3.0
+			queue_redraw()
+			return
+		var hq_world: Vector2 = _screen_to_world(pos)
+		if _is_open_world_position(hq_world, 95.0):
+			primary_hq_position = hq_world
+			evacuation_zones.clear()
+			evacuation_zones.append(hq_world)
+			message = "PRIMARY COMMAND HQ LOCATION LOCKED"
+			message_timer = 2.0
+		else:
+			message = "HQ MUST BE ON AN OPEN STREET"
+			message_timer = 1.5
 		queue_redraw()
 		return
 	if game_state == "sector_select":
@@ -851,7 +932,7 @@ func _handle_tap(pos: Vector2) -> void:
 			units.append({"pos": world_pos, "kind": kind, "cooldown": 0.1})
 		"outpost":
 			if outposts.size() >= OUTPOST_MAX_COUNT:
-				message = "OUTPOST LIMIT REACHED (4)"
+				message = "FORWARD OUTPOST LIMIT REACHED (6)"
 				message_timer = 1.5
 				return
 			var outpost_cost := OUTPOST_COST + outposts.size() * OUTPOST_COST_STEP
@@ -859,7 +940,7 @@ func _handle_tap(pos: Vector2) -> void:
 				message = "OUTPOST COST $%d — INSUFFICIENT FUNDS" % outpost_cost
 				message_timer = 1.5
 				return
-			outposts.append({"pos": world_pos, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": 175.0, "vision_radius": 260.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 500.0, "max_hp": 500.0, "level": 1, "capacity": 8, "safe_count": 0})
+			outposts.append({"pos": world_pos, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": 175.0, "vision_radius": 260.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 500.0, "max_hp": 500.0, "level": 1, "capacity": 12, "sheltered": 0})
 			cost = outpost_cost
 		"turret":
 			turrets.append({"pos": world_pos, "hp": 250.0, "max_hp": 250.0, "cooldown": 0.1, "level": 1, "range": TURRET_RANGE, "vision_radius": TURRET_RANGE, "damage": 22.0, "fire_interval": 0.18})
@@ -888,8 +969,11 @@ func _update_medevac(delta: float) -> void:
 					break
 				if position.distance_to(civilians[civilian_index]) <= MEDEVAC_RING:
 					civilians.remove_at(civilian_index)
+					if civilian_index < civilian_steering.size():
+						civilian_steering.remove_at(civilian_index)
 					extracted += 1
 			medevac["onboard"] = extracted
+			_flush_nearby_shelters(position)
 			if extracted > 0:
 				message = "MEDEVAC ABOARD — %d CIVILIANS" % extracted
 				message_timer = 2.0
@@ -945,6 +1029,17 @@ func _draw() -> void:
 			draw_line(Vector2(0.0, y), Vector2(viewport_size.x, y), Color(0.12, 0.23, 0.19, 0.32), 1.0)
 		_draw_title_screen()
 		return
+	if game_state == "hq_placement":
+		var hq_hint := "TAP OPEN STREET TO PLACE PRIMARY HQ" if primary_hq_position.x < 0.0 else "HQ LOCKED — TAP START OPERATION"
+		_draw_world_scene()
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		draw_rect(Rect2(0.0, viewport_size.y - 150.0, viewport_size.x, 150.0), Color("#071713", 0.96))
+		_draw_text("SELECT HQ LOCATION", Vector2(24.0, viewport_size.y - 112.0), 22, Color("#e8fff0"))
+		_draw_text(hq_hint, Vector2(24.0, viewport_size.y - 78.0), 15, Color("#a9c8b7"))
+		if primary_hq_position.x >= 0.0:
+			draw_rect(Rect2(24.0, viewport_size.y - 62.0, viewport_size.x - 48.0, 48.0), Color("#244a38"))
+			_draw_text("[ START OPERATION ]", Vector2(170.0, viewport_size.y - 30.0), 19, Color("#f0fff5"))
+		return
 	var shake_offset := Vector2.ZERO
 	if shake_timer > 0.0:
 		shake_offset = Vector2(randf_range(-shake_strength, shake_strength), randf_range(-shake_strength, shake_strength))
@@ -956,6 +1051,7 @@ func _draw() -> void:
 	_draw_buildings()
 	_draw_fog()
 	_draw_entities()
+	_draw_supply_crates()
 	_draw_medevac()
 	_draw_placement_preview()
 	var visible_effect_rect := _camera_view_rect().grow(220.0)
@@ -1025,6 +1121,10 @@ func _draw_title_screen() -> void:
 		draw_rect(Rect2(viewport_size.x * 0.19, viewport_size.y * 0.51, viewport_size.x * 0.62, 100.0), Color("#1d4935"))
 		draw_rect(Rect2(viewport_size.x * 0.19, viewport_size.y * 0.51, viewport_size.x * 0.62, 100.0), Color("#75e6a0"), false, 3.0)
 		_draw_text("TAP TO SELECT SECTOR", Vector2(viewport_size.x * 0.27, viewport_size.y * 0.56), 22, Color("#f0fff5"))
+		if FileAccess.file_exists(save_path):
+			draw_rect(Rect2(viewport_size.x * 0.14, viewport_size.y * 0.66, viewport_size.x * 0.72, 78.0), Color("#294c3c"))
+			draw_rect(Rect2(viewport_size.x * 0.14, viewport_size.y * 0.66, viewport_size.x * 0.72, 78.0), Color("#e4c66d"), false, 2.0)
+			_draw_text("RESUME SAVED OPERATION", Vector2(viewport_size.x * 0.19, viewport_size.y * 0.71), 18, Color("#fff4c7"))
 	else:
 		_draw_text("SELECT OPERATIONAL SECTOR", Vector2(viewport_size.x * 0.19, viewport_size.y * 0.42), 22, Color("#d8eee0"))
 		var names: Array[String] = ["01  DOWNTOWN GRID", "02  HIGHWAY CHOKEPOINT", "03  CENTRAL PLAZA"]
@@ -1068,15 +1168,15 @@ func _is_position_visible(world_position: Vector2) -> bool:
 		if world_position.distance_squared_to(zone) <= 250.0 * 250.0:
 			return true
 	for unit in units:
-		var unit_radius := 390.0 if str(unit["kind"]) == "sniper" else 205.0
+		var unit_radius: float = (390.0 if str(unit["kind"]) == "sniper" else 205.0) * _night_vision_multiplier()
 		if world_position.distance_squared_to(unit["pos"]) <= unit_radius * unit_radius:
 			return true
 	for outpost in outposts:
-		var outpost_radius := float(outpost.get("vision_radius", 260.0))
+		var outpost_radius: float = float(outpost.get("vision_radius", 260.0)) * _night_vision_multiplier()
 		if world_position.distance_squared_to(outpost["pos"]) <= outpost_radius * outpost_radius:
 			return true
 	for turret in turrets:
-		var turret_radius := float(turret.get("vision_radius", TURRET_RANGE))
+		var turret_radius: float = float(turret.get("vision_radius", TURRET_RANGE)) * _night_vision_multiplier()
 		if world_position.distance_squared_to(turret["pos"]) <= turret_radius * turret_radius:
 			return true
 	for flare in flares:
@@ -1127,6 +1227,11 @@ func _draw_entities() -> void:
 		var wall_hp: float = float(wall["hp"]) / float(wall["max_hp"])
 		draw_rect(Rect2(wall_pos - Vector2(15, 15), Vector2(30, 30)), Color("#9b8b70"), false, 4.0)
 		draw_line(wall_pos + Vector2(-11, 0), wall_pos + Vector2(11, 0), Color("#cbb99a", 0.35 + 0.65 * wall_hp), 3.0)
+	for crate in supply_crates:
+		if visible_rect.has_point(crate["pos"]):
+			draw_circle(crate["pos"], 18.0, Color(0.9, 0.72, 0.24, 0.2))
+			draw_rect(Rect2(crate["pos"] - Vector2(11.0, 11.0), Vector2(22.0, 22.0)), Color("#d8b65b"))
+			draw_line(crate["pos"] + Vector2(-7.0, 0.0), crate["pos"] + Vector2(7.0, 0.0), Color("#fff0b0"), 2.0)
 	for outpost in outposts:
 		if visible_rect.has_point(outpost["pos"]):
 			draw_rect(Rect2(outpost["pos"] - Vector2(15.0, 15.0), Vector2(30.0, 30.0)), Color("#43d77a"))
@@ -1171,6 +1276,8 @@ func _draw_minimap() -> void:
 			draw_circle(minimap_rect.position + zombie_pos / WORLD_SIZE * minimap_rect.size, 1.9, Color("#f34d58", 0.78))
 	for outpost in outposts:
 		draw_rect(Rect2(minimap_rect.position + outpost["pos"] / WORLD_SIZE * minimap_rect.size - Vector2(2.0, 2.0), Vector2(4.0, 4.0)), Color("#55f08b"))
+	for crate in supply_crates:
+		draw_circle(minimap_rect.position + crate["pos"] / WORLD_SIZE * minimap_rect.size, 2.0, Color("#e8ca69"))
 	for turret in turrets:
 		draw_rect(Rect2(minimap_rect.position + turret["pos"] / WORLD_SIZE * minimap_rect.size - Vector2(1.5, 1.5), Vector2(3.0, 3.0)), Color("#f1d071"))
 	var camera_rect := _camera_view_rect()
@@ -1190,6 +1297,7 @@ func _draw_hud() -> void:
 	_draw_text("FUNDS  $%d" % funds, Vector2(34.0, 88.0), 21, Color("#f4d77b"))
 	_draw_text("SECTOR %02d  WAVE %d/%d" % [sector_index + 1, wave, sector_wave_limit], Vector2(34.0, 122.0), 15, Color("#ffad62"))
 	_draw_text("SAVED %d  LOST %d  HORDE %d" % [saved_count, lost_count, zombies.size()], Vector2(34.0, 142.0), 13, Color("#9cbcaf"))
+	_draw_text("%s  |  %s" % [day_phase, "ENDLESS" if endless_containment else "CAMPAIGN"], Vector2(34.0, 162.0), 12, Color("#a9c8b7"))
 	if message_timer > 0.0:
 		_draw_text(message, Vector2(34.0, 177.0), 14, Color("#ffbd76"))
 	draw_rect(Rect2(18.0, 214.0, 172.0, 52.0), Color("#183329"))
@@ -1540,6 +1648,258 @@ func _draw_end_screen() -> void:
 	draw_rect(Rect2(viewport_size.x * 0.21, viewport_size.y * 0.57, viewport_size.x * 0.58, 90), Color("#8ce5ad"), false, 3.0)
 	_draw_text("RETURN TO SECTOR SELECT", Vector2(viewport_size.x * 0.25, viewport_size.y * 0.615), 20, Color("#f0fff5"))
 
-func _draw_text(value: String, position: Vector2, size: int, color: Color) -> void:
+
+func _on_viewport_size_changed() -> void:
+	viewport_size = get_viewport_rect().size
+	_clamp_camera()
+	queue_redraw()
+
+func _camera_view_rect() -> Rect2:
+	var size: Vector2 = viewport_size / maxf(camera_zoom, 0.01)
+	return Rect2(camera_position - size * 0.5, size)
+
+func _screen_to_world(screen_position: Vector2) -> Vector2:
+	return camera_position + (screen_position - viewport_size * 0.5) / maxf(camera_zoom, 0.01)
+
+func _clamp_camera() -> void:
+	var half_view: Vector2 = viewport_size / maxf(camera_zoom, 0.01) * 0.5
+	camera_position.x = clampf(camera_position.x, minf(half_view.x, WORLD_SIZE.x * 0.5), maxf(WORLD_SIZE.x - half_view.x, WORLD_SIZE.x * 0.5))
+	camera_position.y = clampf(camera_position.y, minf(half_view.y, WORLD_SIZE.y * 0.5), maxf(WORLD_SIZE.y - half_view.y, WORLD_SIZE.y * 0.5))
+
+func _zoom_camera(factor: float, screen_anchor: Vector2) -> void:
+	var before: Vector2 = _screen_to_world(screen_anchor)
+	camera_zoom = clampf(camera_zoom * factor, MIN_ZOOM, MAX_ZOOM)
+	var after: Vector2 = _screen_to_world(screen_anchor)
+	camera_position += before - after
+	_clamp_camera()
+	queue_redraw()
+
+func _nearest_evac_zone(position: Vector2) -> Vector2:
+	if evacuation_zones.is_empty():
+		return primary_hq_position if primary_hq_position.x >= 0.0 else WORLD_SIZE * 0.5
+	var nearest: Vector2 = evacuation_zones[0]
+	var nearest_distance: float = position.distance_squared_to(nearest)
+	for zone in evacuation_zones:
+		var distance: float = position.distance_squared_to(zone)
+		if distance < nearest_distance:
+			nearest = zone
+			nearest_distance = distance
+	return nearest
+
+func _night_vision_multiplier() -> float:
+	return 0.8 if wave > 12 and wave <= 24 else 1.0
+
+func _shelter_flush_timer_step(delta: float) -> void:
+	shelter_flush_timer -= delta
+	if shelter_flush_timer > 0.0:
+		return
+	shelter_flush_timer = 15.0
+	for index in range(outposts.size()):
+		var sheltered: int = int(outposts[index].get("sheltered", 0))
+		if sheltered > 0:
+			saved_count += sheltered
+			funds += sheltered * 35
+			outposts[index]["sheltered"] = 0
+			message = "OUTPOST EVACUATION — %d CIVILIANS  +$%d" % [sheltered, sheltered * 35]
+			message_timer = 2.0
+
+func _flush_nearby_shelters(position: Vector2) -> void:
+	for index in range(outposts.size()):
+		if position.distance_to(outposts[index]["pos"]) <= 180.0:
+			var sheltered: int = int(outposts[index].get("sheltered", 0))
+			if sheltered > 0:
+				saved_count += sheltered
+				funds += sheltered * 35
+				outposts[index]["sheltered"] = 0
+				message = "MEDEVAC CLEARED OUTPOST — %d RESCUED" % sheltered
+				message_timer = 2.0
+
+func _spawn_refugee_wave() -> void:
+	for district in spawn_districts:
+		for refugee_index in range(10 + int(wave / 5) * 2):
+			var refugee_position := Vector2(randf_range(district.position.x, district.end.x), randf_range(district.position.y, district.end.y))
+			if _is_open_world_position(refugee_position, 18.0):
+				civilians.append(refugee_position)
+				civilian_steering.append({})
+	message = "REFUGEE CONVOY ENTERING OUTER DISTRICTS"
+	message_timer = 3.0
+
+func _update_supply_drops(delta: float) -> void:
+	supply_drop_timer -= delta
+	if supply_drop_timer <= 0.0:
+		supply_drop_timer = 150.0
+		var candidate := Vector2(randf_range(120.0, WORLD_SIZE.x - 120.0), randf_range(120.0, WORLD_SIZE.y - 120.0))
+		for attempt in range(12):
+			if _is_open_world_position(candidate, 32.0):
+				break
+			candidate = Vector2(randf_range(120.0, WORLD_SIZE.x - 120.0), randf_range(120.0, WORLD_SIZE.y - 120.0))
+		supply_crates.append({"pos": candidate})
+	for crate_index in range(supply_crates.size() - 1, -1, -1):
+		var crate_position: Vector2 = supply_crates[crate_index]["pos"]
+		var secured := false
+		for squad in units:
+			if crate_position.distance_to(squad["pos"]) <= 52.0:
+				secured = true
+				break
+		if secured:
+			funds += 120
+			supply_crates.remove_at(crate_index)
+			message = "TACTICAL SUPPLY SECURED  +$120"
+			message_timer = 2.0
+
+func _draw_supply_crates() -> void:
+	var view: Rect2 = _camera_view_rect().grow(80.0)
+	for crate in supply_crates:
+		var crate_position: Vector2 = crate["pos"]
+		if view.has_point(crate_position):
+			draw_circle(crate_position, 19.0, Color(0.9, 0.72, 0.24, 0.18))
+			draw_rect(Rect2(crate_position - Vector2(11.0, 11.0), Vector2(22.0, 22.0)), Color("#d8b65b"))
+			draw_line(crate_position + Vector2(-7.0, 0.0), crate_position + Vector2(7.0, 0.0), Color("#fff0b0"), 2.0)
+
+func _save_variant(value: Variant) -> Variant:
+	if value is Vector2:
+		return {"__vector2": [value.x, value.y]}
+	if value is Rect2:
+		return {"__rect2": [value.position.x, value.position.y, value.size.x, value.size.y]}
+	if value is Dictionary:
+		var converted: Dictionary = {}
+		for key in value.keys():
+			converted[str(key)] = _save_variant(value[key])
+		return converted
+	if value is Array:
+		var converted_array: Array = []
+		for item in value:
+			converted_array.append(_save_variant(item))
+		return converted_array
+	return value
+
+func _restore_variant(value: Variant) -> Variant:
+	if value is Dictionary:
+		var dictionary: Dictionary = value
+		if dictionary.has("__vector2"):
+			var coordinates: Array = dictionary["__vector2"]
+			return Vector2(float(coordinates[0]), float(coordinates[1]))
+		if dictionary.has("__rect2"):
+			var rect_values: Array = dictionary["__rect2"]
+			return Rect2(float(rect_values[0]), float(rect_values[1]), float(rect_values[2]), float(rect_values[3]))
+		var restored: Dictionary = {}
+		for key in dictionary.keys():
+			restored[key] = _restore_variant(dictionary[key])
+		return restored
+	if value is Array:
+		var restored_array: Array = []
+		for item in value:
+			restored_array.append(_restore_variant(item))
+		return restored_array
+	return value
+
+func _save_operation() -> void:
+	if not campaign_started:
+		return
+	var state: Dictionary = {"version": 1, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "medevac": medevac, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment}
+	var file := FileAccess.open(save_path, FileAccess.WRITE)
+	if file != null:
+		file.store_string(JSON.stringify(_save_variant(state)))
+		file.close()
+
+func _resume_operation() -> void:
+	if not FileAccess.file_exists(save_path):
+		return
+	var file := FileAccess.open(save_path, FileAccess.READ)
+	if file == null:
+		return
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	file.close()
+	if not parsed is Dictionary:
+		return
+	var state: Dictionary = _restore_variant(parsed)
+	_configure_sector(int(state.get("sector_index", 0)))
+	sector_index = int(state.get("sector_index", 0))
+	wave = int(state.get("wave", 0))
+	funds = int(state.get("funds", 300))
+	saved_count = int(state.get("saved_count", 0))
+	lost_count = int(state.get("lost_count", 0))
+	primary_hq_position = state.get("primary_hq_position", Vector2.ZERO)
+	evacuation_zones.assign(state.get("evacuation_zones", []))
+	civilians.assign(state.get("civilians", []))
+	zombies.assign(state.get("zombies", []))
+	units.assign(state.get("units", []))
+	outposts.assign(state.get("outposts", []))
+	turrets.assign(state.get("turrets", []))
+	barricades.assign(state.get("barricades", []))
+	flares.assign(state.get("flares", []))
+	medevac = state.get("medevac", {})
+	camera_position = state.get("camera_position", WORLD_SIZE * 0.5)
+	camera_zoom = float(state.get("camera_zoom", 0.62))
+	elapsed = float(state.get("elapsed", 0.0))
+	wave_timer = float(state.get("wave_timer", 180.0))
+	shelter_flush_timer = float(state.get("shelter_flush_timer", 15.0))
+	supply_drop_timer = float(state.get("supply_drop_timer", 150.0))
+	supply_crates.assign(state.get("supply_crates", []))
+	civilian_steering.assign(state.get("civilian_steering", []))	
+	endless_containment = bool(state.get("endless_containment", false))
+	while civilian_steering.size() < civilians.size():
+		civilian_steering.append({})
+	campaign_started = true
+	manual_paused = false
+	lifecycle_paused = false
+	game_state = "playing"
+	_clamp_camera()
+	message = "SAVED OPERATION RESTORED — WAVE %d" % wave
+	message_timer = 3.0
+	queue_redraw()
+
+func _draw_world_scene() -> void:
+	var origin: Vector2 = viewport_size * 0.5 - camera_position * camera_zoom
+	draw_set_transform(origin, 0.0, Vector2(camera_zoom, camera_zoom))
+	draw_rect(Rect2(Vector2.ZERO, WORLD_SIZE), Color("#07110f"))
+	_draw_grid()
+	_draw_buildings()
+	_draw_evac_zone()
+	_draw_fog()
+	_draw_entities()
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+
+func _on_viewport_size_changed() -> void:
+	viewport_size = get_viewport_rect().size
+	_clamp_camera()
+	queue_redraw()
+
+func _camera_view_rect() -> Rect2:
+	var size: Vector2 = viewport_size / maxf(camera_zoom, 0.01)
+	return Rect2(camera_position - size * 0.5, size)
+
+func _screen_to_world(screen_position: Vector2) -> Vector2:
+	return camera_position + (screen_position - viewport_size * 0.5) / maxf(camera_zoom, 0.01)
+
+func _clamp_camera() -> void:
+	var half_view: Vector2 = viewport_size / maxf(camera_zoom, 0.01) * 0.5
+	camera_position.x = clampf(camera_position.x, minf(half_view.x, WORLD_SIZE.x * 0.5), maxf(WORLD_SIZE.x - half_view.x, WORLD_SIZE.x * 0.5))
+	camera_position.y = clampf(camera_position.y, minf(half_view.y, WORLD_SIZE.y * 0.5), maxf(WORLD_SIZE.y - half_view.y, WORLD_SIZE.y * 0.5))
+
+func _zoom_camera(factor: float, screen_anchor: Vector2) -> void:
+	var before: Vector2 = _screen_to_world(screen_anchor)
+	camera_zoom = clampf(camera_zoom * factor, MIN_ZOOM, MAX_ZOOM)
+	var after: Vector2 = _screen_to_world(screen_anchor)
+	camera_position += before - after
+	_clamp_camera()
+	queue_redraw()
+
+func _nearest_evac_zone(position: Vector2) -> Vector2:
+	if evacuation_zones.is_empty():
+		return primary_hq_position if primary_hq_position.x >= 0.0 else WORLD_SIZE * 0.5
+	var nearest: Vector2 = evacuation_zones[0]
+	var nearest_distance: float = position.distance_squared_to(nearest)
+	for zone in evacuation_zones:
+		var distance: float = position.distance_squared_to(zone)
+		if distance < nearest_distance:
+			nearest = zone
+			nearest_distance = distance
+	return nearest
+
+func _night_vision_multiplier() -> float:
+	return 0.8 if wave > 12 and wave <= 24 else 1.0
+
 	if screen_font != null:
 		draw_string(screen_font, position, value, HORIZONTAL_ALIGNMENT_LEFT, -1.0, size, color)
