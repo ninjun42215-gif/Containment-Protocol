@@ -2644,6 +2644,10 @@ func _handle_tap(pos: Vector2) -> void:
 		outpost_placement_dragging = false
 		queue_redraw()
 		return
+	if kind == "farm" or kind == "bakery" or kind == "livestock" or kind == "watchtower" or kind == "clinic":
+		_construct_survival_building(kind, world_pos)
+		queue_redraw()
+		return
 	if kind == "gate":
 		if _try_place_gate(world_pos):
 			message = "PERIMETER GATE INSTALLED"
@@ -2957,6 +2961,27 @@ func _draw_entities() -> void:
 			var decal_direction: Vector2 = decal.get("direction", Vector2.UP)
 			var decal_alpha: float = clampf(float(decal.get("life", 1.0)) / 180.0, 0.0, 1.0)
 			draw_line(decal_pos - decal_direction * 9.0, decal_pos + decal_direction * 9.0, Color(0.58, 0.62, 0.57, 0.28 * decal_alpha), 2.0)
+	for tree in trees:
+		var tree_pos: Vector2 = tree["pos"]
+		if bool(tree.get("alive", false)) and visible_rect.has_point(tree_pos):
+			draw_line(tree_pos + Vector2(0.0, 8.0), tree_pos + Vector2(0.0, -8.0), Color("#795c3b"), 4.0)
+			draw_circle(tree_pos, 11.0, Color("#315f3e"))
+			draw_circle(tree_pos + Vector2(-5.0, -4.0), 6.0, Color("#4d8b50"))
+	for animal in wildlife:
+		if bool(animal.get("alive", false)) and visible_rect.has_point(animal["pos"]):
+			var animal_color: Color = Color("#b68d61") if str(animal.get("kind", "")) == "deer" else Color("#8d6d5d")
+			draw_circle(animal["pos"], 7.0, animal_color)
+			draw_circle(animal["pos"] + Vector2(6.0, -3.0), 3.0, animal_color.lightened(0.25))
+	for camp in raider_camps:
+		if visible_rect.has_point(camp["pos"]):
+			draw_rect(Rect2(camp["pos"] - Vector2(20.0, 16.0), Vector2(40.0, 32.0)), Color("#6b4938") if not bool(camp.get("raided", false)) else Color("#393939"))
+			_draw_text("RAIDERS" if not bool(camp.get("raided", false)) else "CLEARED", camp["pos"] + Vector2(-26.0, -24.0), 9, Color("#e7c69c"))
+	for building in constructed_buildings:
+		if not visible_rect.has_point(building["pos"]):
+			continue
+		var building_color: Color = Color("#68a85a") if str(building.get("kind", "")) == "farm" else (Color("#c58b4d") if str(building.get("kind", "")) == "bakery" else (Color("#a6a36a") if str(building.get("kind", "")) == "livestock" else (Color("#8c9caa") if str(building.get("kind", "")) == "watchtower" else Color("#65b9c9"))))
+		draw_rect(Rect2(building["pos"] - Vector2(18.0, 18.0), Vector2(36.0, 36.0)), building_color)
+		draw_rect(Rect2(building["pos"] - Vector2(18.0, 18.0), Vector2(36.0, 36.0)), Color("#e8fff0"), false, 2.0)
 	for civilian in civilians:
 		if not visible_rect.has_point(civilian):
 			continue
