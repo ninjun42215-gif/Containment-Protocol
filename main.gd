@@ -39,6 +39,7 @@ var screen_font: Font
 var buildings: Array[Rect2] = []
 var civilian_grid: Dictionary = {}
 var zombie_grid: Dictionary = {}
+var zombie_positions: Array[Vector2] = []
 var selected_unit_index := -1
 var time_scale_index := 0
 const TIME_SCALES := [1.0, 0.25, 0.0]
@@ -139,6 +140,7 @@ func _process(delta: float) -> void:
 			if zpos.distance_to(civilians[c_idx]) < 15.0:
 				var infected_pos: Vector2 = civilians[c_idx]
 				civilians.remove_at(c_idx)
+				civilian_grid = _build_spatial_grid(civilians)
 				lost_count += 1
 				zombies.append({"pos": infected_pos, "kind": "shambler"})
 				message = "CIVILIAN LOST"
@@ -199,14 +201,15 @@ func _build_spatial_grid(positions: Array[Vector2]) -> Dictionary:
 	return grid
 
 func _build_zombie_spatial_grid() -> Dictionary:
-	var positions: Array[Vector2] = []
-	positions.resize(zombies.size())
+	zombie_positions.clear()
+	zombie_positions.resize(zombies.size())
 	for index in range(zombies.size()):
-		positions[index] = zombies[index]["pos"]
-	return _build_spatial_grid(positions)
+		zombie_positions[index] = zombies[index]["pos"]
+	return _build_spatial_grid(zombie_positions)
 
 func _find_nearest_entity(grid: Dictionary, positions: Array[Vector2], origin: Vector2, radius: float) -> int:
-	var cell_radius: int = ceili(radius / GRID_CELL_SIZE)
+	# Bound the cell neighborhood: lookup work stays independent of total entity count.
+	var cell_radius: int = mini(ceili(radius / GRID_CELL_SIZE), 6)
 	var center_cell: Vector2i = _cell_for(origin)
 	var best_index := -1
 	var best_distance := radius * radius
@@ -227,11 +230,7 @@ func _find_nearest_entity(grid: Dictionary, positions: Array[Vector2], origin: V
 	return best_index
 
 func _find_nearest_zombie(origin: Vector2, radius: float) -> int:
-	var positions: Array[Vector2] = []
-	positions.resize(zombies.size())
-	for index in range(zombies.size()):
-		positions[index] = zombies[index]["pos"]
-	return _find_nearest_entity(zombie_grid, positions, origin, radius)
+	return _find_nearest_entity(zombie_grid, zombie_positions, origin, radius)
 
 func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius: float) -> Vector2:
 	var position: Vector2 = origin
