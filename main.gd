@@ -1566,6 +1566,222 @@ func _find_unit_combat_target(position: Vector2, attack_range: float, sniper: bo
 func _update_auto_ops(delta: float) -> void:
 	if delta <= 0.0 or not auto_ops_enabled:
 		return
+	var reserved_civilians: Array[Vector2] = []
+	var reserved_caches: Array[int] = []
+	var reserved_crates: Array[int] = []
+	for unit_index in range(units.size()):
+		var unit: Dictionary = units[unit_index]
+		if bool(unit.get("garrisoned", false)) or bool(unit.get("manual_order", false)):
+			continue
+		var position: Vector2 = unit["pos"]
+		var task: String = str(unit.get("ai_task", ""))
+		var move_target: Variant = unit.get("move_target", null)
+		if bool(unit.get("carrying_civilian", false)):
+			var destination_outpost: int = _nearest_outpost_index(position)
+			if destination_outpost >= 0:
+				var gate_position: Vector2 = _nearest_outpost_gate_position(destination_outpost, position)
+				if position.distance_to(gate_position) <= 32.0:
+					var shelter_capacity: int = int(outposts[destination_outpost].get("capacity", 20))
+					outposts[destination_outpost]["sheltered"] = mini(shelter_capacity, int(outposts[destination_outpost].get("sheltered", 0)) + 1)
+					unit["carrying_civilian"] = false
+					unit["move_target"] = null
+					unit["ai_task"] = ""
+					world_callouts.append({"pos": gate_position, "text": "CIVILIAN SECURED", "life": 1.8})
+				else:
+					unit["move_target"] = gate_position
+					unit["ai_task"] = "ESCORT"
+			units[unit_index] = unit
+			continue
+		if move_target is Vector2 and position.distance_to(move_target) > 22.0:
+			if task == "ESCORT":
+				var reserved_position: Vector2 = unit.get("ai_target_pos", move_target)
+				reserved_civilians.append(reserved_position)
+			elif task == "SCAVENGE":
+				reserved_caches.append(int(unit.get("ai_target_index", -1)))
+			elif task == "SUPPLY":
+				reserved_crates.append(int(unit.get("ai_target_index", -1)))
+			continue
+		if task == "ESCORT":
+			var civilian_pickup := _nearest_civilian_to(position, 34.0)
+			if civilian_pickup >= 0:
+				civilians.remove_at(civilian_pickup)
+				if civilian_pickup < civilian_steering.size():
+					civilian_steering.remove_at(civilian_pickup)
+				_rebuild_spatial_grid(civilian_grid, civilians)
+				unit["carrying_civilian"] = true
+				unit["move_target"] = null
+				unit["ai_task"] = "ESCORT"
+				units[unit_index] = unit
+				continue
+		if task == "SCAVENGE":
+			var cache_index: int = int(unit.get("ai_target_index", -1))
+			if cache_index >= 0 and cache_index < buildings.size():
+				var cache_state: Dictionary = building_archetypes[cache_index]
+				if bool(cache_state.get("cache_available", false)) and position.distance_to(buildings[cache_index].get_center()) <= 72.0:
+					cache_state["cache_available"] = false
+					building_archetypes[cache_index] = cache_state
+					funds += 100
+					world_callouts.append({"pos": buildings[cache_index].get_center(), "text": "+$100", "life": 2.0})
+					unit["ai_task"] = ""
+					unit["move_target"] = null
+					units[unit_index] = unit
+					continue
+		if task == "SUPPLY":
+			var crate_index: int = int(unit.get("ai_target_index", -1))
+			if crate_index >= 0 and crate_index < supply_crates.size() and position.distance_to(supply_crates[crate_index]["pos"]) <= 30.0:
+				funds += 80
+				world_callouts.append({"pos": supply_crates[crate_index]["pos"], "text": "+$80", "life": 2.0})
+				supply_crates.remove_at(crate_index)
+				unit["ai_task"] = ""
+				unit["move_target"] = null
+				units[unit_index] = unit
+				continue
+		unit["ai_task"] = ""
+		unit["move_target"] = null
+		var next_task := ""
+		var next_target := position
+		if str(unit.get("kind", "")) == "infantry" and float(unit.get("hp", 100.0)) / maxf(float(unit.get("max_hp", 100.0)), 1.0) < 0.25:
+			var retreat_index: int = _nearest_outpost_index(position)
+			if retreat_index >= 0:
+				next_target = _nearest_outpost_gate_position(retreat_index, position)
+				next_task = "RETREAT"
+		if next_task.is_empty() and str(unit.get("kind", "")) == "engineer":
+			var repair_position: Vector2 = _nearest_damaged_structure(position, 650.0)
+			if repair_position != Vector2.INF:
+				next_target = repair_position
+				next_task = "REPAIR"
+		if next_task.is_empty():
+			var rescue_index: int = _nearest_unreserved_civilian(position, 500.0, reserved_civilians)
+			if rescue_index >= 0:
+				next_target = civilians[rescue_index]
+				next_task = "ESCORT"
+				unit["ai_target_pos"] = next_target
+				reserved_civilians.append(next_target)
+		if next_task.is_empty():
+			var warehouse_index: int = _nearest_unreserved_warehouse(position, 500.0, reserved_caches)
+			if warehouse_index >= 0:
+				next_target = buildings[warehouse_index].get_center()
+				next_task = "SCAVENGE"
+				unit["ai_target_index"] = warehouse_index
+				reserved_caches.append(warehouse_index)
+		if next_task.is_empty():
+			var crate_index: int = _nearest_unreserved_crate(position, 420.0, reserved_crates)
+			if crate_index >= 0:
+				next_target = supply_crates[crate_index]["pos"]
+				next_task = "SUPPLY"
+				unit["ai_target_index"] = crate_index
+				reserved_crates.append(crate_index)
+		if next_task.is_empty() and _zombies_nearby(position, 260.0):
+			var shelter_index: int = _nearest_intact_building(position, 180.0)
+			if shelter_index >= 0 and _building_garrison_count(shelter_index) < (8 if _building_type_at(shelter_index) == "HIGHRISE" else 4):
+				_garrison_unit(unit_index, shelter_index)
+				continue
+		if not next_task.is_empty() and position.distance_to(next_target) > 24.0:
+			unit["move_target"] = next_target
+			unit["ai_task"] = next_task
+		units[unit_index] = unit
+
+func _nearest_outpost_gate_position(outpost_index: int, from_position: Vector2) -> Vector2:
+	var best_position: Vector2 = outposts[outpost_index]["pos"]
+	var best_distance: float = INF
+	for gate in gates:
+		if int(gate.get("outpost_index", -1)) != outpost_index or float(gate.get("hp", 0.0)) <= 0.0:
+			continue
+		var gate_position: Vector2 = gate["pos"]
+		var distance: float = from_position.distance_squared_to(gate_position)
+		if distance < best_distance:
+			best_distance = distance
+			best_position = gate_position
+	return best_position
+
+func _nearest_civilian_to(position: Vector2, radius: float) -> int:
+	var best_index := -1
+	var best_distance: float = radius * radius
+	for index in range(civilians.size()):
+		var distance: float = position.distance_squared_to(civilians[index])
+		if distance < best_distance:
+			best_distance = distance
+			best_index = index
+	return best_index
+
+func _nearest_unreserved_civilian(position: Vector2, radius: float, reserved: Array[Vector2]) -> int:
+	var best_index := -1
+	var best_distance: float = radius * radius
+	for index in range(civilians.size()):
+		var candidate: Vector2 = civilians[index]
+		var taken := false
+		for reserved_position in reserved:
+			if candidate.distance_squared_to(reserved_position) <= 42.0 * 42.0:
+				taken = true
+				break
+		if taken:
+			continue
+		var distance: float = position.distance_squared_to(candidate)
+		if distance < best_distance:
+			best_distance = distance
+			best_index = index
+	return best_index
+
+func _nearest_unreserved_warehouse(position: Vector2, radius: float, reserved: Array[int]) -> int:
+	var best_index := -1
+	var best_distance: float = radius * radius
+	for index in range(buildings.size()):
+		if _building_type_at(index) != "WAREHOUSE" or index in reserved or not bool(building_archetypes[index].get("cache_available", false)):
+			continue
+		var distance: float = position.distance_squared_to(buildings[index].get_center())
+		if distance < best_distance:
+			best_distance = distance
+			best_index = index
+	return best_index
+
+func _nearest_unreserved_crate(position: Vector2, radius: float, reserved: Array[int]) -> int:
+	var best_index := -1
+	var best_distance: float = radius * radius
+	for index in range(supply_crates.size()):
+		if index in reserved:
+			continue
+		var distance: float = position.distance_squared_to(supply_crates[index]["pos"])
+		if distance < best_distance:
+			best_distance = distance
+			best_index = index
+	return best_index
+
+func _nearest_damaged_structure(position: Vector2, radius: float) -> Vector2:
+	var best_position := Vector2.INF
+	var best_distance: float = radius * radius
+	for structure in outposts:
+		if float(structure.get("hp", 0.0)) >= float(structure.get("max_hp", 1.0)):
+			continue
+		var distance: float = position.distance_squared_to(structure["pos"])
+		if distance < best_distance:
+			best_distance = distance
+			best_position = structure["pos"]
+	for structure in barricades:
+		if float(structure.get("hp", 0.0)) >= float(structure.get("max_hp", 1.0)):
+			continue
+		var distance: float = position.distance_squared_to(structure["pos"])
+		if distance < best_distance:
+			best_distance = distance
+			best_position = structure["pos"]
+	for structure in gates:
+		if float(structure.get("hp", 0.0)) >= float(structure.get("max_hp", 1.0)):
+			continue
+		var distance: float = position.distance_squared_to(structure["pos"])
+		if distance < best_distance:
+			best_distance = distance
+			best_position = structure["pos"]
+	for structure in turrets:
+		if float(structure.get("hp", 0.0)) >= float(structure.get("max_hp", 1.0)):
+			continue
+		var distance: float = position.distance_squared_to(structure["pos"])
+		if distance < best_distance:
+			best_distance = distance
+			best_position = structure["pos"]
+	return best_position
+
+
+	if delta <= 0.0 or not auto_ops_enabled:
+		return
 	for unit_index in range(units.size()):
 		var unit: Dictionary = units[unit_index]
 		if bool(unit.get("garrisoned", false)) or bool(unit.get("manual_order", false)):
@@ -1660,6 +1876,12 @@ func _building_garrison_count(building_index: int) -> int:
 			count += 1
 	return count
 
+func _unit_near_vehicle_kind(position: Vector2, kind: String, radius: float) -> bool:
+	for unit in units:
+		if str(unit.get("kind", "")) == kind and not bool(unit.get("garrisoned", false)) and unit["pos"].distance_to(position) <= radius:
+			return true
+	return false
+
 func _salvage_nearest_vehicle() -> void:
 	var best_index: int = -1
 	var best_distance: float = 75.0 * 75.0
@@ -1688,6 +1910,93 @@ func _salvage_nearest_vehicle() -> void:
 	message_timer = 1.8
 
 func _update_vehicles(delta: float) -> void:
+	for index in range(vehicles.size()):
+		var vehicle: Dictionary = vehicles[index]
+		var position: Vector2 = vehicle["pos"]
+		var helicopter: bool = str(vehicle.get("kind", "")) == "helicopter"
+		if not bool(vehicle.get("active", false)):
+			if bool(vehicle.get("salvage_started", false)):
+				var holding_unit: bool = false
+				var engineer_present: bool = false
+				for unit in units:
+					if bool(unit.get("garrisoned", false)) or unit["pos"].distance_to(position) > 75.0:
+						continue
+					holding_unit = true
+					if str(unit.get("kind", "")) == "engineer":
+						engineer_present = true
+				if holding_unit:
+					vehicle["salvage_timer"] = maxf(0.0, float(vehicle.get("salvage_timer", 4.0)) - delta * (2.0 if engineer_present else 1.0))
+					if float(vehicle["salvage_timer"]) <= 0.0 and funds >= int(vehicle.get("salvage_cost", 0)):
+						funds -= int(vehicle.get("salvage_cost", 0))
+						vehicle["active"] = true
+						vehicle["salvage_started"] = false
+						message = "VEHICLE RESTORED"
+						message_timer = 2.0
+						world_callouts.append({"pos": position, "text": "RESTORED", "life": 2.2})
+				else:
+					vehicle["salvage_timer"] = float(vehicle.get("salvage_duration", 4.0))
+		else:
+			var target_value: Variant = vehicle.get("move_target", null)
+			if int(vehicle.get("onboard", 0)) > 0 and (not target_value is Vector2):
+				var nearest_outpost: int = _nearest_outpost_index(position)
+				if nearest_outpost >= 0:
+					vehicle["move_target"] = _nearest_outpost_gate_position(nearest_outpost, position)
+					target_value = vehicle["move_target"]
+			if target_value is Vector2:
+				var target: Vector2 = target_value
+				var speed: float = 280.0 if helicopter else 145.0
+				var displacement: Vector2 = (target - position).normalized() * speed * delta
+				var next_position: Vector2 = position + displacement
+				if helicopter or _is_valid_street_position(next_position):
+					position = next_position
+					vehicle["pos"] = position
+				if position.distance_to(target) <= 24.0:
+					vehicle["move_target"] = null
+					if int(vehicle.get("onboard", 0)) > 0:
+						var nearest_outpost: int = _nearest_outpost_index(position)
+						if nearest_outpost >= 0 and position.distance_to(_nearest_outpost_gate_position(nearest_outpost, position)) <= 55.0:
+						var rescued: int = int(vehicle["onboard"])
+						vehicle["onboard"] = 0
+						saved_count += rescued
+						funds += rescued * 35
+						world_callouts.append({"pos": position, "text": "+$%d" % (rescued * 35), "life": 2.0})
+						message = "VEHICLE EVACUATION — %d CIVILIANS" % rescued
+						message_timer = 2.0
+			var pickup_count: int = int(vehicle.get("onboard", 0))
+			if pickup_count < 6:
+				for civilian_index in range(civilians.size() - 1, -1, -1):
+					if position.distance_to(civilians[civilian_index]) <= (62.0 if helicopter else 42.0):
+						civilians.remove_at(civilian_index)
+						if civilian_index < civilian_steering.size():
+							civilian_steering.remove_at(civilian_index)
+						pickup_count += 1
+						if pickup_count >= 6:
+							break
+				vehicle["onboard"] = pickup_count
+			if not helicopter:
+				for zombie_index in range(zombies.size() - 1, -1, -1):
+					if position.distance_to(zombies[zombie_index]["pos"]) <= 34.0 and speed >= 90.0:
+						var hit_zombie: Dictionary = zombies[zombie_index]
+						hit_zombie["pos"] = position + (hit_zombie["pos"] - position).normalized() * 46.0
+					hit_zombie["hp"] = float(hit_zombie.get("hp", 30.0)) - 45.0
+						if float(hit_zombie["hp"]) <= 0.0:
+							zombies.remove_at(zombie_index)
+						else:
+							zombies[zombie_index] = hit_zombie
+			vehicle["cooldown"] = maxf(0.0, float(vehicle.get("cooldown", 0.0)) - delta)
+			if float(vehicle["cooldown"]) <= 0.0:
+				var target_zombie: int = _find_nearest_zombie(position, 260.0)
+				if target_zombie >= 0:
+					var zombie_target: Vector2 = zombies[target_zombie]["pos"]
+					var side_offset: Vector2 = (zombie_target - position).normalized().orthogonal() * (12.0 if helicopter else 0.0)
+					_add_bullet_tracer(position + side_offset, zombie_target)
+					if helicopter:
+						_add_bullet_tracer(position - side_offset, zombie_target)
+					_damage_zombie(target_zombie, 28.0 if helicopter else 32.0)
+					vehicle["cooldown"] = 0.28 if helicopter else 0.35
+		vehicles[index] = vehicle
+
+
 	for index in range(vehicles.size()):
 		var vehicle: Dictionary = vehicles[index]
 		var position: Vector2 = vehicle["pos"]
