@@ -37,6 +37,7 @@ const PENDING_WAVE_SPAWN_INTERVAL := 0.20
 const SAVE_VERSION := 5
 const PREPARATION_SECONDS := 60.0
 const GAME_MINUTES_PER_SECOND := 2.0
+const MAX_TACTICAL_DECALS := 80
 const OUTPOST_MIN_SIZE := 220.0
 const OUTPOST_MAX_SIZE := 760.0
 const OUTPOST_SNAP := 20.0
@@ -77,6 +78,7 @@ var world_callouts: Array[Dictionary] = []
 var selected_vehicle_index := -1
 var barricades: Array[Dictionary] = []
 var flares: Array[Dictionary] = []
+var tactical_decals: Array[Dictionary] = []
 var sector_index := 0
 var sector_name := "Downtown Grid"
 var sector_wave_limit := 30
@@ -234,6 +236,7 @@ func _start_sector(index: int) -> void:
 	auto_ops_enabled = true
 	barricades.clear()
 	flares.clear()
+	tactical_decals.clear()
 	outposts.clear()
 	turrets.clear()
 	gates.clear()
@@ -623,6 +626,7 @@ func _process(delta: float) -> void:
 				var unit_speed: float = 60.0 if unit_kind_for_speed == "infantry" else (58.0 if unit_kind_for_speed == "militia" else (48.0 if unit_kind_for_speed == "engineer" else 52.0))
 				var unit_displacement: Vector2 = (unit_waypoint - unit_position).normalized() * unit_speed * sim_delta
 				unit["pos"] = _move_circle_with_buildings(unit_position, unit_displacement, 8.0, sim_delta, unit_waypoint, unit_steering)
+				unit["facing"] = unit_displacement.normalized()
 				unit["steering"] = unit_steering
 			else:
 				unit["move_target"] = null
@@ -1988,6 +1992,8 @@ func _update_vehicles(delta: float) -> void:
 				var next_position: Vector2 = position.move_toward(target, speed * delta)
 				if helicopter or _is_vehicle_ground_position(next_position):
 					moved = next_position.distance_squared_to(position) > 0.01
+					if moved:
+						vehicle["facing"] = (target - position).normalized()
 					position = next_position
 					vehicle["pos"] = position
 				if position.distance_to(target) <= 24.0:
@@ -2002,6 +2008,15 @@ func _update_vehicles(delta: float) -> void:
 							world_callouts.append({"pos": position, "text": "+$%d" % (rescued * 35), "life": 2.0})
 							message = "VEHICLE EVACUATION — %d CIVILIANS" % rescued
 							message_timer = 2.0
+			if not helicopter and moved:
+				var track_timer: float = maxf(0.0, float(vehicle.get("track_timer", 0.0)) - delta)
+				if track_timer <= 0.0:
+					var track_direction: Vector2 = vehicle.get("facing", Vector2.UP)
+					var track_side: Vector2 = track_direction.orthogonal() * 10.0
+					_add_tactical_decal(position - track_side, track_direction)
+					_add_tactical_decal(position + track_side, track_direction)
+					track_timer = 0.35
+				vehicle["track_timer"] = track_timer
 			var pickup_count: int = int(vehicle.get("onboard", 0))
 			if pickup_count < 6:
 				for civilian_index in range(civilians.size() - 1, -1, -1):
@@ -2618,6 +2633,7 @@ func _draw() -> void:
 		draw_rect(fast_start_rect, Color("#e4c66d"), false, 2.0)
 		_draw_text("[DEPLOY HORDE NOW]", fast_start_rect.position + Vector2(12.0, 35.0), 14, Color("#fff1b9"))
 	_draw_structure_actions()
+	_draw_selection_inspector()
 	_draw_radio_banner()
 	_draw_minimap()
 	_draw_deployment_bar()
@@ -2778,6 +2794,12 @@ func _draw_fog() -> void:
 
 func _draw_entities() -> void:
 	var visible_rect := _camera_view_rect().grow(80.0)
+	for decal in tactical_decals:
+		var decal_pos: Vector2 = decal.get("pos", Vector2.ZERO)
+		if visible_rect.has_point(decal_pos):
+			var decal_direction: Vector2 = decal.get("direction", Vector2.UP)
+			var decal_alpha: float = clampf(float(decal.get("life", 1.0)) / 180.0, 0.0, 1.0)
+			draw_line(decal_pos - decal_direction * 9.0, decal_pos + decal_direction * 9.0, Color(0.58, 0.62, 0.57, 0.28 * decal_alpha), 2.0)
 	for civilian in civilians:
 		if not visible_rect.has_point(civilian):
 			continue
@@ -2866,8 +2888,11 @@ func _draw_entities() -> void:
 			draw_circle(vehicle_pos, 5.0, Color("#202923"))
 			draw_line(vehicle_pos, vehicle_pos + Vector2(0.0, -18.0), Color("#202923"), 4.0)
 			if day_phase == "NIGHT":
-				draw_line(vehicle_pos + Vector2(25.0, -8.0), vehicle_pos + Vector2(72.0, -24.0), Color(1.0, 0.92, 0.58, 0.28), 8.0)
-				draw_line(vehicle_pos + Vector2(25.0, 8.0), vehicle_pos + Vector2(72.0, 24.0), Color(1.0, 0.92, 0.58, 0.28), 8.0)
+				var headlight_direction: Vector2 = vehicle.get("facing", Vector2.RIGHT)
+				var headlight_side: Vector2 = headlight_direction.orthogonal() * 38.0
+				draw_colored_polygon(PackedVector2Array([vehicle_pos + headlight_direction * 16.0 - headlight_side * 0.25, vehicle_pos + headlight_direction * 150.0 - headlight_side, vehicle_pos + headlight_direction * 150.0 + headlight_side, vehicle_pos + headlight_direction * 16.0 + headlight_side * 0.25]), Color(1.0, 0.92, 0.58, 0.08))
+				draw_line(vehicle_pos + headlight_direction * 16.0 - headlight_side * 0.25, vehicle_pos + headlight_direction * 150.0 - headlight_side, Color(1.0, 0.92, 0.58, 0.28), 5.0)
+				draw_line(vehicle_pos + headlight_direction * 16.0 + headlight_side * 0.25, vehicle_pos + headlight_direction * 150.0 + headlight_side, Color(1.0, 0.92, 0.58, 0.28), 5.0)
 		var health_ratio: float = clampf(float(vehicle.get("hp", 0.0)) / maxf(float(vehicle.get("max_hp", 1.0)), 1.0), 0.0, 1.0)
 		draw_rect(Rect2(vehicle_pos + Vector2(-24.0, -25.0), Vector2(48.0 * health_ratio, 4.0)), Color("#67e89b"))
 		if not bool(vehicle.get("active", false)):
@@ -2891,6 +2916,10 @@ func _draw_entities() -> void:
 			var chevron_y: float = p.y - 16.0 - float(chevron) * 5.0
 			draw_line(Vector2(p.x - 5.0, chevron_y), Vector2(p.x, chevron_y - 4.0), Color("#ffd75e"), 2.0)
 			draw_line(Vector2(p.x, chevron_y - 4.0), Vector2(p.x + 5.0, chevron_y), Color("#ffd75e"), 2.0)
+		var unit_facing: Vector2 = unit.get("facing", Vector2.UP)
+		draw_line(p, p + unit_facing * 18.0, Color("#f6f3d1"), 2.0)
+		draw_line(p + unit_facing * 18.0, p + unit_facing.rotated(2.5) * 10.0, Color("#f6f3d1"), 2.0)
+		draw_line(p + unit_facing * 18.0, p + unit_facing.rotated(-2.5) * 10.0, Color("#f6f3d1"), 2.0)
 		if militia:
 			_draw_text("M", p + Vector2(-4.0, 4.0), 11, Color("#1b2410"))
 		elif engineer:
@@ -3622,6 +3651,30 @@ func _draw_supply_crates() -> void:
 
 
 
+
+func _add_tactical_decal(position: Vector2, direction: Vector2) -> void:
+	tactical_decals.append({"pos": position, "direction": direction.normalized(), "life": 180.0})
+	while tactical_decals.size() > MAX_TACTICAL_DECALS:
+		tactical_decals.remove_at(0)
+
+func _draw_selection_inspector() -> void:
+	var inspector_text := ""
+	if selected_unit_index >= 0 and selected_unit_index < units.size():
+		var unit: Dictionary = units[selected_unit_index]
+		inspector_text = "%s  |  RANK %d  |  KILLS %d\nHP %d / %d  |  TASK %s" % [str(unit.get("kind", "UNIT")).to_upper(), int(unit.get("rank", 0)), int(unit.get("kills", 0)), roundi(float(unit.get("hp", 0.0))), roundi(float(unit.get("max_hp", 1.0))), str(unit.get("ai_task", "HOLD"))]
+	elif selected_vehicle_index >= 0 and selected_vehicle_index < vehicles.size():
+		var vehicle: Dictionary = vehicles[selected_vehicle_index]
+		inspector_text = "%s  |  FUEL %.0f\nPASSENGERS %d / 6  |  %s" % [str(vehicle.get("kind", "VEHICLE")).to_upper(), fuel, int(vehicle.get("onboard", 0)), "GROUNDED" if bool(vehicle.get("grounded", false)) else "OPERATIONAL"]
+	if inspector_text.is_empty():
+		return
+	var card := Rect2(safe_insets.x + 18.0, safe_insets.y + 350.0, minf(330.0, viewport_size.x - safe_insets.x - safe_insets.z - 36.0), 68.0)
+	draw_rect(card, Color("#0b1b17", 0.94))
+	draw_rect(card, Color("#75c9e8"), false, 2.0)
+	var rows: PackedStringArray = inspector_text.split("\n")
+	_draw_text(rows[0], card.position + Vector2(10.0, 25.0), 12, Color("#e8fff0"))
+	if rows.size() > 1:
+		_draw_text(rows[1], card.position + Vector2(10.0, 49.0), 11, Color("#b8d6c8"))
+
 func _rescue_broadcast_rect() -> Rect2:
 	return Rect2(safe_insets.x + HUD_EDGE_PADDING + 180.0, safe_insets.y + HUD_EDGE_PADDING + 196.0, 200.0, touch_target_size)
 
@@ -3804,7 +3857,7 @@ func _save_operation() -> void:
 	# Never replace a prior valid campaign with an incomplete HQ-placement state.
 	if not campaign_started or game_state == "hq_placement":
 		return
-	var state: Dictionary = {"version": SAVE_VERSION, "scrap": scrap, "fuel": fuel, "world_clock_minutes": world_clock_minutes, "survival_day": survival_day, "best_days_survived": best_days_survived, "best_civilians_saved": best_civilians_saved, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer}
+	var state: Dictionary = {"version": SAVE_VERSION, "scrap": scrap, "fuel": fuel, "world_clock_minutes": world_clock_minutes, "survival_day": survival_day, "best_days_survived": best_days_survived, "best_civilians_saved": best_civilians_saved, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer, "tactical_decals": tactical_decals}
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify(_save_variant(state)))
@@ -3885,6 +3938,10 @@ func _resume_operation() -> void:
 		district_regions.assign(state["district_regions"])
 	if state.has("gates"):
 		gates.assign(state["gates"])
+	if state.has("tactical_decals"):
+		tactical_decals.assign(state["tactical_decals"])
+	if tactical_decals.size() > MAX_TACTICAL_DECALS:
+		tactical_decals = tactical_decals.slice(tactical_decals.size() - MAX_TACTICAL_DECALS)
 	for outpost_index in range(outposts.size()):
 		var migrated_outpost: Dictionary = outposts[outpost_index]
 		migrated_outpost["evac_timer"] = float(migrated_outpost.get("evac_timer", 15.0))
