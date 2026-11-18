@@ -372,6 +372,7 @@ func _process(delta: float) -> void:
 		zombie["turret_attack_cooldown"] = maxf(0.0, float(zombie.get("turret_attack_cooldown", 0.0)) - sim_delta)
 		zombie["gate_attack_cooldown"] = maxf(0.0, float(zombie.get("gate_attack_cooldown", 0.0)) - sim_delta)
 		zombie["building_attack_cooldown"] = maxf(0.0, float(zombie.get("building_attack_cooldown", 0.0)) - sim_delta)
+		zombie["unit_attack_cooldown"] = maxf(0.0, float(zombie.get("unit_attack_cooldown", 0.0)) - sim_delta)
 		var zpos: Vector2 = zombie["pos"]
 		var target_index: int = _find_nearest_entity(civilian_grid, civilians, zpos, 640.0)
 		var target: Vector2 = _nearest_evac_zone(zpos)
@@ -480,6 +481,26 @@ func _process(delta: float) -> void:
 					else:
 						turrets[turret_index] = nearby_turret
 				break
+		if float(zombie.get("unit_attack_cooldown", 0.0)) <= 0.0:
+			for unit_index in range(units.size()):
+				var exposed_unit: Dictionary = units[unit_index]
+				if bool(exposed_unit.get("garrisoned", false)):
+					continue
+				if zpos.distance_to(exposed_unit["pos"]) <= 22.0:
+					var melee_damage: float = 42.0 if zombie_kind == "brute" else 20.0
+					exposed_unit["hp"] = maxf(0.0, float(exposed_unit.get("hp", 100.0)) - melee_damage)
+					zombie["unit_attack_cooldown"] = 1.0
+					if float(exposed_unit["hp"]) <= 0.0:
+						units.remove_at(unit_index)
+						if selected_unit_index == unit_index:
+							selected_unit_index = -1
+						elif selected_unit_index > unit_index:
+							selected_unit_index -= 1
+						message = "FRIENDLY UNIT LOST"
+						message_timer = 1.5
+					else:
+						units[unit_index] = exposed_unit
+					break
 		zombie["pos"] = zpos
 		zombies[i] = zombie
 
@@ -670,9 +691,14 @@ func _generate_state_map() -> void:
 		var found_seed := false
 		for attempt in range(120):
 			var candidate := Vector2(map_rng.randf_range(650.0, WORLD_SIZE.x - 650.0), map_rng.randf_range(650.0, WORLD_SIZE.y - 650.0))
+			var candidate_size := Vector2(2050.0, 2200.0)
+			var candidate_region_position := candidate - candidate_size * 0.5
+			candidate_region_position.x = clampf(candidate_region_position.x, 0.0, WORLD_SIZE.x - candidate_size.x)
+			candidate_region_position.y = clampf(candidate_region_position.y, 0.0, WORLD_SIZE.y - candidate_size.y)
+			var candidate_region := Rect2(candidate_region_position, candidate_size)
 			var spaced := true
-			for existing_seed in district_seed_points:
-				if candidate.distance_to(existing_seed) < 1450.0:
+			for existing_region in district_regions:
+				if candidate_region.intersects(existing_region):
 					spaced = false
 					break
 			if spaced:
@@ -1363,7 +1389,7 @@ func _draw_buildings() -> void:
 				var window_x: float = building.position.x + building.size.x * float(window_index) / 4.0
 				draw_line(Vector2(window_x, building.position.y + 15.0), Vector2(window_x, building.end.y - 15.0), Color("#7189a5"), 2.0)
 		elif archetype == "HOSPITAL":
-			var center: Vector2 = building.get_center()
+			var center: Vector2 = building.get_center() + Vector2(0.0, -42.0)
 			draw_rect(Rect2(center - Vector2(20.0, 6.0), Vector2(40.0, 12.0)), Color("#fff4f5"))
 			draw_rect(Rect2(center - Vector2(6.0, 20.0), Vector2(12.0, 40.0)), Color("#fff4f5"))
 		elif archetype == "ARMORY":
@@ -2136,6 +2162,8 @@ func _draw_entities() -> void:
 		if count > 0 and visible_rect.intersects(buildings[building_index]):
 			var roof: Rect2 = buildings[building_index]
 			draw_rect(roof.grow(-7.0), Color("#4de6a5"), false, 5.0)
+			var roof_range: float = 390.0 if _building_type_at(building_index) == "HIGHRISE" else 276.75
+			draw_arc(roof.get_center(), roof_range, 0.0, TAU, 48, Color("#4de6a5", 0.18), 2.0)
 			var first_x: float = roof.get_center().x - float(count - 1) * 10.0
 			for pip in range(count):
 				draw_circle(Vector2(first_x + float(pip) * 20.0, roof.position.y + 30.0), 6.0, Color("#63f4cb"))
