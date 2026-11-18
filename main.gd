@@ -117,6 +117,9 @@ var outpost_placement_start := Vector2.ZERO
 var outpost_placement_rect := Rect2(Vector2.ZERO, Vector2(OUTPOST_MIN_SIZE, OUTPOST_MIN_SIZE))
 var outpost_placement_kind := "outpost"
 var outpost_placement_valid := false
+var outpost_placement_gesture_mode := ""
+var outpost_placement_anchor := Vector2.ZERO
+var scenario_camera_target := WORLD_SIZE * 0.5
 var evacuation_zones: Array[Vector2] = []
 var spawn_districts: Array[Rect2] = []
 var outposts: Array[Dictionary] = []
@@ -218,12 +221,12 @@ func _start_sector(index: int) -> void:
 	supply_drop_timer = 150.0
 	day_phase = "DAY"
 	medevac.clear()
-	camera_position = WORLD_SIZE * 0.5
+	camera_position = scenario_camera_target
 	camera_zoom = 0.62
 	command_tab = 0
 	manual_paused = false
 	lifecycle_paused = false
-	funds = 500
+	funds = [500, 420, 620][sector_index]
 	saved_count = 0
 	lost_count = 0
 	wave = 0
@@ -248,15 +251,17 @@ func _start_sector(index: int) -> void:
 	audio_effect = ""
 	message = "EVACUATE CIVILIANS. HOLD THE LINE."
 	message_timer = 4.0
-	for district in spawn_districts:
-		var civilian_spawn_count: int = 30 + _residential_density_bonus(district)
+	for district_index in range(spawn_districts.size()):
+		var district: Rect2 = spawn_districts[district_index]
+		var civilian_spawn_count: int = _scenario_civilian_count(district_index, 30 + _residential_density_bonus(district))
 		for i in range(civilian_spawn_count):
 			var spawn_point := Vector2(randf_range(district.position.x, district.end.x), randf_range(district.position.y, district.end.y))
 			if _is_open_world_position(spawn_point, 18.0):
 				civilians.append(spawn_point)
 				civilian_steering.append({})
-	for district in spawn_districts:
-		for outbreak_index in range(6):
+	for district_index in range(spawn_districts.size()):
+		var district: Rect2 = spawn_districts[district_index]
+		for outbreak_index in range(_scenario_initial_zombie_count(district_index)):
 			var outbreak_position := Vector2(randf_range(district.position.x, district.end.x), randf_range(district.position.y, district.end.y))
 			if _is_open_world_position(outbreak_position, 18.0):
 				zombies.append({"pos": outbreak_position, "kind": "shambler", "hp": 30.0, "max_hp": 30.0, "wall_cooldown": 0.0})
@@ -323,15 +328,11 @@ func _process(delta: float) -> void:
 			if outpost_rect.grow(80.0).has_point(civilian) and outpost_distance < nearest_outpost_distance:
 				nearest_outpost_distance = outpost_distance
 				civilian_safe_target = outpost["pos"]
-				if not outpost_rect.has_point(civilian):
-					for gate in gates:
-						if int(gate.get("outpost_index", -1)) == outposts.find(outpost):
-							civilian_safe_target = gate["pos"]
-							break
-		var direction: Vector2 = (civilian_safe_target - civilian).normalized()
+		var civilian_move_target: Vector2 = _outpost_gate_waypoint(civilian, civilian_safe_target)
+		var direction: Vector2 = (civilian_move_target - civilian).normalized()
 		var displacement: Vector2 = direction * 43.0 * sim_delta
 		var civilian_steer: Dictionary = civilian_steering[i] if i < civilian_steering.size() else {}
-		civilian = _move_circle_with_buildings(civilian, displacement, 5.5, sim_delta, civilian_safe_target, civilian_steer)
+		civilian = _move_circle_with_buildings(civilian, displacement, 5.5, sim_delta, civilian_move_target, civilian_steer)
 		if i < civilian_steering.size():
 			civilian_steering[i] = civilian_steer
 		civilians[i] = civilian
@@ -559,10 +560,40 @@ func _setup_city() -> void:
 	_configure_sector(sector_index)
 
 func _configure_sector(index: int) -> void:
-	sector_name = "Statewide Containment"
+	sector_index = clampi(index, 0, 2)
 	sector_wave_limit = 30
-	sector_wave_limit = 30
+	match sector_index:
+		0:
+			sector_name = "Suburban Outskirts"
+			scenario_camera_target = Vector2(WORLD_SIZE.x * 0.5, WORLD_SIZE.y * 0.30)
+		1:
+			sector_name = "Medical & Urban Core"
+			scenario_camera_target = Vector2(WORLD_SIZE.x * 0.5, WORLD_SIZE.y * 0.30)
+		2:
+			sector_name = "Industrial Highway"
+			scenario_camera_target = Vector2(WORLD_SIZE.x * 0.5, WORLD_SIZE.y * 0.60)
 	_generate_state_map()
+
+func _scenario_civilian_count(district_index: int, base_count: int) -> int:
+	var multiplier: float = 1.0
+	match sector_index:
+		0:
+			multiplier = 1.45 if district_index == 1 else 0.55
+		1:
+			multiplier = 1.10 if district_index == 0 or district_index == 3 else 0.65
+		2:
+			multiplier = 1.15 if district_index == 2 or district_index == 4 else 0.55
+	return maxi(8, roundi(float(base_count) * multiplier))
+
+func _scenario_initial_zombie_count(district_index: int) -> int:
+	match sector_index:
+		0:
+			return 7 if district_index == 1 else 3
+		1:
+			return 14 if district_index == 0 or district_index == 3 else 3
+		2:
+			return 10 if district_index == 2 else (8 if district_index == 4 else 2)
+	return 6
 
 func _generate_state_map() -> void:
 	buildings.clear()
@@ -657,6 +688,27 @@ func _update_building_effects(delta: float) -> void:
 			message_timer = 2.0
 		building_archetypes[building_index] = archetype
 
+func _outpost_gate_waypoint(position: Vector2, destination: Vector2) -> Vector2:
+	for outpost_index in range(outposts.size()):
+		var outpost_rect: Rect2 = outposts[outpost_index].get("rect", Rect2(outposts[outpost_index]["pos"] - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
+		var starts_inside: bool = outpost_rect.has_point(position)
+		var ends_inside: bool = outpost_rect.has_point(destination)
+		if starts_inside == ends_inside:
+			continue
+		var nearest_gate_position := Vector2.ZERO
+		var nearest_gate_distance := INF
+		for gate in gates:
+			if int(gate.get("outpost_index", -1)) != outpost_index or float(gate.get("hp", 0.0)) <= 0.0:
+				continue
+			var gate_position: Vector2 = gate.get("pos", Vector2.ZERO)
+			var distance: float = position.distance_squared_to(gate_position)
+			if distance < nearest_gate_distance:
+				nearest_gate_distance = distance
+				nearest_gate_position = gate_position
+		if nearest_gate_distance < INF and position.distance_to(nearest_gate_position) > 24.0:
+			return nearest_gate_position
+	return destination
+
 func _update_gate_states() -> void:
 	for gate_index in range(gates.size()):
 		var gate: Dictionary = gates[gate_index]
@@ -750,15 +802,36 @@ func _outpost_rect_valid(rect: Rect2) -> bool:
 func _begin_outpost_placement(world_position: Vector2, placement_kind: String) -> void:
 	outpost_placement_active = true
 	outpost_placement_dragging = true
+	outpost_placement_gesture_mode = "resize"
 	outpost_placement_kind = placement_kind
 	outpost_placement_start = world_position
+	outpost_placement_anchor = world_position
 	outpost_placement_rect = Rect2(world_position, Vector2(OUTPOST_MIN_SIZE, OUTPOST_MIN_SIZE))
-	_update_outpost_placement(world_position + Vector2(OUTPOST_MIN_SIZE, OUTPOST_MIN_SIZE))
+	_update_outpost_placement_from_anchor(world_position + Vector2(OUTPOST_MIN_SIZE, OUTPOST_MIN_SIZE))
+
+func _begin_outpost_resize(world_position: Vector2) -> void:
+	var corners: Array[Vector2] = [outpost_placement_rect.position, Vector2(outpost_placement_rect.end.x, outpost_placement_rect.position.y), outpost_placement_rect.end, Vector2(outpost_placement_rect.position.x, outpost_placement_rect.end.y)]
+	var nearest_corner_index := 0
+	var nearest_distance := INF
+	for corner_index in range(corners.size()):
+		var distance: float = world_position.distance_squared_to(corners[corner_index])
+		if distance < nearest_distance:
+			nearest_distance = distance
+			nearest_corner_index = corner_index
+	var opposite_corners: Array[Vector2] = [outpost_placement_rect.end, Vector2(outpost_placement_rect.position.x, outpost_placement_rect.end.y), outpost_placement_rect.position, Vector2(outpost_placement_rect.end.x, outpost_placement_rect.position.y)]
+	outpost_placement_anchor = opposite_corners[nearest_corner_index]
+	outpost_placement_dragging = true
+	outpost_placement_gesture_mode = "resize"
+	_update_outpost_placement_from_anchor(world_position)
 
 func _update_outpost_placement(world_position: Vector2) -> void:
-	var end_point := Vector2(maxf(world_position.x, outpost_placement_start.x + OUTPOST_MIN_SIZE), maxf(world_position.y, outpost_placement_start.y + OUTPOST_MIN_SIZE))
-	var size: Vector2 = _snap_outpost_size(end_point - outpost_placement_start)
-	outpost_placement_rect = Rect2(outpost_placement_start, size)
+	_update_outpost_placement_from_anchor(world_position)
+
+func _update_outpost_placement_from_anchor(world_position: Vector2) -> void:
+	var delta: Vector2 = world_position - outpost_placement_anchor
+	var size: Vector2 = _snap_outpost_size(Vector2(absf(delta.x), absf(delta.y)))
+	var top_left := Vector2(minf(world_position.x, outpost_placement_anchor.x), minf(world_position.y, outpost_placement_anchor.y))
+	outpost_placement_rect = Rect2(top_left, size)
 	var cost: int = _outpost_build_cost(size)
 	outpost_placement_valid = _outpost_rect_valid(outpost_placement_rect) and funds >= cost and (outpost_placement_kind == "hq" or outposts.size() < OUTPOST_MAX_COUNT + 1)
 	queue_redraw()
@@ -974,6 +1047,8 @@ func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius:
 							steering["tangent"] = tangent.normalized()
 							steering["lock_time"] = 0.35
 		for wall in barricades:
+			if float(wall.get("hp", 1.0)) <= 0.0:
+				continue
 			var wall_rect: Rect2 = wall.get("rect", Rect2(wall["pos"] - Vector2(15.0, 15.0), Vector2(30.0, 30.0)))
 			var closest_wall := Vector2(clampf(candidate.x, wall_rect.position.x, wall_rect.end.x), clampf(candidate.y, wall_rect.position.y, wall_rect.end.y))
 			var wall_offset: Vector2 = candidate - closest_wall
@@ -981,6 +1056,8 @@ func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius:
 				var wall_normal: Vector2 = wall_offset.normalized() if wall_offset.length_squared() > 0.001 else Vector2.UP
 				candidate = closest_wall + wall_normal * radius
 		for gate in gates:
+			if float(gate.get("hp", 0.0)) <= 0.0:
+				continue
 			if bool(gate.get("open", false)) and not block_gates_for_hostiles:
 				continue
 			var gate_rect: Rect2 = gate["rect"]
@@ -1170,9 +1247,19 @@ func _input(event: InputEvent) -> void:
 		var touch := event as InputEventScreenTouch
 		if touch.pressed:
 			touch_points[touch.index] = touch.position
-			if ((game_state == "hq_placement" and touch.position.y < viewport_size.y - 270.0) or (game_state == "playing" and touch.position.y > 520.0 and touch.position.y < viewport_size.y - 270.0 and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost")):
-				_begin_outpost_placement(_screen_to_world(touch.position), "hq" if game_state == "hq_placement" else "outpost")
 			if touch_points.size() == 1:
+				var touch_world: Vector2 = _screen_to_world(touch.position)
+				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and touch.position.y < viewport_size.y - 270.0) or (game_state == "playing" and touch.position.y > 520.0 and touch.position.y < viewport_size.y - 270.0 and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
+				if can_start_placement:
+					_begin_outpost_placement(touch_world, "hq" if game_state == "hq_placement" else "outpost")
+				elif outpost_placement_active:
+					if outpost_placement_rect.grow(24.0).has_point(touch_world):
+						_begin_outpost_resize(touch_world)
+					else:
+						outpost_placement_gesture_mode = "pan"
+						outpost_placement_dragging = true
+				else:
+					outpost_placement_gesture_mode = ""
 				camera_drag_origin = touch.position
 				camera_last_position = touch.position
 				camera_drag_distance = 0.0
@@ -1188,6 +1275,7 @@ func _input(event: InputEvent) -> void:
 			if touch_points.has(touch.index):
 				if outpost_placement_active and outpost_placement_dragging:
 					outpost_placement_dragging = false
+					outpost_placement_gesture_mode = ""
 				elif touch_points.size() == 1 and not multi_touch_gesture and not camera_dragging and camera_drag_distance < CAMERA_DRAG_THRESHOLD:
 					_handle_tap(touch.position)
 				touch_points.erase(touch.index)
@@ -1216,8 +1304,8 @@ func _input(event: InputEvent) -> void:
 			pinch_start_distance = distance
 			previous_pinch_center = center
 		else:
-			if outpost_placement_active and outpost_placement_dragging:
-				_update_outpost_placement(_screen_to_world(drag.position))
+			if outpost_placement_active and outpost_placement_dragging and outpost_placement_gesture_mode == "resize":
+				_update_outpost_placement_from_anchor(_screen_to_world(drag.position))
 				return
 			camera_drag_distance += drag.relative.length()
 			if camera_drag_distance > CAMERA_DRAG_THRESHOLD:
@@ -1230,13 +1318,22 @@ func _input(event: InputEvent) -> void:
 		var mouse := event as InputEventMouseButton
 		if mouse.button_index == MOUSE_BUTTON_LEFT:
 			if mouse.pressed:
-				if ((game_state == "hq_placement" and mouse.position.y < viewport_size.y - 270.0) or (game_state == "playing" and mouse.position.y > 520.0 and mouse.position.y < viewport_size.y - 270.0 and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost")):
-					_begin_outpost_placement(_screen_to_world(mouse.position), "hq" if game_state == "hq_placement" else "outpost")
+				var mouse_world: Vector2 = _screen_to_world(mouse.position)
+				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and mouse.position.y < viewport_size.y - 270.0) or (game_state == "playing" and mouse.position.y > 520.0 and mouse.position.y < viewport_size.y - 270.0 and command_tab == 1 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
+				if can_start_placement:
+					_begin_outpost_placement(mouse_world, "hq" if game_state == "hq_placement" else "outpost")
+				elif outpost_placement_active:
+					if outpost_placement_rect.grow(24.0).has_point(mouse_world):
+						_begin_outpost_resize(mouse_world)
+					else:
+						outpost_placement_gesture_mode = "pan"
+						outpost_placement_dragging = true
 				camera_drag_origin = mouse.position
 				camera_drag_distance = 0.0
 				camera_dragging = false
 			elif outpost_placement_active and outpost_placement_dragging:
 				outpost_placement_dragging = false
+				outpost_placement_gesture_mode = ""
 			elif not camera_dragging and camera_drag_distance < CAMERA_DRAG_THRESHOLD:
 				_handle_tap(mouse.position)
 		elif mouse.pressed and mouse.button_index == MOUSE_BUTTON_WHEEL_UP:
@@ -1248,8 +1345,8 @@ func _input(event: InputEvent) -> void:
 		camera_drag_distance += motion.relative.length()
 		if camera_drag_distance > CAMERA_DRAG_THRESHOLD:
 			camera_dragging = true
-		if outpost_placement_active and outpost_placement_dragging:
-			_update_outpost_placement(_screen_to_world(motion.position))
+		if outpost_placement_active and outpost_placement_dragging and outpost_placement_gesture_mode == "resize":
+			_update_outpost_placement_from_anchor(_screen_to_world(motion.position))
 		elif camera_dragging:
 			camera_position -= motion.relative / camera_zoom
 			_clamp_camera()
@@ -1643,8 +1740,8 @@ func _draw_title_screen() -> void:
 			_draw_text("RESUME SAVED OPERATION", Vector2(viewport_size.x * 0.19, viewport_size.y * 0.71), 18, Color("#fff4c7"))
 	else:
 		_draw_text("SELECT OPERATIONAL SECTOR", Vector2(viewport_size.x * 0.19, viewport_size.y * 0.42), 22, Color("#d8eee0"))
-		var names: Array[String] = ["01  DOWNTOWN GRID", "02  HIGHWAY CHOKEPOINT", "03  CENTRAL PLAZA"]
-		var details: Array[String] = ["DENSE URBAN GRID  •  30 WAVES", "HIGHWAY CORRIDORS  •  30 WAVES", "OPEN PLAZA DISTRICTS  •  30 WAVES"]
+		var names: Array[String] = ["01  SUBURBAN OUTSKIRTS", "02  MEDICAL & URBAN CORE", "03  INDUSTRIAL HIGHWAY"]
+		var details: Array[String] = ["BALANCED CASH / CIVILIANS  •  30 WAVES", "HOSPITALS + HIGHRISES / HIGH PRESSURE", "WAREHOUSE + ARMORY CHOKEPOINTS"]
 		for index in range(3):
 			var y := viewport_size.y * 0.44 + float(index) * viewport_size.y * 0.12
 			draw_rect(Rect2(viewport_size.x * 0.10, y, viewport_size.x * 0.80, 96.0), Color("#18352a"))
