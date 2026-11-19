@@ -4265,25 +4265,36 @@ func _update_work_orders(delta: float) -> void:
 			match work_kind:
 				"chop":
 					trees[target_index]["alive"] = false
-					wood += 15
-					world_callouts.append({"pos": work_target, "text": "+15 WOOD", "life": 2.0})
+					unit["cargo_type"] = "wood"
+					unit["cargo_amount"] = 15
+					world_callouts.append({"pos": work_target, "text": "WOOD SECURED — HAULING", "life": 2.0})
 				"hunt":
 					wildlife[target_index]["alive"] = false
-					food += 30
-					world_callouts.append({"pos": work_target, "text": "+30 FOOD", "life": 2.0})
+					unit["cargo_type"] = "food"
+					unit["cargo_amount"] = 30
+					world_callouts.append({"pos": work_target, "text": "FOOD SECURED — HAULING", "life": 2.0})
 				"demolish":
 					var salvage_amount: int = randi_range(40, 90)
 					if faction_doctrine == "PRAGMATIC FREEHOLD":
 						salvage_amount = int(round(float(salvage_amount) * 1.2))
 					building_archetypes[target_index]["destroyed"] = true
 					building_archetypes[target_index]["cache_available"] = false
-					scrap += salvage_amount
-					world_callouts.append({"pos": buildings[target_index].get_center(), "text": "+%d SCRAP" % salvage_amount, "life": 2.5})
+					unit["cargo_type"] = "scrap"
+					unit["cargo_amount"] = salvage_amount
+					world_callouts.append({"pos": buildings[target_index].get_center(), "text": "%d SCRAP — HAULING" % salvage_amount, "life": 2.5})
 			unit["work_kind"] = ""
 			unit["work_target_index"] = -1
-			unit["ai_task"] = ""
 			unit["manual_order"] = false
-			unit["move_target"] = null
+			if not str(unit.get("cargo_type", "")).is_empty():
+				var haul_outpost: int = _nearest_outpost_index(unit["pos"])
+				if haul_outpost >= 0:
+					unit["move_target"] = _nearest_outpost_gate_position(haul_outpost, unit["pos"])
+					unit["ai_task"] = "HAUL"
+				else:
+					unit["ai_task"] = ""
+			else:
+				unit["ai_task"] = ""
+				unit["move_target"] = null
 		units[unit_index] = unit
 
 func _construct_survival_building(kind: String, position: Vector2) -> void:
@@ -5099,6 +5110,31 @@ func _milestone14_tick_workforce(_delta: float) -> void:
 		var worker: Dictionary = units[unit_index]
 		var role: String = str(worker.get("kind", ""))
 		if role not in ["worker", "engineer"] or bool(worker.get("garrisoned", false)):
+			continue
+		var cargo_type: String = str(worker.get("cargo_type", ""))
+		if not cargo_type.is_empty():
+			var cargo_outpost: int = _nearest_outpost_index(worker["pos"])
+			if cargo_outpost >= 0:
+				var gate_position: Vector2 = _nearest_outpost_gate_position(cargo_outpost, worker["pos"])
+				if worker["pos"].distance_to(gate_position) <= 38.0:
+					var amount: int = int(worker.get("cargo_amount", 0))
+					if cargo_type == "wood":
+						wood += amount
+					elif cargo_type == "scrap":
+						scrap += amount
+					elif cargo_type == "food":
+						food += amount
+					elif cargo_type == "fuel":
+						fuel += float(amount)
+					worker["cargo_type"] = ""
+					worker["cargo_amount"] = 0
+					worker["ai_task"] = ""
+					worker["move_target"] = null
+					units[unit_index] = worker
+				else:
+					worker["move_target"] = gate_position
+					worker["ai_task"] = "HAUL"
+					units[unit_index] = worker
 			continue
 		if not work_outside_enabled:
 			var nearest_outpost: int = _nearest_outpost_index(worker["pos"])
