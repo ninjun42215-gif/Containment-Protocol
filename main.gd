@@ -219,6 +219,7 @@ var faction_foundation_timer: float = 720.0
 var specialists_panel_open: bool = false
 var outpost_morale: float = 70.0
 var doctrine_morale_recovery_day: int = 0
+var selected_raid_squad: int = 0
 
 func _ready() -> void:
 	randomize()
@@ -4080,7 +4081,8 @@ func _shelter_flush_timer_step(delta: float) -> void:
 
 func _spawn_refugee_wave() -> void:
 	for district in spawn_districts:
-		for refugee_index in range(10 + int(wave / 5) * 2):
+		var recruitment_multiplier: float = 1.35 if faction_doctrine == "HUMANITARIAN SANCTUARY" else (0.8 if faction_doctrine == "MARTIAL LAW" else 1.0)
+		for refugee_index in range(maxi(1, int(round(float(10 + int(wave / 5) * 2) * recruitment_multiplier)))):
 			var refugee_position := Vector2(randf_range(district.position.x, district.end.x), randf_range(district.position.y, district.end.y))
 			if _is_open_world_position(refugee_position, 18.0):
 				civilians.append(refugee_position)
@@ -4205,6 +4207,14 @@ func _apply_daily_rations() -> void:
 	var daily_consumption: int = units.size() + _total_sheltered_civilians()
 	for building in constructed_buildings:
 		var facility_output: float = 1.0 + minf(0.5, float(role_allocations.get("FACILITY", 0)) * 0.05)
+		var facility_xp_total: int = 0
+		var facility_staff_count: int = 0
+		for staff in survivors:
+			if str(staff.get("assignment_category", "")) == "FACILITY":
+				facility_xp_total += int(staff.get("engineering_xp", 0)) + int(staff.get("gathering_xp", 0))
+				facility_staff_count += 1
+		if facility_staff_count > 0:
+			facility_output *= 1.0 + minf(0.5, float(facility_xp_total) / float(facility_staff_count) / 2000.0)
 		if faction_doctrine == "PRAGMATIC FREEHOLD":
 			facility_output *= 1.2
 		food += int(float(building.get("food_per_day", 0)) * facility_output)
@@ -4984,7 +4994,10 @@ func _milestone14_proficiency_bonus(unit: Dictionary, skill: String) -> float:
 		if int(person.get("id", -2)) == survivor_id:
 			var xp_key: String = "combat_xp" if skill == "combat" else ("medical_xp" if skill == "medical" else ("gathering_xp" if skill == "gathering" else "engineering_xp"))
 			var xp: int = int(person.get(xp_key, 0))
-			return 1.0 + minf(0.75, float(xp) / 1000.0)
+			var multiplier: float = 1.0 + minf(0.75, float(xp) / 1000.0)
+			if skill == "combat" and faction_doctrine == "MARTIAL LAW":
+				multiplier *= 1.2
+			return multiplier
 	return 1.0
 
 func _milestone14_expertise_for_id(citizen_id: int) -> String:
@@ -5254,7 +5267,7 @@ func _milestone14_draw_work_zones() -> void:
 func _milestone14_draw_hud_panel() -> void:
 	if game_state != "playing" or command_tab != 1:
 		return
-	var panel_rect := Rect2(safe_insets.x + 8.0, safe_insets.y + 286.0, viewport_size.x - safe_insets.x - safe_insets.z - 16.0, 190.0)
+	var panel_rect := Rect2(safe_insets.x + 8.0, safe_insets.y + 286.0, viewport_size.x - safe_insets.x - safe_insets.z - 16.0, 244.0)
 	draw_rect(panel_rect, Color("#091713", 0.96))
 	draw_rect(panel_rect, Color("#5ecf91"), false, 2.0)
 	var population: int = citizens.size()
@@ -5270,13 +5283,20 @@ func _milestone14_draw_hud_panel() -> void:
 	_draw_text("DRAG MAP TO BOX A WORK ZONE  |  " + ("WORK OUTSIDE" if work_outside_enabled else "RECALL TO OUTPOST"), panel_rect.position + Vector2(8.0, 60.0), 8, Color("#83e6f2"))
 	_draw_text("DOCTRINE: " + faction_doctrine + "  |  READY IN %dD" % _milestone14_doctrine_cooldown(), panel_rect.position + Vector2(8.0, 86.0), 9, Color("#f2d98a"))
 	_draw_text("[CYCLE DOCTRINE]   [SPECIALISTS]   SETTLEMENTS %d" % faction_settlements.size(), panel_rect.position + Vector2(8.0, 110.0), 9, Color("#83e6f2"))
+	_draw_text("SQUAD %d/%d  %s  MEMBERS %d" % [selected_raid_squad + 1, maxi(1, raid_squads.size()), str(raid_squads[selected_raid_squad].get("status", "EMPTY")) if selected_raid_squad < raid_squads.size() else "EMPTY", raid_squads[selected_raid_squad].get("members", []).size() if selected_raid_squad < raid_squads.size() else 0], panel_rect.position + Vector2(8.0, 136.0), 9, Color("#f2d98a"))
+	var squad_labels: Array[String] = ["[CREATE]", "[DEPLOY]", "[RECALL]", "[DISBAND]"]
+	for squad_button in range(4):
+		var squad_rect := Rect2(panel_rect.position.x + 4.0 + float(squad_button) * ((panel_rect.size.x - 8.0) / 4.0), panel_rect.position.y + 146.0, (panel_rect.size.x - 12.0) / 4.0, 52.0)
+		draw_rect(squad_rect, Color("#1c3c30") if squad_button < 3 else Color("#4b2923"))
+		draw_rect(squad_rect, Color("#75c9e8"), false, 1.5)
+		_draw_text(squad_labels[squad_button], squad_rect.position + Vector2(5.0, 31.0), 9, Color("#ffffff"))
 	if specialists_panel_open:
 		_milestone14_draw_specialists(panel_rect)
 
 func _milestone14_handle_panel_tap(position: Vector2) -> bool:
 	if game_state != "playing" or command_tab != 1:
 		return false
-	var panel_rect := Rect2(safe_insets.x + 8.0, safe_insets.y + 286.0, viewport_size.x - safe_insets.x - safe_insets.z - 16.0, 154.0)
+	var panel_rect := Rect2(safe_insets.x + 8.0, safe_insets.y + 286.0, viewport_size.x - safe_insets.x - safe_insets.z - 16.0, 244.0)
 	if not panel_rect.has_point(position):
 		return false
 	var keys: Array[String] = ["GATHERERS", "ENGINEERS", "FACILITY", "SQUAD"]
@@ -5285,6 +5305,11 @@ func _milestone14_handle_panel_tap(position: Vector2) -> bool:
 	var local_x: float = fposmod(position.x - panel_rect.position.x - 8.0, cell_width)
 	if position.y >= panel_rect.position.y + 24.0 and position.y <= panel_rect.position.y + 52.0:
 		_milestone14_adjust_allocation(keys[cell_index], -1 if local_x < cell_width * 0.5 else 1)
+		return true
+	if position.y >= panel_rect.position.y + 146.0 and position.y <= panel_rect.position.y + 198.0:
+		var squad_cell: float = panel_rect.size.x / 4.0
+		var squad_action: int = clampi(floori((position.x - panel_rect.position.x) / squad_cell), 0, 3)
+		_milestone14_squad_ui_action(squad_action)
 		return true
 	if position.y >= panel_rect.position.y + 90.0 and position.y <= panel_rect.position.y + 128.0:
 		if position.x < panel_rect.position.x + panel_rect.size.x * 0.52:
@@ -5414,9 +5439,14 @@ func _milestone14_settlement_action(index: int, action: String) -> void:
 	var kind: String = str(settlement.get("faction", "NEUTRAL"))
 	if action == "BARTER":
 		var cost: int = 25 if faction_doctrine == "HUMANITARIAN SANCTUARY" else (35 if faction_doctrine == "MARTIAL LAW" else 30)
+		if kind != "NEUTRAL":
+			cost = 30
+		elif faction_doctrine == "MARTIAL LAW":
+			cost = 35
 		if scrap >= cost:
 			scrap -= cost
-			food += 45
+			var barter_yield: int = 54 if faction_doctrine == "HUMANITARIAN SANCTUARY" else 45
+			food += barter_yield
 			_milestone14_change_relation(index, 6)
 			message = "BARTER COMPLETE — +45 FOOD / +6 STANDING"
 		else: message = "BARTER NEEDS %d SCRAP" % cost
@@ -5477,6 +5507,54 @@ func _milestone14_draw_faction_banners() -> void:
 			draw_rect(rect, Color("#1c3c30") if j < 2 else Color("#4b2923"))
 			draw_rect(rect, accent, false, 1.5)
 			_draw_text(labels[j], rect.position + Vector2(5.0, 26.0), 9, Color("#ffffff"))
+
+
+func _milestone14_squad_ui_action(action: int) -> void:
+	if action == 0:
+		_milestone14_create_raid_squad()
+		selected_raid_squad = maxi(0, raid_squads.size() - 1)
+	elif selected_raid_squad < 0 or selected_raid_squad >= raid_squads.size():
+		message = "SELECT A VALID SQUAD — CREATE FIRST"
+	elif action == 1 or action == 2:
+		var squad: Dictionary = raid_squads[selected_raid_squad]
+		var members: Array = squad.get("members", [])
+		var target: Vector2 = camera_position
+		if action == 2:
+			var outpost_index: int = _nearest_outpost_index(camera_position)
+			if outpost_index >= 0:
+				target = _nearest_outpost_gate_position(outpost_index, camera_position)
+		for member_id in members:
+			for unit_index in range(units.size()):
+				var unit: Dictionary = units[unit_index]
+				if int(unit.get("survivor_id", -1)) == int(member_id):
+					unit["move_target"] = target
+					unit["manual_order"] = true
+					unit["ai_task"] = "SQUAD_DEPLOY" if action == 1 else "SQUAD_RECALL"
+					units[unit_index] = unit
+		squad["status"] = "DEPLOYED" if action == 1 else "RECALLING"
+		raid_squads[selected_raid_squad] = squad
+		message = "SQUAD DEPLOYED" if action == 1 else "SQUAD RECALL ORDERED"
+	elif action == 3:
+		var squad: Dictionary = raid_squads[selected_raid_squad]
+		for member_id in squad.get("members", []):
+			for person_index in range(survivors.size()):
+				var person: Dictionary = survivors[person_index]
+				if int(person.get("id", -1)) == int(member_id):
+					var weapon_name: String = str(person.get("equipped_weapon", ""))
+					if not weapon_name.is_empty():
+						weapons[weapon_name] = int(weapons.get(weapon_name, 0)) + 1
+						person["equipped_weapon"] = ""
+					person["role"] = "WORKER"
+					person["assignment_category"] = ""
+					survivors[person_index] = person
+					break
+		raid_squads.remove_at(selected_raid_squad)
+		selected_raid_squad = clampi(selected_raid_squad, 0, maxi(0, raid_squads.size() - 1))
+		role_allocations["SQUAD"] = raid_squads.size()
+		message = "SQUAD DISBANDED — EQUIPMENT RETURNED"
+	message_timer = 2.0
+	_save_operation()
+	queue_redraw()
 
 func _milestone14_draw_specialists(panel_rect: Rect2) -> void:
 	var categories: Array[String] = ["combat", "engineering", "medical", "gathering"]
