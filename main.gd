@@ -429,6 +429,10 @@ func _process(delta: float) -> void:
 					game_state = "sector_select"
 					menu_fade_alpha = 1.0
 					menu_transition_timer = 0.24
+				elif action == "hq_placement":
+					game_state = "hq_placement"
+					menu_fade_alpha = 1.0
+					menu_transition_timer = 0.24
 				else:
 					menu_fade_alpha = 0.0
 		queue_redraw()
@@ -2726,8 +2730,8 @@ func _handle_tap(pos: Vector2) -> void:
 			title_manual_open = true
 			_queue_sfx("menu_click")
 		elif game_state == "title":
-			var resume_rect := Rect2(title_size.x * 0.08, title_size.y * 0.52, title_size.x * 0.84, 116.0)
-			var deploy_rect := Rect2(title_size.x * 0.16, title_size.y * 0.69, title_size.x * 0.68, 76.0)
+			var resume_rect := Rect2(title_size.x * 0.08, title_size.y * 0.37, title_size.x * 0.84, 126.0)
+			var deploy_rect := Rect2(title_size.x * 0.14, title_size.y * 0.57, title_size.x * 0.72, 78.0)
 			if _has_valid_save() and resume_rect.has_point(title_pos):
 				_queue_sfx("menu_click")
 				_resume_operation()
@@ -2737,7 +2741,7 @@ func _handle_tap(pos: Vector2) -> void:
 				menu_fade_alpha = 0.0
 				_queue_sfx("radar")
 		else:
-			var card_top: float = title_size.y * 0.35
+			var card_top: float = title_size.y * 0.36
 			var card_height: float = minf(150.0, title_size.y * 0.145)
 			var card_gap: float = 14.0
 			for sector in range(3):
@@ -2753,7 +2757,10 @@ func _handle_tap(pos: Vector2) -> void:
 		return
 	if game_state == "prologue":
 		if pos.y >= viewport_size.y - 160.0:
-			game_state = "hq_placement"
+			menu_transition_action = "hq_placement"
+			menu_transition_timer = 0.24
+			menu_fade_alpha = 0.0
+			_queue_sfx("menu_click")
 			message = "SELECT AN INTACT BUILDING TO ANCHOR YOUR HQ"
 			message_timer = 3.0
 		queue_redraw()
