@@ -1373,7 +1373,8 @@ func _update_outpost_placement_from_anchor(world_position: Vector2) -> void:
 		var expanded_size := Vector2(minf(OUTPOST_MAX_SIZE, ceilf(merged_rect.size.x / OUTPOST_SNAP) * OUTPOST_SNAP), minf(OUTPOST_MAX_SIZE, ceilf(merged_rect.size.y / OUTPOST_SNAP) * OUTPOST_SNAP))
 		outpost_placement_rect = Rect2(merged_rect.position, expanded_size)
 	outpost_placement_status = _outpost_placement_status()
-	outpost_placement_valid = outpost_placement_status == "VALID" and (outpost_placement_kind in ["hq", "expand"] or outposts.size() < OUTPOST_MAX_COUNT + 1)
+	var initial_convoy_hq: bool = outpost_placement_kind == "hq" and outposts.is_empty()
+	outpost_placement_valid = _outpost_rect_valid(outpost_placement_rect) and (initial_convoy_hq or outpost_placement_kind == "expand" or outposts.size() < OUTPOST_MAX_COUNT + 1)
 	queue_redraw()
 
 func _confirm_outpost_placement() -> void:
@@ -1382,7 +1383,7 @@ func _confirm_outpost_placement() -> void:
 	var cost: int = 0 if initial_convoy_hq else _outpost_placement_cost()
 	var wood_cost: int = 0 if initial_convoy_hq else _outpost_placement_wood_cost()
 	outpost_placement_status = _outpost_placement_status_for_rect(outpost_placement_rect)
-	outpost_placement_valid = outpost_placement_status == "VALID" and (outpost_placement_kind in ["hq", "expand"] or outposts.size() < OUTPOST_MAX_COUNT + 1)
+	outpost_placement_valid = _outpost_rect_valid(outpost_placement_rect) and (initial_convoy_hq or outpost_placement_kind == "expand" or outposts.size() < OUTPOST_MAX_COUNT + 1)
 	if not outpost_placement_valid:
 		message = outpost_placement_status
 		message_timer = 1.8
@@ -1421,11 +1422,22 @@ func _confirm_outpost_placement() -> void:
 	if outpost_placement_kind == "hq":
 		var anchor_index: int = -1
 		var anchor_distance: float = INF
+		var best_anchor_overlap: float = 0.0
 		for building_index in range(buildings.size()):
-			if not outpost_placement_rect.encloses(buildings[building_index]) or bool(building_archetypes[building_index].get("destroyed", false)):
+			if building_index >= building_archetypes.size():
 				continue
-			var building_distance: float = center.distance_squared_to(buildings[building_index].get_center())
-			if building_distance < anchor_distance:
+			if bool(building_archetypes[building_index].get("destroyed", false)):
+				continue
+			var building_rect: Rect2 = buildings[building_index]
+			var building_area: float = building_rect.get_area()
+			if building_area <= 0.0:
+				continue
+			var overlap_area: float = outpost_placement_rect.intersection(building_rect).get_area()
+			if overlap_area < building_area * 0.5:
+				continue
+			var building_distance: float = center.distance_squared_to(building_rect.get_center())
+			if overlap_area > best_anchor_overlap or (is_equal_approx(overlap_area, best_anchor_overlap) and building_distance < anchor_distance):
+				best_anchor_overlap = overlap_area
 				anchor_distance = building_distance
 				anchor_index = building_index
 		if anchor_index < 0:
@@ -2649,6 +2661,8 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
 		var touch := event as InputEventScreenTouch
 		var touch_pos: Vector2 = _to_canvas_pos(touch.position)
+		if touch.pressed and _handle_title_touch(touch_pos):
+			return
 		if touch.pressed:
 			touch_points[touch.index] = touch_pos
 			if touch_points.size() == 1:
@@ -2736,6 +2750,8 @@ func _input(event: InputEvent) -> void:
 	elif event is InputEventMouseButton:
 		var mouse := event as InputEventMouseButton
 		var mouse_pos: Vector2 = _to_canvas_pos(mouse.position)
+		if mouse.button_index == MOUSE_BUTTON_LEFT and mouse.pressed and _handle_title_touch(mouse_pos):
+			return
 		if mouse.button_index == MOUSE_BUTTON_LEFT:
 			if mouse.pressed:
 				var mouse_world: Vector2 = _screen_to_world(mouse_pos)
@@ -2777,27 +2793,32 @@ func _input(event: InputEvent) -> void:
 			_clamp_camera()
 			queue_redraw()
 
+func _handle_title_touch(canvas_position: Vector2) -> bool:
+	if game_state != "title" and game_state != "sector_select":
+		return false
+	var title_position: Vector2 = canvas_position - safe_area_rect.position
+	if title_manual_open:
+		# The modal owns every title-screen tap until it is dismissed.
+		title_manual_open = false
+		_queue_sfx("menu_click")
+		queue_redraw()
+		return true
+	if _get_title_manual_rect().has_point(title_position):
+		title_manual_open = true
+		_queue_sfx("menu_click")
+		queue_redraw()
+		return true
+	if _get_title_sfx_rect().has_point(title_position):
+		sfx_enabled = not sfx_enabled
+		_queue_sfx("menu_click")
+		queue_redraw()
+		return true
+	return false
+
 func _handle_tap(pos: Vector2) -> void:
 	if game_state == "title" or game_state == "sector_select":
 		var title_pos: Vector2 = pos - safe_area_rect.position
 		var title_size: Vector2 = _safe_viewport_size()
-		var manual_rect: Rect2 = _title_manual_button_rect(title_size)
-		if title_manual_open:
-			# Modal owns input before either title stage can process underlying cards.
-			title_manual_open = false
-			_queue_sfx("menu_click")
-			queue_redraw()
-			return
-		if manual_rect.has_point(title_pos):
-			title_manual_open = true
-			_queue_sfx("menu_click")
-			queue_redraw()
-			return
-		if _title_sfx_button_rect(title_size).has_point(title_pos):
-			sfx_enabled = not sfx_enabled
-			_queue_sfx("menu_click")
-			queue_redraw()
-			return
 		if game_state == "title":
 			var preview: Dictionary = _get_title_save_preview()
 			var command_rect: Rect2 = Rect2(title_size.x * 0.055, title_size.y * 0.405, title_size.x * 0.89, title_size.y * 0.30)
@@ -3531,11 +3552,13 @@ func _get_title_save_preview() -> Dictionary:
 func _title_ui_scale(title_size: Vector2) -> float:
 	return clampf(title_size.x / 720.0, 0.82, 1.55)
 
-func _title_manual_button_rect(title_size: Vector2) -> Rect2:
+func _get_title_manual_rect() -> Rect2:
+	var title_size: Vector2 = _safe_viewport_size()
 	var button_height: float = maxf(64.0, title_size.y * 0.058)
 	return Rect2(title_size.x * 0.055, title_size.y * 0.815, title_size.x * 0.43, button_height)
 
-func _title_sfx_button_rect(title_size: Vector2) -> Rect2:
+func _get_title_sfx_rect() -> Rect2:
+	var title_size: Vector2 = _safe_viewport_size()
 	var button_height: float = maxf(64.0, title_size.y * 0.058)
 	return Rect2(title_size.x * 0.515, title_size.y * 0.815, title_size.x * 0.43, button_height)
 
@@ -3644,8 +3667,8 @@ func _draw_title_screen() -> void:
 			draw_rect(launch_rect, Color("#91ddb0"), false, 1.5)
 			_draw_text("[LAUNCH]", launch_rect.position + Vector2(launch_rect.size.x * 0.20, launch_rect.size.y * 0.68), roundi(12.0 * ui_scale), Color("#f0fff5"))
 
-	var manual_rect: Rect2 = _title_manual_button_rect(title_size)
-	var sfx_rect: Rect2 = _title_sfx_button_rect(title_size)
+	var manual_rect: Rect2 = _get_title_manual_rect()
+	var sfx_rect: Rect2 = _get_title_sfx_rect()
 	draw_rect(manual_rect, Color("#173b2b", 0.98))
 	draw_rect(manual_rect, Color("#79c995"), false, 2.0)
 	_draw_text("[FIELD MANUAL]", manual_rect.position + Vector2(18.0, manual_rect.size.y * 0.65), roundi(14.0 * ui_scale), Color("#c9e6d1"))
