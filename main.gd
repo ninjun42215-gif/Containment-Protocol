@@ -1048,9 +1048,10 @@ func _update_building_effects(delta: float) -> void:
 		if food > 0 and _is_near_building_type(unit["pos"], "HOSPITAL", HOSPITAL_REGEN_RADIUS):
 			unit["hp"] = minf(max_hp, float(unit.get("hp", max_hp)) + 2.0 * delta)
 		if food > 0:
+			var clinic_healing_rate: float = 6.0 * _milestone14_facility_medical_multiplier()
 			for clinic in constructed_buildings:
 				if str(clinic.get("kind", "")) == "clinic" and unit["pos"].distance_squared_to(clinic["pos"]) <= 150.0 * 150.0:
-					unit["hp"] = minf(max_hp, float(unit.get("hp", max_hp)) + 4.0 * delta)
+					unit["hp"] = minf(max_hp, float(unit.get("hp", max_hp)) + clinic_healing_rate * delta)
 		if str(unit.get("kind", "")) == "medic" and not bool(unit.get("garrisoned", false)):
 			for ally_index in range(units.size()):
 				if ally_index == unit_index:
@@ -5359,6 +5360,104 @@ func _milestone14_handle_panel_tap(position: Vector2) -> bool:
 	return true
 
 
+func _milestone14_return_squad_equipment(person: Dictionary) -> void:
+	var equipped: String = str(person.get("equipped_weapon", ""))
+	if equipped in ["rifles", "snipers", "heavy_mgs", "medkits"]:
+		weapons[equipped] = int(weapons.get(equipped, 0)) + 1
+	person["equipped_weapon"] = ""
+
+func _milestone14_facility_medical_multiplier() -> float:
+	var medical_xp_total: int = 0
+	var facility_staff_count: int = 0
+	for staff in survivors:
+		if str(staff.get("assignment_category", "")) == "FACILITY":
+			medical_xp_total += int(staff.get("medical_xp", 0))
+			facility_staff_count += 1
+	if facility_staff_count <= 0:
+		return 1.0
+	var average_medical_xp: float = float(medical_xp_total) / float(facility_staff_count)
+	return 1.0 + minf(0.75, average_medical_xp / 1000.0)
+
+func _milestone14_update_raider_warbands(delta: float) -> void:
+	for faction_index in range(faction_settlements.size()):
+		var warband: Dictionary = faction_settlements[faction_index]
+		if str(warband.get("faction", "")) != "RAIDER" or int(warband.get("relation", 0)) > -20 or bool(warband.get("warband_defeated", false)):
+			continue
+		var warband_pos: Vector2 = warband.get("warband_pos", warband.get("pos", Vector2.ZERO))
+		var target_unit_index: int = -1
+		var target_outpost_index: int = -1
+		var nearest_distance: float = 420.0 * 420.0
+		for squad in raid_squads:
+			for member_id in squad.get("members", []):
+				for unit_index in range(units.size()):
+					var candidate: Dictionary = units[unit_index]
+					if int(candidate.get("survivor_id", -1)) != int(member_id) or bool(candidate.get("garrisoned", false)):
+						continue
+					var distance: float = warband_pos.distance_squared_to(candidate.get("pos", Vector2.ZERO))
+					if distance <= nearest_distance:
+						nearest_distance = distance
+						target_unit_index = unit_index
+						target_outpost_index = -1
+		for outpost_index in range(outposts.size()):
+			var distance: float = warband_pos.distance_squared_to(outposts[outpost_index].get("pos", Vector2.ZERO))
+			if distance <= nearest_distance:
+				nearest_distance = distance
+				target_outpost_index = outpost_index
+				target_unit_index = -1
+		if target_unit_index < 0 and target_outpost_index < 0:
+			faction_settlements[faction_index] = warband
+			continue
+		var target_pos: Vector2 = units[target_unit_index].get("pos", Vector2.ZERO) if target_unit_index >= 0 else outposts[target_outpost_index].get("pos", Vector2.ZERO)
+		var distance_to_target: float = warband_pos.distance_to(target_pos)
+		if distance_to_target > 34.0:
+			var step: Vector2 = (target_pos - warband_pos).normalized() * minf(distance_to_target - 34.0, 42.0 * delta)
+			warband_pos = _move_circle_with_buildings(warband_pos, step, 10.0, delta, target_pos, warband)
+			warband["warband_pos"] = warband_pos
+		else:
+			var attack_cooldown: float = float(warband.get("warband_attack_cooldown", 0.0))
+			if attack_cooldown <= 0.0:
+				if target_unit_index >= 0 and target_unit_index < units.size():
+					var target_unit: Dictionary = units[target_unit_index]
+					target_unit["hp"] = maxf(0.0, float(target_unit.get("hp", 100.0)) - 24.0)
+					if float(target_unit["hp"]) <= 0.0:
+						_milestone14_remove_casualty(target_unit)
+						units.remove_at(target_unit_index)
+						message = "RAIDER WARBAND KILLED A SQUAD MEMBER"
+					else:
+						units[target_unit_index] = target_unit
+						message = "RAIDER WARBAND ENGAGING PLAYER SQUAD"
+				else:
+						var defended_outpost: Dictionary = outposts[target_outpost_index]
+					defended_outpost["hp"] = maxf(1.0, float(defended_outpost.get("hp", 500.0)) - 22.0)
+					outposts[target_outpost_index] = defended_outpost
+					message = "RAIDER WARBAND ATTACKING OUTPOST"
+				message_timer = 1.0
+				warband["warband_attack_cooldown"] = 1.0
+		# Player squads and perimeter turrets return fire against the active warband.
+		var incoming_damage: float = 0.0
+		for squad in raid_squads:
+			for member_id in squad.get("members", []):
+				for unit in units:
+					if int(unit.get("survivor_id", -1)) == int(member_id) and not bool(unit.get("garrisoned", false)) and warband_pos.distance_to(unit.get("pos", Vector2.ZERO)) <= 420.0:
+						incoming_damage += 12.0 * delta
+		for turret in turrets:
+			if warband_pos.distance_to(turret.get("pos", Vector2.ZERO)) <= minf(420.0, float(turret.get("range", TURRET_RANGE))):
+				incoming_damage += 22.0 * delta
+		if incoming_damage > 0.0:
+			warband["warband_hp"] = maxf(0.0, float(warband.get("warband_hp", 180.0)) - incoming_damage)
+		if float(warband.get("warband_hp", 180.0)) <= 0.0:
+			warband["warband_defeated"] = true
+			warband["strength"] = 0
+			food += randi_range(25, 55)
+			scrap += randi_range(30, 65)
+			fuel = minf(300.0, fuel + float(randi_range(10, 25)))
+			var loot_weapon: String = ["rifles", "snipers", "heavy_mgs"][randi_range(0, 2)]
+			weapons[loot_weapon] = int(weapons.get(loot_weapon, 0)) + 1
+			message = "RAIDER WARBAND ELIMINATED — FOOD / SCRAP / FUEL / %s LOOTED" % loot_weapon.to_upper()
+			message_timer = 3.0
+			_save_operation()
+		faction_settlements[faction_index] = warband
+
 func _milestone14_citizen_multiplier(citizen_id: int, skill: String) -> float:
 	for person in survivors:
 		if int(person.get("id", -1)) == citizen_id:
@@ -5421,11 +5520,17 @@ func _milestone14_update_factions(delta: float) -> void:
 			faction_settlements.append({"id": faction_settlements.size() + 1, "faction": kind, "name": kind + " SETTLEMENT %02d" % (faction_settlements.size() + 1), "pos": pos, "relation": -25 if kind == "RAIDER" else 0, "strength": 1, "banner": true})
 	for faction_index in range(faction_settlements.size()):
 		var faction: Dictionary = faction_settlements[faction_index]
-		if faction_doctrine == "HUMANITARIAN SANCTUARY" and str(faction.get("faction", "")) == "RAIDER":
-			faction["strength"] = int(faction.get("strength", 1)) + (1 if randf() < delta / 900.0 else 0)
+		if str(faction.get("faction", "")) == "RAIDER":
+			if not faction.has("warband_pos"):
+				faction["warband_pos"] = faction.get("pos", Vector2.ZERO)
+			faction["warband_hp"] = float(faction.get("warband_hp", 180.0))
+			faction["warband_max_hp"] = float(faction.get("warband_max_hp", 180.0))
+			faction["warband_attack_cooldown"] = maxf(0.0, float(faction.get("warband_attack_cooldown", 0.0)) - delta)
+			faction["warband_defeated"] = bool(faction.get("warband_defeated", false))
 		elif str(faction.get("faction", "")) == "MILITARISTIC" and int(faction.get("relation", 0)) >= 25:
 			faction["patrol_support"] = true
 		faction_settlements[faction_index] = faction
+	_milestone14_update_raider_warbands(delta)
 
 
 
@@ -5586,10 +5691,7 @@ func _milestone14_squad_ui_action(action: int) -> void:
 			for person_index in range(survivors.size()):
 				var person: Dictionary = survivors[person_index]
 				if int(person.get("id", -1)) == int(member_id):
-					var weapon_name: String = str(person.get("equipped_weapon", ""))
-					if not weapon_name.is_empty():
-						weapons[weapon_name] = int(weapons.get(weapon_name, 0)) + 1
-						person["equipped_weapon"] = ""
+					_milestone14_return_squad_equipment(person)
 					person["role"] = "WORKER"
 					person["assignment_category"] = ""
 					survivors[person_index] = person
