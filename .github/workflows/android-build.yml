@@ -200,8 +200,17 @@ jobs:
             gh release upload "$TAG" "$RELEASE_APK" \
               --repo "$GITHUB_REPOSITORY" --clobber
           fi
+          DIRECT_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$RELEASE_APK"
+          DOWNLOADED_APK="$RUNNER_TEMP/ContainmentProtocol.release-check.apk"
+          HTTP_STATUS="$(curl --silent --show-error --location --retry 3 \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --output "$DOWNLOADED_APK" --write-out '%{http_code}' "$DIRECT_URL")"
+          test "$HTTP_STATUS" = "200"
+          cmp "$RELEASE_APK" "$DOWNLOADED_APK"
+          file "$DOWNLOADED_APK" | grep -F "Android package (APK)"
           {
             echo "## Direct Android APK Release"
+            echo "- HTTP status: $HTTP_STATUS"
             echo "- URL: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$RELEASE_APK"
             echo "- Size: $APK_BYTES bytes"
             echo "- SHA-256: $APK_SHA256"
@@ -210,6 +219,7 @@ jobs:
           rm -f "$RELEASE_APK"
 
       - name: Upload APK Artifact
+        if: always() && hashFiles('build/android/ContainmentProtocol.apk') != ''
         uses: actions/upload-artifact@v4
         with:
           name: ContainmentProtocol-APK
