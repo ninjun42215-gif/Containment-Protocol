@@ -34,7 +34,7 @@ const FLARE_LURE_RADIUS := 220.0
 const AUDIO_SAMPLE_RATE := 22050.0
 const MAX_ACTIVE_ZOMBIES := 650
 const PENDING_WAVE_SPAWN_INTERVAL := 0.20
-const SAVE_VERSION := 7
+const SAVE_VERSION := 8
 const PREPARATION_SECONDS := 60.0
 const GAME_MINUTES_PER_SECOND := 2.4
 const MAX_TACTICAL_DECALS := 80
@@ -98,6 +98,7 @@ var campaign_started := false
 var campaign_start_grace_timer := 0.0
 var initial_civilian_count := 0
 var scrap := 120
+var wood := 80
 var food := 120
 var fuel := 300.0
 var last_upkeep_day := 1
@@ -201,6 +202,15 @@ var diagnostics_enabled := false
 var fps_sample_timer := 0.0
 var fps_sample_value := 0
 var fps_frame_count := 0
+var citizens: Array[Dictionary] = []
+var role_allocations: Dictionary = {"GATHERERS": 0, "ENGINEERS": 0, "FACILITY": 0, "SQUAD": 0}
+var raid_squads: Array[Dictionary] = []
+var work_zones: Array[Dictionary] = []
+var work_zone_dragging := false
+var work_zone_start := Vector2.ZERO
+var work_zone_current := Vector2.ZERO
+var work_outside_enabled := true
+var citizen_name_seed: int = 0
 
 func _ready() -> void:
 	randomize()
@@ -278,6 +288,7 @@ func _start_sector(index: int) -> void:
 	campaign_start_grace_timer = 0.0
 	initial_civilian_count = 0
 	scrap = 120
+	wood = 80
 	food = 120
 	last_upkeep_day = 1
 	fuel = 300.0
@@ -299,6 +310,12 @@ func _start_sector(index: int) -> void:
 	scrap = 0
 	weapons = {"rifles": 6, "snipers": 2, "heavy_mgs": 1, "medkits": 3}
 	survivors = _milestone13_survivors()
+	citizens.clear()
+	raid_squads.clear()
+	work_zones.clear()
+	role_allocations = {"GATHERERS": 0, "ENGINEERS": 0, "FACILITY": 0, "SQUAD": 0}
+	citizen_name_seed = campaign_map_seed
+	_milestone14_initialize_citizens()
 	crafting_orders.clear()
 	saved_count = 0
 	lost_count = 0
@@ -390,6 +407,7 @@ func _process(delta: float) -> void:
 	campaign_start_grace_timer = maxf(0.0, campaign_start_grace_timer - sim_delta)
 	_update_vehicles(sim_delta)
 	_update_auto_ops(sim_delta)
+	_milestone14_tick_workforce(sim_delta)
 	_refresh_light_source_cache()
 	message_timer = maxf(0.0, message_timer - sim_delta)
 	airstrike_timer = maxf(0.0, airstrike_timer - sim_delta)
@@ -2304,12 +2322,22 @@ func _spawn_one_wave_zombie() -> bool:
 	return true
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventScreenDrag and work_zone_dragging:
+		var zone_drag := event as InputEventScreenDrag
+		work_zone_current = _screen_to_world(zone_drag.position)
+		queue_redraw()
+		return
 	if event is InputEventScreenTouch:
 		var touch := event as InputEventScreenTouch
 		if touch.pressed:
 			touch_points[touch.index] = touch.position
 			if touch_points.size() == 1:
 				var touch_world: Vector2 = _screen_to_world(touch.position)
+				if game_state == "playing" and command_tab == 1 and touch.position.y < _safe_bottom_y(_deployment_panel_height()) - 90.0 and touch.position.y > safe_insets.y + 360.0:
+					work_zone_dragging = true
+					work_zone_start = touch_world
+					work_zone_current = touch_world
+					return
 				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and touch.position.y < _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and touch.position.y > safe_insets.y + 520.0 and touch.position.y < _safe_bottom_y(260.0) and command_tab == 0 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
 				if can_start_placement:
 					_begin_outpost_placement(touch_world, "hq" if game_state == "hq_placement" else "outpost")
@@ -2337,7 +2365,12 @@ func _input(event: InputEvent) -> void:
 				previous_pinch_center = (first_point + second_point) * 0.5
 		else:
 			if touch_points.has(touch.index):
-				if outpost_placement_active and outpost_placement_dragging:
+				if work_zone_dragging:
+					work_zone_dragging = false
+					var zone_rect := Rect2(work_zone_start, work_zone_current - work_zone_start).abs()
+					if zone_rect.size.x >= 30.0 and zone_rect.size.y >= 30.0:
+						_milestone14_commit_work_zone(zone_rect)
+				elif outpost_placement_active and outpost_placement_dragging:
 					outpost_placement_dragging = false
 					outpost_placement_gesture_mode = ""
 				elif touch_points.size() == 1 and not multi_touch_gesture and not camera_dragging and camera_drag_distance < CAMERA_DRAG_THRESHOLD:
@@ -2472,6 +2505,9 @@ func _handle_tap(pos: Vector2) -> void:
 		return
 	if game_state != "playing":
 		return
+	if _milestone14_handle_panel_tap(pos):
+		queue_redraw()
+		return
 	if _pause_button_rect().has_point(pos):
 		manual_paused = not manual_paused
 		lifecycle_paused = false
@@ -2507,6 +2543,12 @@ func _handle_tap(pos: Vector2) -> void:
 		queue_redraw()
 		return
 	if _ai_button_rect().has_point(pos):
+		work_outside_enabled = not work_outside_enabled
+		message = "WORK OUTSIDE ENABLED" if work_outside_enabled else "RECALL TO OUTPOST ORDERED"
+		message_timer = 1.8
+		queue_redraw()
+		return
+	if false:
 		auto_ops_enabled = not auto_ops_enabled
 		message = "AUTO-OPS ENABLED" if auto_ops_enabled else "UNITS HOLD POSITION"
 		message_timer = 1.5
@@ -4199,8 +4241,8 @@ func _update_work_orders(delta: float) -> void:
 			match work_kind:
 				"chop":
 					trees[target_index]["alive"] = false
-					scrap += 15
-					world_callouts.append({"pos": work_target, "text": "+15 MATS", "life": 2.0})
+					wood += 15
+					world_callouts.append({"pos": work_target, "text": "+15 WOOD", "life": 2.0})
 				"hunt":
 					wildlife[target_index]["alive"] = false
 					food += 30
@@ -4210,7 +4252,7 @@ func _update_work_orders(delta: float) -> void:
 					building_archetypes[target_index]["destroyed"] = true
 					building_archetypes[target_index]["cache_available"] = false
 					scrap += salvage_amount
-					world_callouts.append({"pos": buildings[target_index].get_center(), "text": "+%d MATS" % salvage_amount, "life": 2.5})
+					world_callouts.append({"pos": buildings[target_index].get_center(), "text": "+%d SCRAP" % salvage_amount, "life": 2.5})
 			unit["work_kind"] = ""
 			unit["work_target_index"] = -1
 			unit["ai_task"] = ""
@@ -4230,7 +4272,8 @@ func _construct_survival_building(kind: String, position: Vector2) -> void:
 		message_timer = 2.0
 		return
 	var cost_scrap: int = 0
-	var cost_materials: int = 45 if kind == "farm" else (70 if kind == "bakery" else (60 if kind == "livestock" else (50 if kind == "watchtower" else (65 if kind == "clinic" else 90))))
+	var cost_materials: int = 0 if kind in ["farm", "livestock"] else (70 if kind == "bakery" else (50 if kind == "watchtower" else (65 if kind == "clinic" else 90)))
+	var cost_wood: int = 45 if kind == "farm" else (60 if kind == "livestock" else 0)
 	if kind in ["farm", "livestock", "watchtower"]:
 		for city_index in range(buildings.size()):
 			if not bool(building_archetypes[city_index].get("destroyed", false)) and buildings[city_index].has_point(position):
@@ -4242,8 +4285,8 @@ func _construct_survival_building(kind: String, position: Vector2) -> void:
 			message = "CONSTRUCTION FOOTPRINT OCCUPIED"
 			message_timer = 1.5
 			return
-	if scrap < cost_materials:
-		message = "REQUIRES %d MATS" % cost_materials
+	if scrap < cost_materials or wood < cost_wood:
+		message = "REQUIRES %d WOOD / %d SCRAP" % [cost_wood, cost_materials]
 		message_timer = 1.8
 		return
 	if kind == "bakery" or kind == "clinic" or kind == "workshop":
@@ -4260,7 +4303,8 @@ func _construct_survival_building(kind: String, position: Vector2) -> void:
 	constructed_buildings.append({"kind": kind, "pos": position, "outpost_index": owner_index, "food_per_day": food_yield, "hp": 500.0, "progress": 0.0, "constructing": true})
 	
 	scrap -= cost_materials
-	message = "%s CONSTRUCTED" % kind.to_upper()
+	wood -= cost_wood
+	message = "%s ORDERED — %d WOOD / %d SCRAP" % [kind.to_upper(), cost_wood, cost_materials]
 	message_timer = 2.0
 	_save_operation()
 
@@ -4669,7 +4713,7 @@ func _save_operation() -> void:
 	# Never replace a prior valid campaign with an incomplete HQ-placement state.
 	if not campaign_started or game_state == "hq_placement":
 		return
-	var state: Dictionary = {"version": SAVE_VERSION, "weapons": weapons, "survivors": survivors, "crafting_orders": crafting_orders, "materials": scrap, "food": food, "last_upkeep_day": last_upkeep_day, "trees": trees, "wildlife": wildlife, "raider_camps": raider_camps, "constructed_buildings": constructed_buildings, "radio_log": radio_log, "radio_day_announced": radio_day_announced, "radio_banner_text": radio_banner_text, "radio_banner_timer": radio_banner_timer, "fuel": fuel, "world_clock_minutes": world_clock_minutes, "survival_day": survival_day, "best_days_survived": best_days_survived, "best_civilians_saved": best_civilians_saved, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer, "tactical_decals": tactical_decals}
+	var state: Dictionary = {"version": SAVE_VERSION, "weapons": weapons, "survivors": survivors, "citizens": citizens, "role_allocations": role_allocations, "raid_squads": raid_squads, "work_zones": work_zones, "wood": wood, "scrap": scrap, "food": food, "last_upkeep_day": last_upkeep_day, "trees": trees, "wildlife": wildlife, "raider_camps": raider_camps, "constructed_buildings": constructed_buildings, "radio_log": radio_log, "radio_day_announced": radio_day_announced, "radio_banner_text": radio_banner_text, "radio_banner_timer": radio_banner_timer, "fuel": fuel, "world_clock_minutes": world_clock_minutes, "survival_day": survival_day, "best_days_survived": best_days_survived, "best_civilians_saved": best_civilians_saved, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer, "tactical_decals": tactical_decals}
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify(_save_variant(state)))
@@ -4690,8 +4734,16 @@ func _resume_operation() -> void:
 		state["weapons"] = {"rifles": 6, "snipers": 2, "heavy_mgs": 1, "medkits": 3}
 		state["survivors"] = _milestone13_survivors()
 		state["crafting_orders"] = []
-		state.erase("scrap")
 		state["version"] = 7
+	if int(state.get("version", 7)) < 8:
+		var legacy_materials: int = maxi(0, int(state.get("materials", state.get("scrap", 120))))
+		state["wood"] = int(floor(float(legacy_materials) * 0.4))
+		state["scrap"] = legacy_materials - int(state["wood"])
+		state["citizens"] = []
+		state["role_allocations"] = {"GATHERERS": 0, "ENGINEERS": 0, "FACILITY": 0, "SQUAD": 0}
+		state["raid_squads"] = []
+		state["work_zones"] = []
+		state["version"] = 8
 	_configure_sector(int(state.get("sector_index", 0)))
 	sector_index = int(state.get("sector_index", 0))
 	campaign_map_seed = int(state.get("campaign_map_seed", campaign_map_seed))
@@ -4703,8 +4755,16 @@ func _resume_operation() -> void:
 	weapons = state.get("weapons", {"rifles": 6, "snipers": 2, "heavy_mgs": 1, "medkits": 3})
 	survivors.assign(state.get("survivors", _milestone13_survivors()))
 	crafting_orders.assign(state.get("crafting_orders", []))
-	scrap = maxi(0, int(state.get("materials", state.get("scrap", 120))))
+	scrap = maxi(0, int(state.get("scrap", state.get("materials", 120))))
+	wood = maxi(0, int(state.get("wood", 0)))
 	food = maxi(0, int(state.get("food", 120)))
+	citizens.assign(state.get("citizens", []))
+	role_allocations = state.get("role_allocations", {"GATHERERS": 0, "ENGINEERS": 0, "FACILITY": 0, "SQUAD": 0})
+	raid_squads.assign(state.get("raid_squads", []))
+	work_zones.assign(state.get("work_zones", []))
+	if citizens.is_empty():
+		citizen_name_seed = int(state.get("campaign_map_seed", campaign_map_seed))
+		_milestone14_initialize_citizens()
 	last_upkeep_day = maxi(1, int(state.get("last_upkeep_day", int(state.get("survival_day", 1)))))
 	if state.has("trees"):
 		trees.assign(state["trees"])
@@ -4833,9 +4893,233 @@ func _draw_world_scene() -> void:
 			_draw_text(district_label, Vector2(70.0, district_rect.position.y + 62.0), 24, Color(0.45, 0.75, 0.62, 0.6))
 	_draw_evac_zone()
 	_draw_entities()
+	_milestone14_draw_work_zones()
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	_milestone14_draw_hud_panel()
 
 
 func _draw_text(value: String, position: Vector2, size: int, color: Color) -> void:
 	if screen_font != null:
 		draw_string(screen_font, position, value, HORIZONTAL_ALIGNMENT_LEFT, -1.0, size, color)
+
+
+func _milestone14_name_for_id(citizen_id: int) -> String:
+	var first_prefix: Array[String] = ["Alex", "Sam", "Jo", "Mar", "El", "An", "Ka", "Ro", "Lu", "Mi"]
+	var first_suffix: Array[String] = ["ander", "ielle", "rden", "ina", "ton", "essa", "vin", "ra", "cas", "ley"]
+	var last_prefix: Array[String] = ["Ash", "Brook", "Cald", "Dun", "East", "Fair", "Gray", "Hale", "Iron", "Jord"]
+	var last_suffix: Array[String] = ["ford", "well", "ridge", "more", "field", "stone", "wood", "man", "ley", "croft"]
+	var safe_id: int = posmod(citizen_id, 10000)
+	var first_index: int = safe_id % 100
+	var last_index: int = int(safe_id / 100)
+	return first_prefix[int(first_index / 10)] + first_suffix[first_index % 10] + " " + last_prefix[int(last_index / 10)] + last_suffix[last_index % 10]
+
+func _milestone14_expertise_for_id(citizen_id: int) -> String:
+	var expertise: Array[String] = ["Marksman", "Builder", "Medic", "Lumberjack", "Scavenger", "Mechanic"]
+	return expertise[posmod(citizen_id * 17 + citizen_name_seed, expertise.size())]
+
+func _milestone14_initialize_citizens() -> void:
+	citizens.clear()
+	var used_names: Dictionary = {}
+	for i in range(survivors.size()):
+		var person: Dictionary = survivors[i]
+		var citizen_id: int = int(person.get("id", i))
+		var candidate_name: String = _milestone14_name_for_id(citizen_id)
+		while used_names.has(candidate_name):
+			citizen_id = posmod(citizen_id + 1, 10000)
+			candidate_name = _milestone14_name_for_id(citizen_id)
+		used_names[candidate_name] = true
+		person["name"] = candidate_name
+		person["expertise"] = _milestone14_expertise_for_id(citizen_id)
+		person["engineering_xp"] = int(person.get("build_xp", 0))
+		person["gathering_xp"] = 0
+		person["hp"] = float(person.get("hp", 100.0))
+		survivors[i] = person
+		citizens.append(person.duplicate(true))
+
+func _milestone14_add_refugee(expertise_hint: String = "") -> void:
+	var next_id: int = citizens.size()
+	var full_name: String = _milestone14_name_for_id(next_id)
+	for attempt in range(10000):
+		var exists := false
+		for person in citizens:
+			if str(person.get("name", "")) == full_name:
+				exists = true
+				break
+		if not exists:
+			break
+		next_id = posmod(next_id + 1, 10000)
+		full_name = _milestone14_name_for_id(next_id)
+	var expertise: String = expertise_hint if not expertise_hint.is_empty() else _milestone14_expertise_for_id(next_id)
+	var refugee: Dictionary = {"id": next_id, "name": full_name, "role": "WORKER", "expertise": expertise, "combat_xp": 0, "engineering_xp": 0, "build_xp": 0, "medical_xp": 0, "gathering_xp": 0, "veteran_rank": 1, "hp": 100.0, "equipped_weapon": ""}
+	citizens.append(refugee)
+	survivors.append(refugee.duplicate(true))
+
+func _milestone14_adjust_allocation(category: String, delta: int) -> void:
+	if not role_allocations.has(category):
+		return
+	var candidates: Array[int] = []
+	for i in range(survivors.size()):
+		var role: String = str(survivors[i].get("role", "WORKER"))
+		if role in ["WORKER", "ENGINEER"] or (category == "SQUAD" and role in ["INFANTRY", "SNIPER", "HEAVY", "MEDIC"]):
+			candidates.append(i)
+	candidates.sort_custom(func(a: int, b: int) -> bool:
+		var score_a: int = int(survivors[a].get("engineering_xp", 0)) + int(survivors[a].get("gathering_xp", 0)) + int(survivors[a].get("combat_xp", 0)) + int(survivors[a].get("medical_xp", 0))
+		var score_b: int = int(survivors[b].get("engineering_xp", 0)) + int(survivors[b].get("gathering_xp", 0)) + int(survivors[b].get("combat_xp", 0)) + int(survivors[b].get("medical_xp", 0))
+		return score_a > score_b
+	)
+	var current_count: int = int(role_allocations[category])
+	if delta > 0 and not candidates.is_empty():
+		var chosen: Dictionary = survivors[candidates[0]]
+		if category == "ENGINEERS":
+			chosen["role"] = "ENGINEER"
+		elif category == "GATHERERS" or category == "FACILITY":
+			chosen["role"] = "WORKER"
+		elif category == "SQUAD" and int(weapons.get("rifles", 0)) > 0:
+			chosen["role"] = "INFANTRY"
+			chosen["equipped_weapon"] = "rifles"
+			weapons["rifles"] = int(weapons.get("rifles", 0)) - 1
+		survivors[candidates[0]] = chosen
+		role_allocations[category] = current_count + 1
+	elif delta < 0 and current_count > 0:
+		role_allocations[category] = current_count - 1
+		for i in range(survivors.size() - 1, -1, -1):
+			if category == "ENGINEERS" and str(survivors[i].get("role", "")) == "ENGINEER":
+				survivors[i]["role"] = "WORKER"
+				break
+	_save_operation()
+	queue_redraw()
+
+func _milestone14_create_raid_squad() -> void:
+	if raid_squads.size() >= 20:
+		message = "MAXIMUM 20 RAID SQUADS"
+		message_timer = 1.5
+		return
+	var members: Array[int] = []
+	for i in range(survivors.size()):
+		if members.size() >= 8:
+			break
+		if str(survivors[i].get("role", "")) in ["INFANTRY", "SNIPER", "HEAVY", "MEDIC"]:
+			members.append(int(survivors[i].get("id", i)))
+	if members.is_empty():
+		message = "ALLOCATE ARMED SURVIVORS BEFORE FORMING A SQUAD"
+	else:
+		raid_squads.append({"id": raid_squads.size() + 1, "members": members, "name": "RAID SQUAD %02d" % (raid_squads.size() + 1)})
+		message = "RAID SQUAD FORMED — %d MEMBERS" % members.size()
+	message_timer = 1.8
+	_save_operation()
+
+func _milestone14_commit_work_zone(zone_rect: Rect2) -> void:
+	var estimates: Dictionary = {"wood": 0, "scrap": 0, "food": 0, "fuel": 0}
+	for tree in trees:
+		if bool(tree.get("alive", false)) and zone_rect.has_point(tree["pos"]):
+			estimates["wood"] = int(estimates["wood"]) + 15
+	for i in range(buildings.size()):
+		if zone_rect.intersects(buildings[i]) and not bool(building_archetypes[i].get("destroyed", false)):
+			estimates["scrap"] = int(estimates["scrap"]) + 45
+			if str(building_archetypes[i].get("type", "")) in ["SUPERMARKET", "RESIDENTIAL"]:
+				estimates["food"] = int(estimates["food"]) + 12
+	for crate in supply_crates:
+		if zone_rect.has_point(crate["pos"]):
+			estimates["fuel"] = int(estimates["fuel"]) + 15
+	work_zones.append({"rect": zone_rect, "estimates": estimates, "active": true})
+	message = "WORK ZONE: %d WOOD / %d SCRAP / %d FOOD / %d FUEL" % [int(estimates["wood"]), int(estimates["scrap"]), int(estimates["food"]), int(estimates["fuel"])]
+	message_timer = 3.0
+	_save_operation()
+
+func _milestone14_tick_workforce(_delta: float) -> void:
+	for unit_index in range(units.size()):
+		var worker: Dictionary = units[unit_index]
+		var role: String = str(worker.get("kind", ""))
+		if role not in ["worker", "engineer"] or bool(worker.get("garrisoned", false)):
+			continue
+		if not work_outside_enabled:
+			var nearest_outpost: int = _nearest_outpost_index(worker["pos"])
+			if nearest_outpost >= 0:
+				worker["move_target"] = _nearest_outpost_gate_position(nearest_outpost, worker["pos"])
+				worker["ai_task"] = "RECALL"
+				units[unit_index] = worker
+			continue
+		if worker.get("move_target") is Vector2 or not str(worker.get("ai_task", "")).is_empty():
+			continue
+		var best_tree: int = -1
+		var best_distance: float = INF
+		for tree_index in range(trees.size()):
+			if not bool(trees[tree_index].get("alive", false)):
+				continue
+			var tree_pos: Vector2 = trees[tree_index]["pos"]
+			for zone in work_zones:
+				if bool(zone.get("active", true)) and zone.get("rect", Rect2()).has_point(tree_pos):
+					var distance: float = worker["pos"].distance_squared_to(tree_pos)
+					if distance < best_distance:
+						best_distance = distance
+						best_tree = tree_index
+		if best_tree >= 0:
+			worker["work_kind"] = "chop"
+			worker["work_target_index"] = best_tree
+			worker["work_timer"] = 3.0
+			worker["move_target"] = trees[best_tree]["pos"]
+			worker["ai_task"] = "WORK_ZONE"
+			units[unit_index] = worker
+
+func _milestone14_draw_work_zones() -> void:
+	for zone in work_zones:
+		var zone_rect: Rect2 = zone.get("rect", Rect2())
+		draw_rect(zone_rect, Color(0.25, 0.85, 0.55, 0.10))
+		draw_rect(zone_rect, Color("#65e6a2"), false, 3.0)
+	if work_zone_dragging:
+		var preview_rect := Rect2(work_zone_start, work_zone_current - work_zone_start).abs()
+		draw_rect(preview_rect, Color(0.35, 0.85, 0.95, 0.14))
+		draw_rect(preview_rect, Color("#83e6f2"), false, 3.0)
+		var wood_estimate: int = 0
+		var scrap_estimate: int = 0
+		var food_estimate: int = 0
+		var fuel_estimate: int = 0
+		for tree in trees:
+			if bool(tree.get("alive", false)) and preview_rect.has_point(tree["pos"]):
+				wood_estimate += 15
+		for i in range(buildings.size()):
+			if preview_rect.intersects(buildings[i]) and not bool(building_archetypes[i].get("destroyed", false)):
+				scrap_estimate += 45
+				if str(building_archetypes[i].get("type", "")) in ["SUPERMARKET", "RESIDENTIAL"]:
+					food_estimate += 12
+		for crate in supply_crates:
+			if preview_rect.has_point(crate["pos"]):
+				fuel_estimate += 15
+		var badge_rect := Rect2(safe_insets.x + 12.0, safe_insets.y + 280.0, viewport_size.x - safe_insets.x - safe_insets.z - 24.0, 54.0)
+		draw_rect(badge_rect, Color("#0a1b18", 0.96))
+		draw_rect(badge_rect, Color("#83e6f2"), false, 2.0)
+		_draw_text("ZONE ESTIMATE  WOOD %d  SCRAP %d  FOOD %d  FUEL %d" % [wood_estimate, scrap_estimate, food_estimate, fuel_estimate], badge_rect.position + Vector2(8.0, 32.0), 10, Color("#e7fff5"))
+
+func _milestone14_draw_hud_panel() -> void:
+	if game_state != "playing" or command_tab != 1:
+		return
+	var panel_rect := Rect2(safe_insets.x + 8.0, safe_insets.y + 286.0, viewport_size.x - safe_insets.x - safe_insets.z - 16.0, 66.0)
+	draw_rect(panel_rect, Color("#091713", 0.96))
+	draw_rect(panel_rect, Color("#5ecf91"), false, 2.0)
+	var population: int = citizens.size()
+	var idle_count: int = 0
+	for person in survivors:
+		if str(person.get("role", "WORKER")) in ["WORKER", "IDLE"]:
+			idle_count += 1
+	_draw_text("POP %d  IDLE %d   GATHERERS %d   ENGINEERS %d" % [population, idle_count, int(role_allocations.get("GATHERERS", 0)), int(role_allocations.get("ENGINEERS", 0))], panel_rect.position + Vector2(8.0, 18.0), 10, Color("#e7fff5"))
+	var labels: Array[String] = ["GATHERERS", "ENGINEERS", "FACILITY", "SQUAD"]
+	for i in range(4):
+		var x: float = panel_rect.position.x + 8.0 + float(i) * ((panel_rect.size.x - 16.0) / 4.0)
+		_draw_text(labels[i] + "  [-] " + str(int(role_allocations.get(labels[i], 0))) + " [+]", Vector2(x, panel_rect.position.y + 42.0), 8, Color("#f2d98a"))
+	_draw_text("DRAG MAP TO BOX A WORK ZONE  |  " + ("WORK OUTSIDE" if work_outside_enabled else "RECALL TO OUTPOST"), panel_rect.position + Vector2(8.0, 60.0), 8, Color("#83e6f2"))
+
+func _milestone14_handle_panel_tap(position: Vector2) -> bool:
+	if game_state != "playing" or command_tab != 1:
+		return false
+	var panel_rect := Rect2(safe_insets.x + 8.0, safe_insets.y + 286.0, viewport_size.x - safe_insets.x - safe_insets.z - 16.0, 66.0)
+	if not panel_rect.has_point(position):
+		return false
+	var keys: Array[String] = ["GATHERERS", "ENGINEERS", "FACILITY", "SQUAD"]
+	var cell_width: float = (panel_rect.size.x - 16.0) / 4.0
+	var cell_index: int = clampi(floori((position.x - panel_rect.position.x - 8.0) / cell_width), 0, 3)
+	var local_x: float = fposmod(position.x - panel_rect.position.x - 8.0, cell_width)
+	if position.y >= panel_rect.position.y + 24.0 and position.y <= panel_rect.position.y + 52.0:
+		_milestone14_adjust_allocation(keys[cell_index], -1 if local_x < cell_width * 0.5 else 1)
+		return true
+	return true
+
