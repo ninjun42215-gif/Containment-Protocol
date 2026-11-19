@@ -221,6 +221,11 @@ var outpost_morale: float = 70.0
 var doctrine_morale_recovery_day: int = 0
 var selected_raid_squad: int = 0
 var ops_monitor_open: bool = false
+var outpost_expanding_index: int = -1
+var outpost_placement_status: String = "VALID"
+var recent_gunfire: Array[Dictionary] = []
+var population_heat_targets: Array[Dictionary] = []
+var population_heat_refresh_timer: float = 0.0
 
 func _ready() -> void:
 	randomize()
@@ -1224,12 +1229,16 @@ func _outpost_rect_valid(rect: Rect2) -> bool:
 		var other_rect: Rect2 = outposts[outpost_index].get("rect", Rect2(outposts[outpost_index]["pos"] - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
 		if rect.intersects(other_rect.grow(40.0)):
 			return false
+	var edge: float = OUTPOST_WALL_THICKNESS + 8.0
+	var perimeter_bands: Array[Rect2] = [Rect2(rect.position, Vector2(rect.size.x, edge)), Rect2(rect.position, Vector2(edge, rect.size.y)), Rect2(Vector2(rect.end.x - edge, rect.position.y), Vector2(edge, rect.size.y)), Rect2(Vector2(rect.position.x, rect.end.y - edge), Vector2(rect.size.x, edge))]
 	for segment in highway_segments + secondary_road_segments:
 		var road_from: Vector2 = segment.get("from", Vector2.ZERO)
 		var road_to: Vector2 = segment.get("to", Vector2.ZERO)
 		var road_width: float = float(segment.get("width", 48.0))
-		if Rect2(road_from, road_to - road_from).abs().grow(road_width * 0.5 + 8.0).intersects(rect):
-			return false
+		var road_rect: Rect2 = Rect2(road_from, road_to - road_from).abs().grow(road_width * 0.5 + 8.0)
+		for perimeter_band in perimeter_bands:
+			if road_rect.intersects(perimeter_band):
+				return false
 	return true
 
 func _begin_outpost_placement(world_position: Vector2, placement_kind: String) -> void:
@@ -1284,6 +1293,10 @@ func _update_outpost_placement_from_anchor(world_position: Vector2) -> void:
 		size.y = minf(size.y, 560.0)
 	var top_left := Vector2(minf(world_position.x, outpost_placement_anchor.x), minf(world_position.y, outpost_placement_anchor.y))
 	outpost_placement_rect = Rect2(top_left, size)
+	if outpost_placement_kind == "expand" and outpost_expanding_index >= 0 and outpost_expanding_index < outposts.size():
+		var current_rect: Rect2 = outposts[outpost_expanding_index].get("rect", outpost_placement_rect)
+		outpost_placement_rect = outpost_placement_rect.merge(current_rect)
+		outpost_placement_rect.size = _snap_outpost_size(outpost_placement_rect.size)
 	outpost_placement_status = _outpost_placement_status()
 	outpost_placement_valid = outpost_placement_status == "VALID" and (outpost_placement_kind in ["hq", "expand"] or outposts.size() < OUTPOST_MAX_COUNT + 1)
 	queue_redraw()
@@ -1327,7 +1340,7 @@ func _confirm_outpost_placement() -> void:
 		_save_operation()
 		queue_redraw()
 		return
-	if outpost_placement_kind == "hq'
+	if outpost_placement_kind == "hq":
 		var anchor_index: int = _milestone13_nearest_building(center, 520.0)
 		if anchor_index < 0:
 			message = "NO BUILDING ENCLOSED"
@@ -4938,7 +4951,7 @@ func _save_operation() -> void:
 	# Never replace a prior valid campaign with an incomplete HQ-placement state.
 	if not campaign_started or game_state == "hq_placement":
 		return
-\tvar state: Dictionary = {"version": SAVE_VERSION, "faction_doctrine": faction_doctrine, "doctrine_change_day": doctrine_change_day, "doctrine_morale_shock_days": doctrine_morale_shock_days, "doctrine_morale_recovery_day": doctrine_morale_recovery_day, "faction_settlements": faction_settlements, "faction_foundation_timer": faction_foundation_timer, "outpost_morale": outpost_morale, "weapons": weapons, "survivors": survivors, "citizens": citizens, "role_allocations": role_allocations, "raid_squads": raid_squads, "work_zones": work_zones, "wood": wood, "scrap": scrap, "food": food, "last_upkeep_day": last_upkeep_day, "trees": trees, "wildlife": wildlife, "raider_camps": raider_camps, "constructed_buildings": constructed_buildings, "radio_log": radio_log, "radio_day_announced": radio_day_announced, "radio_banner_text": radio_banner_text, "radio_banner_timer": radio_banner_timer, "fuel": fuel, "world_clock_minutes": world_clock_minutes, "survival_day": survival_day, "best_days_survived": best_days_survived, "best_civilians_saved": best_civilians_saved, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer, "tactical_decals": tactical_decals, "ops_monitor_open": ops_monitor_open, "recent_gunfire": recent_gunfire}
+	var state: Dictionary = {"version": SAVE_VERSION, "faction_doctrine": faction_doctrine, "doctrine_change_day": doctrine_change_day, "doctrine_morale_shock_days": doctrine_morale_shock_days, "doctrine_morale_recovery_day": doctrine_morale_recovery_day, "faction_settlements": faction_settlements, "faction_foundation_timer": faction_foundation_timer, "outpost_morale": outpost_morale, "weapons": weapons, "survivors": survivors, "citizens": citizens, "role_allocations": role_allocations, "raid_squads": raid_squads, "work_zones": work_zones, "wood": wood, "scrap": scrap, "food": food, "last_upkeep_day": last_upkeep_day, "trees": trees, "wildlife": wildlife, "raider_camps": raider_camps, "constructed_buildings": constructed_buildings, "radio_log": radio_log, "radio_day_announced": radio_day_announced, "radio_banner_text": radio_banner_text, "radio_banner_timer": radio_banner_timer, "fuel": fuel, "world_clock_minutes": world_clock_minutes, "survival_day": survival_day, "best_days_survived": best_days_survived, "best_civilians_saved": best_civilians_saved, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer, "tactical_decals": tactical_decals, "ops_monitor_open": ops_monitor_open, "recent_gunfire": recent_gunfire}
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify(_save_variant(state)))
