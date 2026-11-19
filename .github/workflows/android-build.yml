@@ -168,7 +168,7 @@ jobs:
             echo "## Android APK"
             echo "- File: ContainmentProtocol.apk"
             echo "- Size: $APK_BYTES bytes"
-            echo "- SHA-256: `$APK_SHA256`"
+            echo "- SHA-256: $APK_SHA256"
             echo "- Signing: v1, v2, and v3 verified"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -204,8 +204,8 @@ jobs:
             echo "## Direct Android APK Release"
             echo "- URL: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$RELEASE_APK"
             echo "- Size: $APK_BYTES bytes"
-            echo "- SHA-256: `$APK_SHA256`"
-            echo "- Source commit: `$GITHUB_SHA`"
+            echo "- SHA-256: $APK_SHA256"
+            echo "- Source commit: $GITHUB_SHA"
           } >> "$GITHUB_STEP_SUMMARY"
           rm -f "$RELEASE_APK"
 
