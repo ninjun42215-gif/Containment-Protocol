@@ -5540,11 +5540,28 @@ func _milestone15_adjust_ops_allocation(key: String, amount: int) -> void:
 			var person_id: int = int(person.get("id", -1))
 			if squad_ids.has(person_id) or bool(person.get("infection_active", false)) or not str(person.get("ops_assignment", "")).is_empty():
 				continue
-			if str(person.get("role", "WORKER")) in ["WORKER", "ENGINEER", "MEDIC", "INFANTRY", "SNIPER", "HEAVY"]:
+			var candidate_role: String = str(person.get("role", "WORKER"))
+			var role_allowed: bool = false
+			if key == "INDOOR_GUARD":
+				role_allowed = candidate_role in ["INFANTRY", "SNIPER", "HEAVY", "MEDIC"]
+			elif key == "INDOOR_CLINIC":
+				role_allowed = candidate_role in ["MEDIC", "WORKER", "ENGINEER"]
+			else:
+				role_allowed = candidate_role in ["WORKER", "ENGINEER"]
+			if role_allowed:
 				candidates.append(survivor_index)
 		candidates.sort_custom(func(a: int, b: int) -> bool:
 			var score_a: int = int(survivors[a].get("medical_xp", 0)) + int(survivors[a].get("engineering_xp", 0)) + int(survivors[a].get("gathering_xp", 0))
 			var score_b: int = int(survivors[b].get("medical_xp", 0)) + int(survivors[b].get("engineering_xp", 0)) + int(survivors[b].get("gathering_xp", 0))
+			if key == "INDOOR_CLINIC":
+				if str(survivors[a].get("role", "")) == "MEDIC": score_a += 100000
+				if str(survivors[b].get("role", "")) == "MEDIC": score_b += 100000
+			elif key == "INDOOR_WORKSHOP":
+				if str(survivors[a].get("role", "")) == "ENGINEER": score_a += 100000
+				if str(survivors[b].get("role", "")) == "ENGINEER": score_b += 100000
+			elif key == "INDOOR_GUARD":
+				if str(survivors[a].get("role", "")) in ["INFANTRY", "SNIPER", "HEAVY"]: score_a += 100000
+				if str(survivors[b].get("role", "")) in ["INFANTRY", "SNIPER", "HEAVY"]: score_b += 100000
 			return score_a > score_b
 		)
 		if candidates.is_empty():
@@ -5556,7 +5573,7 @@ func _milestone15_adjust_ops_allocation(key: String, amount: int) -> void:
 		chosen["ops_assignment"] = key
 		var indoors: bool = key.begins_with("INDOOR_")
 		chosen["ops_location"] = "INDOORS" if indoors else "OUTDOORS"
-		chosen["assignment_category"] = "FACILITY" if indoors else "GATHERERS"
+		chosen["assignment_category"] = ("FACILITY" if key != "INDOOR_GUARD" else "") if indoors else ("FACILITY" if key == "OUTDOOR_FARM" else "GATHERERS")
 		survivors[chosen_index] = chosen
 		var unit_index: int = _milestone15_find_unit_index(int(chosen.get("id", -1)))
 		if unit_index >= 0:
@@ -5564,16 +5581,13 @@ func _milestone15_adjust_ops_allocation(key: String, amount: int) -> void:
 			unit["garrisoned"] = false
 			unit["garrison_building"] = -1
 			unit["manual_order"] = false
-			unit["ai_task"] = key
+			unit["ai_task"] = ""
 			if indoors:
 				var outpost_index: int = _nearest_outpost_index(unit.get("pos", camera_position))
 				if outpost_index >= 0:
 					unit["move_target"] = outposts[outpost_index].get("pos", camera_position)
 			else:
-				var field_target: Vector2 = camera_position
-				if not work_zones.is_empty():
-					field_target = work_zones[0].get("rect", Rect2()).get_center()
-				unit["move_target"] = field_target
+				unit["move_target"] = null
 			units[unit_index] = unit
 		message = "%s ALLOCATION +1" % key.replace("_", " ")
 	else:
@@ -5610,20 +5624,21 @@ func _milestone15_dispatch_recall_all(dispatch: bool) -> void:
 			continue
 		var unit: Dictionary = units[unit_index]
 		if dispatch and assignment.begins_with("OUTDOOR_"):
-			var target: Vector2 = camera_position
-			if not work_zones.is_empty():
-				target = work_zones[0].get("rect", Rect2()).get_center()
 			person["ops_location"] = "OUTDOORS"
 			unit["garrisoned"] = false
-			unit["move_target"] = target
-			unit["ai_task"] = assignment
+			if str(unit.get("kind", "")) in ["worker", "engineer"]:
+				unit["move_target"] = null
+				unit["ai_task"] = ""
+			else:
+				unit["move_target"] = camera_position
+				unit["ai_task"] = "OPS_DISPATCH"
 		elif not dispatch:
 			var outpost_index: int = _nearest_outpost_index(unit.get("pos", camera_position))
 			if outpost_index >= 0:
 				person["ops_location"] = "INDOORS"
 				unit["garrisoned"] = false
 				unit["move_target"] = outposts[outpost_index].get("pos", camera_position)
-				unit["ai_task"] = assignment
+				unit["ai_task"] = ""
 		survivors[survivor_index] = person
 		units[unit_index] = unit
 	message = "FIELD TEAMS DISPATCHED" if dispatch else "PERSONNEL RECALLED TO OUTPOSTS"
