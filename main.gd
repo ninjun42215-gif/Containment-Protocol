@@ -34,7 +34,7 @@ const FLARE_LURE_RADIUS := 220.0
 const AUDIO_SAMPLE_RATE := 22050.0
 const MAX_ACTIVE_ZOMBIES := 650
 const PENDING_WAVE_SPAWN_INTERVAL := 0.20
-const SAVE_VERSION := 9
+const SAVE_VERSION := 10
 const PREPARATION_SECONDS := 60.0
 const GAME_MINUTES_PER_SECOND := 2.4
 const MAX_TACTICAL_DECALS := 80
@@ -220,6 +220,7 @@ var specialists_panel_open: bool = false
 var outpost_morale: float = 70.0
 var doctrine_morale_recovery_day: int = 0
 var selected_raid_squad: int = 0
+var ops_monitor_open: bool = false
 
 func _ready() -> void:
 	randomize()
@@ -314,6 +315,7 @@ func _start_sector(index: int) -> void:
 	camera_position = scenario_camera_target
 	camera_zoom = 0.62
 	command_tab = 0
+	ops_monitor_open = false
 	manual_paused = false
 	lifecycle_paused = false
 	scrap = 0
@@ -429,6 +431,7 @@ func _process(delta: float) -> void:
 	_update_vehicles(sim_delta)
 	_update_auto_ops(sim_delta)
 	_milestone14_tick_workforce(sim_delta)
+	_milestone15_tick_infections(sim_delta)
 	_milestone14_update_factions(sim_delta)
 	_refresh_light_source_cache()
 	message_timer = maxf(0.0, message_timer - sim_delta)
@@ -504,6 +507,17 @@ func _process(delta: float) -> void:
 		var target: Vector2 = _nearest_evac_zone(zpos)
 		if target_index >= 0:
 			target = civilians[target_index]
+		if bool(zombie.get("turned_inside_outpost", false)):
+			var nearest_indoor_unit: int = -1
+			var nearest_indoor_distance: float = 320.0 * 320.0
+			for indoor_unit_index in range(units.size()):
+				var indoor_unit: Dictionary = units[indoor_unit_index]
+				var indoor_distance: float = zpos.distance_squared_to(indoor_unit.get("pos", Vector2.ZERO))
+				if indoor_distance <= nearest_indoor_distance:
+					nearest_indoor_distance = indoor_distance
+					nearest_indoor_unit = indoor_unit_index
+			if nearest_indoor_unit >= 0:
+				target = units[nearest_indoor_unit].get("pos", target)
 		var siege_building_index: int = int(zombie.get("siege_building", -1))
 		if siege_building_index >= 0 and siege_building_index < buildings.size() and not bool(building_archetypes[siege_building_index].get("destroyed", false)) and zpos.distance_to(buildings[siege_building_index].get_center()) <= 300.0:
 			target = buildings[siege_building_index].get_center()
@@ -606,10 +620,12 @@ func _process(delta: float) -> void:
 		if float(zombie.get("unit_attack_cooldown", 0.0)) <= 0.0:
 			for unit_index in range(units.size()):
 				var exposed_unit: Dictionary = units[unit_index]
-				if bool(exposed_unit.get("garrisoned", false)):
+				var turned_inside: bool = bool(zombie.get("turned_inside_outpost", false))
+				if bool(exposed_unit.get("garrisoned", false)) and not turned_inside:
 					continue
-				if zpos.distance_to(exposed_unit["pos"]) <= 22.0:
-					var melee_damage: float = 42.0 if zombie_kind == "brute" else 20.0
+				var contact_range: float = 76.0 if turned_inside else 22.0
+				if zpos.distance_to(exposed_unit["pos"]) <= contact_range:
+					var melee_damage: float = 42.0 if zombie_kind == "brute" else (28.0 if turned_inside else 20.0)
 					exposed_unit["hp"] = maxf(0.0, float(exposed_unit.get("hp", 100.0)) - melee_damage)
 					zombie["unit_attack_cooldown"] = 1.0
 					if float(exposed_unit["hp"]) <= 0.0:
@@ -623,6 +639,7 @@ func _process(delta: float) -> void:
 						message_timer = 1.5
 					else:
 						units[unit_index] = exposed_unit
+						_milestone15_apply_pathogen_exposure(unit_index, zombie_kind)
 					break
 		zombie["pos"] = zpos
 		zombies[i] = zombie
@@ -719,6 +736,9 @@ func _process(delta: float) -> void:
 			else:
 				unit["move_target"] = null
 				unit["manual_order"] = false
+				if str(unit.get("ops_location", "")) == "INDOORS" and _milestone15_inside_outpost(unit["pos"]):
+					unit["garrisoned"] = true
+					unit["garrison_building"] = -1
 		units[unit_index] = unit
 		unit["cooldown"] = maxf(0.0, float(unit["cooldown"]) - sim_delta)
 		if float(unit["cooldown"]) > 0.0 or zombies.is_empty():
@@ -2534,6 +2554,9 @@ func _handle_tap(pos: Vector2) -> void:
 		return
 	if game_state != "playing":
 		return
+	if _milestone15_handle_ops_tap(pos):
+		queue_redraw()
+		return
 	if _milestone14_handle_settlement_tap(pos):
 		queue_redraw()
 		return
@@ -3004,6 +3027,7 @@ func _draw() -> void:
 	_draw_hud()
 	if command_tab == 1:
 		_milestone14_draw_hud_panel()
+		_milestone15_draw_ops_monitor()
 	if campaign_start_grace_timer > 0.0:
 		var fast_start_rect := Rect2(safe_insets.x + 24.0, _safe_bottom_y(64.0), 230.0, 56.0)
 		draw_rect(fast_start_rect, Color("#3b3320"))
@@ -3810,6 +3834,12 @@ func _spitter_burst(center: Vector2) -> void:
 			if zombies.size() < MAX_ACTIVE_ZOMBIES:
 				zombies.append({"pos": infected_position, "kind": "shambler", "hp": 30.0, "max_hp": 30.0})
 			infected += 1
+	for unit_index in range(units.size()):
+		var exposed_unit: Dictionary = units[unit_index]
+		if center.distance_to(exposed_unit.get("pos", Vector2.ZERO)) <= 45.0:
+			exposed_unit["hp"] = maxf(1.0, float(exposed_unit.get("hp", 100.0)) - 18.0)
+			units[unit_index] = exposed_unit
+			_milestone15_apply_pathogen_exposure(unit_index, "spitter")
 	if infected > 0:
 		lost_count += infected
 		message = "TOXIC BURST — %d CIVILIANS INFECTED" % infected
@@ -4438,7 +4468,7 @@ func _milestone13_survivors() -> Array[Dictionary]:
 	var roster: Array[Dictionary] = []
 	for i in range(names.size()):
 		var role: String = "ENGINEER" if i == 1 else ("MEDIC" if i == 2 else "WORKER")
-		roster.append({"id": i + 1, "name": names[i], "role": role, "combat_xp": 0, "build_xp": 0, "medical_xp": 0, "veteran_rank": 1, "hp": 100.0, "equipped_weapon": ""})
+		roster.append({"id": i + 1, "name": names[i], "role": role, "combat_xp": 0, "build_xp": 0, "medical_xp": 0, "veteran_rank": 1, "hp": 100.0, "max_hp": 100.0, "equipped_weapon": "", "traits": [], "ops_assignment": "", "ops_location": "IDLE", "infection_active": false, "infection_timer": 0.0, "infection_position": Vector2.ZERO, "infection_attacker": "", "infection_clinic_care_started": false})
 	return roster
 
 func _milestone13_nearest_building(position: Vector2, radius: float) -> int:
@@ -4543,7 +4573,9 @@ func _draw_milestone13_roster_panel() -> void:
 		draw_rect(row_rect, Color("#254538") if survivor_index == selected_survivor_index else Color("#10221d"))
 		var rank_text: String = ["I", "II", "III"][clampi(int(survivor.get("veteran_rank", 1)) - 1, 0, 2)]
 		var weapon_text: String = str(survivor.get("equipped_weapon", "—")).to_upper()
-		var row_text: String = "%02d %s | %s | C%d B%d M%d | R%s | %s" % [survivor_index + 1, str(survivor.get("name", "SURVIVOR")), str(survivor.get("role", "WORKER")), int(survivor.get("combat_xp", 0)), int(survivor.get("build_xp", 0)), int(survivor.get("medical_xp", 0)), rank_text, weapon_text]
+		var traits: Array = survivor.get("traits", [])
+		var health_tag: String = "IMMUNE" if traits.has("IMMUNE") else ("INFECTED %ds" % ceili(float(survivor.get("infection_timer", 0.0))) if bool(survivor.get("infection_active", false)) else "")
+		var row_text: String = "%02d %s | %s | C%d B%d M%d | R%s | %s %s" % [survivor_index + 1, str(survivor.get("name", "SURVIVOR")), str(survivor.get("role", "WORKER")), int(survivor.get("combat_xp", 0)), int(survivor.get("build_xp", 0)), int(survivor.get("medical_xp", 0)), rank_text, weapon_text, health_tag]
 		_draw_text(row_text, row_rect.position + Vector2(4.0, 19.0), 8, Color("#e4f4e9"))
 	var craft_y: float = panel_top + 25.0 + row_height * float(survivors.size()) + 8.0
 	var labels: Array[String] = ["RIFLE 25", "SNIPER 40", "HEAVY 55", "MEDKIT 20"]
@@ -4792,7 +4824,7 @@ func _save_operation() -> void:
 	# Never replace a prior valid campaign with an incomplete HQ-placement state.
 	if not campaign_started or game_state == "hq_placement":
 		return
-	var state: Dictionary = {"version": SAVE_VERSION, "faction_doctrine": faction_doctrine, "doctrine_change_day": doctrine_change_day, "doctrine_morale_shock_days": doctrine_morale_shock_days, "doctrine_morale_recovery_day": doctrine_morale_recovery_day, "faction_settlements": faction_settlements, "faction_foundation_timer": faction_foundation_timer, "outpost_morale": outpost_morale, "weapons": weapons, "survivors": survivors, "citizens": citizens, "role_allocations": role_allocations, "raid_squads": raid_squads, "work_zones": work_zones, "wood": wood, "scrap": scrap, "food": food, "last_upkeep_day": last_upkeep_day, "trees": trees, "wildlife": wildlife, "raider_camps": raider_camps, "constructed_buildings": constructed_buildings, "radio_log": radio_log, "radio_day_announced": radio_day_announced, "radio_banner_text": radio_banner_text, "radio_banner_timer": radio_banner_timer, "fuel": fuel, "world_clock_minutes": world_clock_minutes, "survival_day": survival_day, "best_days_survived": best_days_survived, "best_civilians_saved": best_civilians_saved, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer, "tactical_decals": tactical_decals}
+	var state: Dictionary = {"version": SAVE_VERSION, "faction_doctrine": faction_doctrine, "doctrine_change_day": doctrine_change_day, "doctrine_morale_shock_days": doctrine_morale_shock_days, "doctrine_morale_recovery_day": doctrine_morale_recovery_day, "faction_settlements": faction_settlements, "faction_foundation_timer": faction_foundation_timer, "outpost_morale": outpost_morale, "weapons": weapons, "survivors": survivors, "citizens": citizens, "role_allocations": role_allocations, "raid_squads": raid_squads, "work_zones": work_zones, "wood": wood, "scrap": scrap, "food": food, "last_upkeep_day": last_upkeep_day, "trees": trees, "wildlife": wildlife, "raider_camps": raider_camps, "constructed_buildings": constructed_buildings, "radio_log": radio_log, "radio_day_announced": radio_day_announced, "radio_banner_text": radio_banner_text, "radio_banner_timer": radio_banner_timer, "fuel": fuel, "world_clock_minutes": world_clock_minutes, "survival_day": survival_day, "best_days_survived": best_days_survived, "best_civilians_saved": best_civilians_saved, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer, "tactical_decals": tactical_decals, "ops_monitor_open": ops_monitor_open}
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify(_save_variant(state)))
@@ -4830,6 +4862,23 @@ func _resume_operation() -> void:
 		state["faction_settlements"] = []
 		state["faction_foundation_timer"] = 720.0
 		state["version"] = 9
+	if int(state.get("version", 9)) < 10:
+		var legacy_survivors: Array = state.get("survivors", [])
+		for survivor_index in range(legacy_survivors.size()):
+			var legacy_survivor: Dictionary = legacy_survivors[survivor_index]
+			legacy_survivor["max_hp"] = float(legacy_survivor.get("max_hp", 100.0))
+			legacy_survivor["traits"] = legacy_survivor.get("traits", [])
+			legacy_survivor["ops_assignment"] = str(legacy_survivor.get("ops_assignment", ""))
+			legacy_survivor["ops_location"] = str(legacy_survivor.get("ops_location", "IDLE"))
+			legacy_survivor["infection_active"] = bool(legacy_survivor.get("infection_active", false))
+			legacy_survivor["infection_timer"] = float(legacy_survivor.get("infection_timer", 0.0))
+			legacy_survivor["infection_position"] = legacy_survivor.get("infection_position", Vector2.ZERO)
+			legacy_survivor["infection_attacker"] = str(legacy_survivor.get("infection_attacker", ""))
+			legacy_survivor["infection_clinic_care_started"] = bool(legacy_survivor.get("infection_clinic_care_started", false))
+			legacy_survivors[survivor_index] = legacy_survivor
+		state["survivors"] = legacy_survivors
+		state["ops_monitor_open"] = false
+		state["version"] = 10
 	faction_doctrine = str(state.get("faction_doctrine", "PRAGMATIC FREEHOLD"))
 	doctrine_change_day = int(state.get("doctrine_change_day", 1))
 	doctrine_morale_shock_days = int(state.get("doctrine_morale_shock_days", 0))
@@ -4849,6 +4898,16 @@ func _resume_operation() -> void:
 	scrap = 0
 	weapons = state.get("weapons", {"rifles": 6, "snipers": 2, "heavy_mgs": 1, "medkits": 3})
 	survivors.assign(state.get("survivors", _milestone13_survivors()))
+	ops_monitor_open = false
+	for survivor_index in range(survivors.size()):
+		var loaded_survivor: Dictionary = survivors[survivor_index]
+		loaded_survivor["traits"] = loaded_survivor.get("traits", [])
+		loaded_survivor["ops_assignment"] = str(loaded_survivor.get("ops_assignment", ""))
+		loaded_survivor["ops_location"] = str(loaded_survivor.get("ops_location", "IDLE"))
+		loaded_survivor["infection_active"] = bool(loaded_survivor.get("infection_active", false))
+		loaded_survivor["infection_timer"] = float(loaded_survivor.get("infection_timer", 0.0))
+		loaded_survivor["infection_clinic_care_started"] = bool(loaded_survivor.get("infection_clinic_care_started", false))
+		survivors[survivor_index] = loaded_survivor
 	crafting_orders.assign(state.get("crafting_orders", []))
 	scrap = maxi(0, int(state.get("scrap", state.get("materials", 120))))
 	wood = maxi(0, int(state.get("wood", 0)))
@@ -5061,7 +5120,7 @@ func _milestone14_add_refugee(expertise_hint: String = "", recruit_to_workforce:
 		next_id = posmod(next_id + 1, 10000)
 		full_name = _milestone14_name_for_id(next_id)
 	var expertise: String = expertise_hint if not expertise_hint.is_empty() else _milestone14_expertise_for_id(next_id)
-	var refugee: Dictionary = {"id": next_id, "name": full_name, "role": "WORKER", "expertise": expertise, "combat_xp": 0, "engineering_xp": 0, "build_xp": 0, "medical_xp": 0, "gathering_xp": 0, "veteran_rank": 1, "hp": 100.0, "equipped_weapon": ""}
+	var refugee: Dictionary = {"id": next_id, "name": full_name, "role": "WORKER", "expertise": expertise, "combat_xp": 0, "engineering_xp": 0, "build_xp": 0, "medical_xp": 0, "gathering_xp": 0, "veteran_rank": 1, "hp": 100.0, "max_hp": 100.0, "equipped_weapon": "", "traits": [], "ops_assignment": "", "ops_location": "IDLE", "infection_active": false, "infection_timer": 0.0, "infection_position": Vector2.ZERO, "infection_attacker": "", "infection_clinic_care_started": false}
 	citizens.append(refugee)
 	if recruit_to_workforce:
 		survivors.append(refugee.duplicate(true))
@@ -5322,7 +5381,7 @@ func _milestone14_draw_hud_panel() -> void:
 		_draw_text(labels[i] + "  [-] " + str(int(role_allocations.get(labels[i], 0))) + " [+]", Vector2(x, panel_rect.position.y + 42.0), 8, Color("#f2d98a"))
 	_draw_text("DRAG MAP TO BOX A WORK ZONE  |  " + ("WORK OUTSIDE" if work_outside_enabled else "RECALL TO OUTPOST"), panel_rect.position + Vector2(8.0, 60.0), 8, Color("#83e6f2"))
 	_draw_text("DOCTRINE: " + faction_doctrine + "  |  READY IN %dD" % _milestone14_doctrine_cooldown(), panel_rect.position + Vector2(8.0, 86.0), 9, Color("#f2d98a"))
-	_draw_text("[CYCLE DOCTRINE]   [SPECIALISTS]   SETTLEMENTS %d" % faction_settlements.size(), panel_rect.position + Vector2(8.0, 110.0), 9, Color("#83e6f2"))
+	_draw_text("[DOCTRINE]   [SPECIALISTS]   [OPS MONITOR]", panel_rect.position + Vector2(8.0, 110.0), 9, Color("#83e6f2"))
 	_draw_text("SQUAD %d/%d  %s  MEMBERS %d" % [selected_raid_squad + 1, maxi(1, raid_squads.size()), str(raid_squads[selected_raid_squad].get("status", "EMPTY")) if selected_raid_squad < raid_squads.size() else "EMPTY", raid_squads[selected_raid_squad].get("members", []).size() if selected_raid_squad < raid_squads.size() else 0], panel_rect.position + Vector2(8.0, 136.0), 9, Color("#f2d98a"))
 	var squad_labels: Array[String] = ["[CREATE]", "[DEPLOY]", "[RECALL]", "[DISBAND]"]
 	for squad_button in range(4):
@@ -5352,13 +5411,415 @@ func _milestone14_handle_panel_tap(position: Vector2) -> bool:
 		_milestone14_squad_ui_action(squad_action)
 		return true
 	if position.y >= panel_rect.position.y + 90.0 and position.y <= panel_rect.position.y + 128.0:
-		if position.x < panel_rect.position.x + panel_rect.size.x * 0.52:
+		var panel_ratio: float = (position.x - panel_rect.position.x) / panel_rect.size.x
+		if panel_ratio < 0.34:
 			_milestone14_cycle_doctrine()
-		else:
+		elif panel_ratio < 0.67:
 			specialists_panel_open = not specialists_panel_open
+		else:
+			ops_monitor_open = not ops_monitor_open
 		return true
 	return true
 
+
+func _milestone15_ops_panel_rect() -> Rect2:
+	var panel_top: float = safe_insets.y + 270.0
+	var panel_bottom: float = _safe_bottom_y(_deployment_panel_height()) - 8.0
+	var panel_height: float = minf(430.0, maxf(380.0, panel_bottom - panel_top))
+	var panel_width: float = viewport_size.x - safe_insets.x - safe_insets.z - 16.0
+	return Rect2(safe_insets.x + 8.0, panel_top, panel_width, panel_height)
+
+func _milestone15_inside_outpost(position: Vector2) -> bool:
+	for outpost in outposts:
+		var outpost_rect: Rect2 = outpost.get("rect", Rect2(outpost.get("pos", Vector2.ZERO) - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
+		if outpost_rect.has_point(position):
+			return true
+	return false
+
+func _milestone15_find_unit_index(survivor_id: int) -> int:
+	for unit_index in range(units.size()):
+		if int(units[unit_index].get("survivor_id", -1)) == survivor_id:
+			return unit_index
+	return -1
+
+func _milestone15_squad_member_ids() -> Array[int]:
+	var member_ids: Array[int] = []
+	for squad in raid_squads:
+		for raw_id in squad.get("members", []):
+			var member_id: int = int(raw_id)
+			if not member_ids.has(member_id):
+				member_ids.append(member_id)
+	return member_ids
+
+func _milestone15_ops_metrics() -> Dictionary:
+	var indoors: int = 0
+	var outdoors: int = 0
+	var deployed: int = 0
+	var infected: int = 0
+	var idle: int = 0
+	var squad_members: Array[int] = _milestone15_squad_member_ids()
+	for survivor in survivors:
+		var survivor_id: int = int(survivor.get("id", -1))
+		var unit_index: int = _milestone15_find_unit_index(survivor_id)
+		var is_infected: bool = bool(survivor.get("infection_active", false))
+		if is_infected:
+			infected += 1
+		var is_deployed: bool = false
+		if squad_members.has(survivor_id):
+			for squad in raid_squads:
+				var members: Array = squad.get("members", [])
+				if members.has(survivor_id) and str(squad.get("status", "")) == "DEPLOYED":
+					is_deployed = true
+					deployed += 1
+					break
+		if not is_deployed and unit_index >= 0:
+			var unit: Dictionary = units[unit_index]
+			if bool(unit.get("garrisoned", false)) or _milestone15_inside_outpost(unit.get("pos", Vector2.ZERO)):
+				indoors += 1
+			else:
+				outdoors += 1
+		if not is_infected and not squad_members.has(survivor_id) and str(survivor.get("ops_assignment", "")).is_empty() and (unit_index < 0 or (not bool(units[unit_index].get("garrisoned", false)) and not _milestone15_inside_outpost(units[unit_index].get("pos", Vector2.ZERO)))):
+			idle += 1
+	return {"indoors": indoors, "outdoors": outdoors, "deployed": deployed, "infected": infected, "idle": idle}
+
+func _milestone15_ops_count(key: String) -> int:
+	if key == "OUTDOOR_SQUADS":
+		var squad_count: int = 0
+		for squad in raid_squads:
+			if str(squad.get("status", "")) == "DEPLOYED":
+				squad_count += 1
+		return squad_count
+	var count: int = 0
+	for survivor in survivors:
+		if str(survivor.get("ops_assignment", "")) == key:
+			count += 1
+	return count
+
+func _milestone15_adjust_ops_allocation(key: String, amount: int) -> void:
+	if key == "OUTDOOR_SQUADS":
+		if amount > 0:
+			var previous_count: int = raid_squads.size()
+			_milestone14_create_raid_squad()
+			if raid_squads.size() > previous_count:
+				var squad: Dictionary = raid_squads[raid_squads.size() - 1]
+				for member_id in squad.get("members", []):
+					var unit_index: int = _milestone15_find_unit_index(int(member_id))
+					if unit_index >= 0:
+						units[unit_index]["move_target"] = camera_position
+						units[unit_index]["manual_order"] = true
+						units[unit_index]["garrisoned"] = false
+				squad["status"] = "DEPLOYED"
+				raid_squads[raid_squads.size() - 1] = squad
+		else:
+			for squad_index in range(raid_squads.size()):
+				var squad: Dictionary = raid_squads[squad_index]
+				if str(squad.get("status", "")) == "DEPLOYED":
+					for member_id in squad.get("members", []):
+						var unit_index: int = _milestone15_find_unit_index(int(member_id))
+						if unit_index >= 0:
+							var outpost_index: int = _nearest_outpost_index(units[unit_index].get("pos", camera_position))
+							if outpost_index >= 0:
+								units[unit_index]["move_target"] = _nearest_outpost_gate_position(outpost_index, units[unit_index].get("pos", camera_position))
+							units[unit_index]["manual_order"] = true
+					squad["status"] = "RECALLING"
+					raid_squads[squad_index] = squad
+					break
+		_save_operation()
+		queue_redraw()
+		return
+	if amount > 0:
+		var candidates: Array[int] = []
+		var squad_ids: Array[int] = _milestone15_squad_member_ids()
+		for survivor_index in range(survivors.size()):
+			var person: Dictionary = survivors[survivor_index]
+			var person_id: int = int(person.get("id", -1))
+			if squad_ids.has(person_id) or bool(person.get("infection_active", false)) or not str(person.get("ops_assignment", "")).is_empty():
+				continue
+			if str(person.get("role", "WORKER")) in ["WORKER", "ENGINEER", "MEDIC", "INFANTRY", "SNIPER", "HEAVY"]:
+				candidates.append(survivor_index)
+		candidates.sort_custom(func(a: int, b: int) -> bool:
+			var score_a: int = int(survivors[a].get("medical_xp", 0)) + int(survivors[a].get("engineering_xp", 0)) + int(survivors[a].get("gathering_xp", 0))
+			var score_b: int = int(survivors[b].get("medical_xp", 0)) + int(survivors[b].get("engineering_xp", 0)) + int(survivors[b].get("gathering_xp", 0))
+			return score_a > score_b
+		)
+		if candidates.is_empty():
+			message = "NO UNASSIGNED PERSONNEL AVAILABLE"
+			message_timer = 1.8
+			return
+		var chosen_index: int = candidates[0]
+		var chosen: Dictionary = survivors[chosen_index]
+		chosen["ops_assignment"] = key
+		var indoors: bool = key.begins_with("INDOOR_")
+		chosen["ops_location"] = "INDOORS" if indoors else "OUTDOORS"
+		chosen["assignment_category"] = "FACILITY" if indoors else "GATHERERS"
+		survivors[chosen_index] = chosen
+		var unit_index: int = _milestone15_find_unit_index(int(chosen.get("id", -1)))
+		if unit_index >= 0:
+			var unit: Dictionary = units[unit_index]
+			unit["garrisoned"] = false
+			unit["garrison_building"] = -1
+			unit["manual_order"] = false
+			unit["ai_task"] = key
+			if indoors:
+				var outpost_index: int = _nearest_outpost_index(unit.get("pos", camera_position))
+				if outpost_index >= 0:
+					unit["move_target"] = outposts[outpost_index].get("pos", camera_position)
+			else:
+				var field_target: Vector2 = camera_position
+				if not work_zones.is_empty():
+					field_target = work_zones[0].get("rect", Rect2()).get_center()
+				unit["move_target"] = field_target
+			units[unit_index] = unit
+		message = "%s ALLOCATION +1" % key.replace("_", " ")
+	else:
+		for survivor_index in range(survivors.size() - 1, -1, -1):
+			var person: Dictionary = survivors[survivor_index]
+			if str(person.get("ops_assignment", "")) != key:
+				continue
+			person["ops_assignment"] = ""
+			person["ops_location"] = "IDLE"
+			person["assignment_category"] = ""
+			survivors[survivor_index] = person
+			var unit_index: int = _milestone15_find_unit_index(int(person.get("id", -1)))
+			if unit_index >= 0:
+				units[unit_index]["garrisoned"] = false
+				units[unit_index]["garrison_building"] = -1
+				units[unit_index]["move_target"] = null
+				units[unit_index]["manual_order"] = false
+				units[unit_index]["ai_task"] = ""
+			break
+		message = "%s ALLOCATION -1" % key.replace("_", " ")
+	message_timer = 1.5
+	_save_operation()
+	queue_redraw()
+
+func _milestone15_dispatch_recall_all(dispatch: bool) -> void:
+	work_outside_enabled = dispatch
+	for survivor_index in range(survivors.size()):
+		var person: Dictionary = survivors[survivor_index]
+		var assignment: String = str(person.get("ops_assignment", ""))
+		if assignment.is_empty():
+			continue
+		var unit_index: int = _milestone15_find_unit_index(int(person.get("id", -1)))
+		if unit_index < 0:
+			continue
+		var unit: Dictionary = units[unit_index]
+		if dispatch and assignment.begins_with("OUTDOOR_"):
+			var target: Vector2 = camera_position
+			if not work_zones.is_empty():
+				target = work_zones[0].get("rect", Rect2()).get_center()
+			person["ops_location"] = "OUTDOORS"
+			unit["garrisoned"] = false
+			unit["move_target"] = target
+			unit["ai_task"] = assignment
+		elif not dispatch:
+			var outpost_index: int = _nearest_outpost_index(unit.get("pos", camera_position))
+			if outpost_index >= 0:
+				person["ops_location"] = "INDOORS"
+				unit["garrisoned"] = false
+				unit["move_target"] = outposts[outpost_index].get("pos", camera_position)
+				unit["ai_task"] = assignment
+		survivors[survivor_index] = person
+		units[unit_index] = unit
+	message = "FIELD TEAMS DISPATCHED" if dispatch else "PERSONNEL RECALLED TO OUTPOSTS"
+	message_timer = 2.0
+	_save_operation()
+	queue_redraw()
+
+func _milestone15_draw_ops_monitor() -> void:
+	if not ops_monitor_open or game_state != "playing" or command_tab != 1:
+		return
+	var panel: Rect2 = _milestone15_ops_panel_rect()
+	draw_rect(panel, Color("#071713", 0.985))
+	draw_rect(panel, Color("#78dba3"), false, 2.0)
+	_draw_text("[OPS MONITOR]  INDOOR / OUTDOOR PERSONNEL", panel.position + Vector2(10.0, 22.0), 12, Color("#e9fff0"))
+	var close_rect := Rect2(panel.end.x - 58.0, panel.position.y + 4.0, 52.0, 48.0)
+	draw_rect(close_rect, Color("#542b2b"))
+	draw_rect(close_rect, Color("#f08c80"), false, 1.5)
+	_draw_text("CLOSE", close_rect.position + Vector2(5.0, 29.0), 9, Color("#ffffff"))
+	var metrics: Dictionary = _milestone15_ops_metrics()
+	_draw_text("INDOORS %d   OUTDOORS %d   RAID %d" % [int(metrics["indoors"]), int(metrics["outdoors"]), int(metrics["deployed"])], panel.position + Vector2(10.0, 52.0), 10, Color("#91e5b2"))
+	_draw_text("INFECTED / QUARANTINE %d   IDLE %d" % [int(metrics["infected"]), int(metrics["idle"])], panel.position + Vector2(10.0, 72.0), 10, Color("#ff9b83") if int(metrics["infected"]) > 0 else Color("#b9d4c4"))
+	var infected_summary: String = "BIOHAZARD CLEAR"
+	for survivor in survivors:
+		if bool(survivor.get("infection_active", false)):
+			infected_summary = "BIOHAZARD: %s  %ds TO TURN" % [str(survivor.get("name", "SURVIVOR")), ceili(float(survivor.get("infection_timer", 0.0)))]
+			break
+	_draw_text(infected_summary, panel.position + Vector2(10.0, 94.0), 9, Color("#ff7777") if int(metrics["infected"]) > 0 else Color("#75d99a"))
+	var labels: Array[String] = ["Bakery Staff", "Field Clinic Medics", "Workshop Crafters", "Perimeter Guards", "Lumber / Demo Crew", "Scavengers / Haulers", "Farm / Livestock Hands", "Deployed Raid Squads"]
+	var keys: Array[String] = ["INDOOR_BAKERY", "INDOOR_CLINIC", "INDOOR_WORKSHOP", "INDOOR_GUARD", "OUTDOOR_LUMBER", "OUTDOOR_SCAVENGER", "OUTDOOR_FARM", "OUTDOOR_SQUADS"]
+	var row_height: float = 50.0
+	var start_y: float = panel.position.y + 116.0
+	var column_gap: float = 8.0
+	var column_width: float = (panel.size.x - 24.0) * 0.5
+	for item_index in range(8):
+		var column: int = floori(float(item_index) / 4.0)
+		var row: int = item_index % 4
+		var row_rect := Rect2(panel.position.x + 8.0 + float(column) * (column_width + column_gap), start_y + float(row) * row_height, column_width, 48.0)
+		draw_rect(row_rect, Color("#102820"))
+		draw_rect(row_rect, Color("#355d4b"), false, 1.0)
+		_draw_text(labels[item_index], row_rect.position + Vector2(5.0, 18.0), 9, Color("#e7f7ec"))
+		_draw_text("N %d" % _milestone15_ops_count(keys[item_index]), row_rect.position + Vector2(5.0, 37.0), 9, Color("#f2d98a"))
+		var minus_rect := Rect2(row_rect.end.x - 104.0, row_rect.position.y, 48.0, 48.0)
+		var plus_rect := Rect2(row_rect.end.x - 52.0, row_rect.position.y, 48.0, 48.0)
+		draw_rect(minus_rect, Color("#4a302c"))
+		draw_rect(plus_rect, Color("#24563b"))
+		draw_rect(minus_rect, Color("#e58c7c"), false, 1.0)
+		draw_rect(plus_rect, Color("#79dfa1"), false, 1.0)
+		_draw_text("-", minus_rect.position + Vector2(19.0, 32.0), 22, Color("#ffffff"))
+		_draw_text("+", plus_rect.position + Vector2(16.0, 32.0), 22, Color("#ffffff"))
+	var action_y: float = panel.position.y + 324.0
+	var action_width: float = (panel.size.x - 24.0) * 0.5
+	var dispatch_rect := Rect2(panel.position.x + 8.0, action_y, action_width, 48.0)
+	var recall_rect := Rect2(panel.position.x + 16.0 + action_width, action_y, action_width, 48.0)
+	draw_rect(dispatch_rect, Color("#244d37"))
+	draw_rect(recall_rect, Color("#3e3b2a"))
+	draw_rect(dispatch_rect, Color("#79dfa1"), false, 1.5)
+	draw_rect(recall_rect, Color("#e4c66d"), false, 1.5)
+	_draw_text("[DISPATCH FIELD]", dispatch_rect.position + Vector2(8.0, 30.0), 11, Color("#ffffff"))
+	_draw_text("[RECALL TO HQ]", recall_rect.position + Vector2(8.0, 30.0), 11, Color("#fff4c7"))
+
+func _milestone15_handle_ops_tap(position: Vector2) -> bool:
+	if not ops_monitor_open or game_state != "playing" or command_tab != 1:
+		return false
+	var panel: Rect2 = _milestone15_ops_panel_rect()
+	if not panel.has_point(position):
+		return false
+	var close_rect := Rect2(panel.end.x - 58.0, panel.position.y + 4.0, 52.0, 48.0)
+	if close_rect.has_point(position):
+		ops_monitor_open = false
+		return true
+	var action_y: float = panel.position.y + 324.0
+	if position.y >= action_y and position.y <= action_y + 48.0:
+		_milestone15_dispatch_recall_all(position.x < panel.position.x + panel.size.x * 0.5)
+		return true
+	var start_y: float = panel.position.y + 116.0
+	if position.y >= start_y and position.y < start_y + 200.0:
+		var column_width: float = (panel.size.x - 24.0) * 0.5
+		var column: int = 0 if position.x < panel.position.x + 8.0 + column_width else 1
+		var row: int = clampi(floori((position.y - start_y) / 50.0), 0, 3)
+		var item_index: int = column * 4 + row
+		var row_right: float = panel.position.x + 8.0 + float(column) * (column_width + 8.0) + column_width
+		var keys: Array[String] = ["INDOOR_BAKERY", "INDOOR_CLINIC", "INDOOR_WORKSHOP", "INDOOR_GUARD", "OUTDOOR_LUMBER", "OUTDOOR_SCAVENGER", "OUTDOOR_FARM", "OUTDOOR_SQUADS"]
+		if position.x >= row_right - 104.0 and position.x <= row_right - 56.0:
+			_milestone15_adjust_ops_allocation(keys[item_index], -1)
+		elif position.x >= row_right - 52.0 and position.x <= row_right - 4.0:
+			_milestone15_adjust_ops_allocation(keys[item_index], 1)
+		return true
+	return true
+
+func _milestone15_apply_pathogen_exposure(unit_index: int, attacker_kind: String) -> void:
+	if unit_index < 0 or unit_index >= units.size():
+		return
+	var unit: Dictionary = units[unit_index]
+	var survivor_id: int = int(unit.get("survivor_id", -1))
+	for survivor_index in range(survivors.size()):
+		var survivor: Dictionary = survivors[survivor_index]
+		if int(survivor.get("id", -2)) != survivor_id:
+			continue
+		var traits: Array = survivor.get("traits", [])
+		if traits.has("IMMUNE") or bool(survivor.get("infection_active", false)):
+			return
+		var max_hp: float = maxf(1.0, float(unit.get("max_hp", 100.0)))
+		var remaining_hp: float = clampf(float(unit.get("hp", max_hp)) / max_hp, 0.0, 1.0)
+		var turn_risk: float = 0.75 if attacker_kind == "brute" else (0.40 if remaining_hp > 0.65 else (0.50 if remaining_hp >= 0.30 else 0.65))
+		if randf() > turn_risk:
+			return
+		if randf() < 0.08:
+			traits.append("IMMUNE")
+			survivor["traits"] = traits
+			survivor["max_hp"] = float(survivor.get("max_hp", max_hp)) * 1.15
+			survivor["hp"] = minf(float(survivor["max_hp"]), float(survivor.get("hp", max_hp)) + max_hp * 0.15)
+			unit["max_hp"] = max_hp * 1.15
+			unit["hp"] = minf(float(unit["max_hp"]), float(unit.get("hp", max_hp)) + max_hp * 0.15)
+			units[unit_index] = unit
+			for citizen_index in range(citizens.size()):
+				if int(citizens[citizen_index].get("id", -2)) == survivor_id:
+					citizens[citizen_index]["traits"] = traits.duplicate()
+					citizens[citizen_index]["max_hp"] = float(citizens[citizen_index].get("max_hp", max_hp)) * 1.15
+					citizens[citizen_index]["hp"] = float(citizens[citizen_index].get("hp", max_hp)) + max_hp * 0.15
+			survivors[survivor_index] = survivor
+			var immune_alert: String = "GENETIC IMMUNITY: %s — IMMUNE TRAIT / +15%% MAX HP" % str(survivor.get("name", "SURVIVOR"))
+			radio_banner_text = immune_alert
+			radio_banner_timer = 7.0
+			radio_log.append("DAY %d — %s" % [survival_day, immune_alert])
+			message = immune_alert
+			message_timer = 4.0
+			_queue_sfx("infection")
+		else:
+			survivor["infection_active"] = true
+			survivor["infection_timer"] = 180.0
+			survivor["infection_position"] = unit.get("pos", Vector2.ZERO)
+			survivor["infection_attacker"] = attacker_kind
+			survivor["infection_clinic_care_started"] = false
+			survivors[survivor_index] = survivor
+			var infection_alert: String = "PATHOGEN EXPOSURE: %s — 180S INCUBATION" % str(survivor.get("name", "SURVIVOR"))
+			radio_banner_text = infection_alert
+			radio_banner_timer = 6.0
+			radio_log.append("DAY %d — %s" % [survival_day, infection_alert])
+			message = infection_alert
+			message_timer = 3.0
+			_queue_sfx("infection")
+		return
+
+func _milestone15_tick_infections(delta: float) -> void:
+	var clinic_staff_count: int = 0
+	for staff in survivors:
+		if str(staff.get("ops_assignment", "")) == "INDOOR_CLINIC":
+			clinic_staff_count += 1
+	for survivor_index in range(survivors.size() - 1, -1, -1):
+		var survivor: Dictionary = survivors[survivor_index]
+		if not bool(survivor.get("infection_active", false)):
+			continue
+		var survivor_id: int = int(survivor.get("id", -1))
+		var unit_index: int = _milestone15_find_unit_index(survivor_id)
+		var infection_position: Vector2 = survivor.get("infection_position", Vector2.ZERO)
+		if unit_index >= 0:
+			infection_position = units[unit_index].get("pos", infection_position)
+			survivor["infection_position"] = infection_position
+		var staffed_clinic_nearby: bool = false
+		if clinic_staff_count > 0 and _milestone15_inside_outpost(infection_position):
+			for clinic in constructed_buildings:
+				if str(clinic.get("kind", "")) == "clinic" and infection_position.distance_to(clinic.get("pos", Vector2.ZERO)) <= 150.0:
+					staffed_clinic_nearby = true
+					break
+		var infection_rate: float = 1.0
+		if staffed_clinic_nearby:
+			infection_rate = 0.5
+			if not bool(survivor.get("infection_clinic_care_started", false)):
+				if int(weapons.get("medkits", 0)) > 0:
+					weapons["medkits"] = int(weapons.get("medkits", 0)) - 1
+				survivor["infection_clinic_care_started"] = true
+				if randf() < 0.35:
+					survivor["infection_active"] = false
+					survivor["infection_timer"] = 0.0
+					survivors[survivor_index] = survivor
+					var stabilized_alert: String = "CLINIC STABILIZED %s — INFECTION CLEARED" % str(survivor.get("name", "SURVIVOR"))
+					radio_banner_text = stabilized_alert
+					radio_banner_timer = 6.0
+					radio_log.append("DAY %d — %s" % [survival_day, stabilized_alert])
+					message = stabilized_alert
+					message_timer = 3.0
+					continue
+		survivor["infection_timer"] = maxf(0.0, float(survivor.get("infection_timer", 180.0)) - delta * infection_rate)
+		survivors[survivor_index] = survivor
+		if float(survivor["infection_timer"]) <= 0.0:
+			if zombies.size() < MAX_ACTIVE_ZOMBIES:
+				zombies.append({"pos": infection_position, "kind": "shambler", "hp": 45.0, "max_hp": 45.0, "wall_cooldown": 0.0, "turned_inside_outpost": _milestone15_inside_outpost(infection_position), "turned_survivor_id": survivor_id})
+			if unit_index >= 0:
+				units.remove_at(unit_index)
+				if selected_unit_index == unit_index:
+					selected_unit_index = -1
+				elif selected_unit_index > unit_index:
+					selected_unit_index -= 1
+			_milestone14_remove_casualty({"survivor_id": survivor_id})
+			var turned_alert: String = "%s TURNED — HOSTILE INSIDE THE PERIMETER" % str(survivor.get("name", "SURVIVOR"))
+			radio_banner_text = turned_alert
+			radio_banner_timer = 7.0
+			radio_log.append("DAY %d — %s" % [survival_day, turned_alert])
+			message = turned_alert
+			message_timer = 4.0
+			_save_operation()
 
 func _milestone14_return_squad_equipment(person: Dictionary) -> void:
 	var equipped: String = str(person.get("equipped_weapon", ""))
