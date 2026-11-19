@@ -189,15 +189,15 @@ jobs:
           APK_SHA256="$(sha256sum "$RELEASE_APK" | awk '{print $1}')"
           TAG="latest-android-apk"
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" "$RELEASE_APK" \\
-              --repo "$GITHUB_REPOSITORY" \\
-              --title "Latest Android Build" \\
+            gh release create "$TAG" "$RELEASE_APK" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Latest Android Build" \
               --notes "Commit $GITHUB_SHA"
           else
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \\
-              --title "Latest Android Build" \\
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Latest Android Build" \
               --notes "Commit $GITHUB_SHA"
-            gh release upload "$TAG" "$RELEASE_APK" \\
+            gh release upload "$TAG" "$RELEASE_APK" \
               --repo "$GITHUB_REPOSITORY" --clobber
           fi
           {
