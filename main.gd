@@ -1229,8 +1229,8 @@ func _outpost_rect_valid(rect: Rect2) -> bool:
 		var other_rect: Rect2 = outposts[outpost_index].get("rect", Rect2(outposts[outpost_index]["pos"] - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
 		if rect.intersects(other_rect.grow(40.0)):
 			return false
-	var edge: float = OUTPOST_WALL_THICKNESS + 8.0
-	var perimeter_bands: Array[Rect2] = [Rect2(rect.position, Vector2(rect.size.x, edge)), Rect2(rect.position, Vector2(edge, rect.size.y)), Rect2(Vector2(rect.end.x - edge, rect.position.y), Vector2(edge, rect.size.y)), Rect2(Vector2(rect.position.x, rect.end.y - edge), Vector2(rect.size.x, edge))]
+	var perimeter_edge: float = OUTPOST_WALL_THICKNESS + 8.0
+	var perimeter_bands: Array[Rect2] = [Rect2(rect.position, Vector2(rect.size.x, perimeter_edge)), Rect2(rect.position, Vector2(perimeter_edge, rect.size.y)), Rect2(Vector2(rect.end.x - perimeter_edge, rect.position.y), Vector2(perimeter_edge, rect.size.y)), Rect2(Vector2(rect.position.x, rect.end.y - perimeter_edge), Vector2(rect.size.x, perimeter_edge))]
 	for segment in highway_segments + secondary_road_segments:
 		var road_from: Vector2 = segment.get("from", Vector2.ZERO)
 		var road_to: Vector2 = segment.get("to", Vector2.ZERO)
@@ -1295,8 +1295,9 @@ func _update_outpost_placement_from_anchor(world_position: Vector2) -> void:
 	outpost_placement_rect = Rect2(top_left, size)
 	if outpost_placement_kind == "expand" and outpost_expanding_index >= 0 and outpost_expanding_index < outposts.size():
 		var current_rect: Rect2 = outposts[outpost_expanding_index].get("rect", outpost_placement_rect)
-		outpost_placement_rect = outpost_placement_rect.merge(current_rect)
-		outpost_placement_rect.size = _snap_outpost_size(outpost_placement_rect.size)
+		var merged_rect: Rect2 = outpost_placement_rect.merge(current_rect)
+		var expanded_size := Vector2(minf(OUTPOST_MAX_SIZE, ceilf(merged_rect.size.x / OUTPOST_SNAP) * OUTPOST_SNAP), minf(OUTPOST_MAX_SIZE, ceilf(merged_rect.size.y / OUTPOST_SNAP) * OUTPOST_SNAP))
+		outpost_placement_rect = Rect2(merged_rect.position, expanded_size)
 	outpost_placement_status = _outpost_placement_status()
 	outpost_placement_valid = outpost_placement_status == "VALID" and (outpost_placement_kind in ["hq", "expand"] or outposts.size() < OUTPOST_MAX_COUNT + 1)
 	queue_redraw()
@@ -1324,6 +1325,7 @@ func _confirm_outpost_placement() -> void:
 			if int(gates[gate_index].get("outpost_index", -1)) == outpost_expanding_index:
 				gates.remove_at(gate_index)
 		var newly_fortified: int = _fortify_enclosed_buildings(outpost_placement_rect, outpost_expanding_index)
+		expanded_outpost["fortified_buildings"] = _fortified_building_indices(outpost_expanding_index)
 		expanded_outpost["rect"] = outpost_placement_rect
 		expanded_outpost["pos"] = center
 		expanded_outpost["safe_radius"] = minf(size.x, size.y) * 0.42
@@ -1341,7 +1343,15 @@ func _confirm_outpost_placement() -> void:
 		queue_redraw()
 		return
 	if outpost_placement_kind == "hq":
-		var anchor_index: int = _milestone13_nearest_building(center, 520.0)
+		var anchor_index: int = -1
+		var anchor_distance: float = INF
+		for building_index in range(buildings.size()):
+			if not outpost_placement_rect.encloses(buildings[building_index]) or bool(building_archetypes[building_index].get("destroyed", false)):
+				continue
+			var building_distance: float = center.distance_squared_to(buildings[building_index].get_center())
+			if building_distance < anchor_distance:
+				anchor_distance = building_distance
+				anchor_index = building_index
 		if anchor_index < 0:
 			message = "NO BUILDING ENCLOSED"
 			message_timer = 2.0
@@ -2455,7 +2465,27 @@ func _spawn_pending_wave_spawns(delta: float, fill_available: bool = false) -> v
 func _spawn_one_wave_zombie() -> bool:
 	if zombies.size() >= MAX_ACTIVE_ZOMBIES or spawn_districts.is_empty():
 		return false
-	var district: Rect2 = spawn_districts[randi_range(0, spawn_districts.size() - 1)]
+	var district_weights: Array[float] = []
+	var total_district_weight: float = 0.0
+	for district_index in range(spawn_districts.size()):
+		var candidate_district: Rect2 = spawn_districts[district_index]
+		var district_weight: float = 1.0
+		for building in buildings:
+			if candidate_district.encloses(building):
+				district_weight += 0.12
+		for heat_target in population_heat_targets:
+			if candidate_district.has_point(heat_target.get("pos", Vector2.ZERO)):
+				district_weight += minf(8.0, float(heat_target.get("heat", 0.0)) * 0.08)
+		district_weights.append(district_weight)
+		total_district_weight += district_weight
+	var district_roll: float = randf() * total_district_weight
+	var chosen_district_index: int = 0
+	for district_index in range(district_weights.size()):
+		district_roll -= district_weights[district_index]
+		if district_roll <= 0.0:
+			chosen_district_index = district_index
+			break
+	var district: Rect2 = spawn_districts[chosen_district_index]
 	var spawn_point := Vector2.ZERO
 	var found_open_spawn := false
 	for attempt in range(16):
@@ -6160,7 +6190,16 @@ func _milestone151_update_population_heat(delta: float) -> void:
 			var distance: float = faction_pos.distance_to(noise.get("pos", Vector2.ZERO))
 			if distance < 1800.0:
 				faction_noise += float(noise.get("life", 0.0)) / 12.0 * maxf(0.0, 1.0 - distance / 1800.0)
-		var faction_heat: float = troop_count + faction_noise * 12.0
+		var faction_facilities: int = 0
+		for building_index in range(buildings.size()):
+			if faction_pos.distance_to(buildings[building_index].get_center()) > 650.0 or building_index >= building_archetypes.size():
+				continue
+			if bool(building_archetypes[building_index].get("destroyed", false)):
+				continue
+			var facility_kind: String = _building_type_at(building_index)
+			if facility_kind in ["FACTORY", "WAREHOUSE", "SUPERMARKET", "HOSPITAL", "FARM", "INDUSTRIAL"]:
+				faction_facilities += 1
+		var faction_heat: float = troop_count + float(faction_facilities) * 5.0 + faction_noise * 12.0
 		faction["population_heat"] = faction_heat
 		faction_settlements[faction_index] = faction
 		if not bool(faction.get("warband_defeated", false)):
