@@ -5490,15 +5490,40 @@ func _draw_text(value: String, position: Vector2, size: int, color: Color) -> vo
 		draw_string(screen_font, position, value, HORIZONTAL_ALIGNMENT_LEFT, -1.0, size, color)
 
 
-func _milestone14_name_for_id(citizen_id: int) -> String:
-	var first_prefix: Array[String] = ["Alex", "Sam", "Jo", "Mar", "El", "An", "Ka", "Ro", "Lu", "Mi"]
-	var first_suffix: Array[String] = ["ander", "ielle", "rden", "ina", "ton", "essa", "vin", "ra", "cas", "ley"]
-	var last_prefix: Array[String] = ["Ash", "Brook", "Cald", "Dun", "East", "Fair", "Gray", "Hale", "Iron", "Jord"]
-	var last_suffix: Array[String] = ["ford", "well", "ridge", "more", "field", "stone", "wood", "man", "ley", "croft"]
-	var safe_id: int = posmod(citizen_id, 10000)
-	var first_index: int = safe_id % 100
-	var last_index: int = int(safe_id / 100)
-	return first_prefix[int(first_index / 10)] + first_suffix[first_index % 10] + " " + last_prefix[int(last_index / 10)] + last_suffix[last_index % 10]
+const CITIZEN_FIRST_NAMES: Array[String] = ["Aaron", "Abigail", "Adam", "Aiden", "Alice", "Amelia", "Andre", "Angela", "Anika", "Aria", "Arthur", "Asha", "Audrey", "Benjamin", "Bianca", "Caleb", "Camila", "Carter", "Claire", "Daniel", "David", "Dean", "Devon", "Elena", "Elias", "Elise", "Ethan", "Evelyn", "Felix", "Fiona", "Gabriel", "Grace", "Hannah", "Harper", "Isaac", "Isabel", "Isaiah", "Jade", "James", "Jonah", "Jordan", "Joseph", "Julia", "Kai", "Kendra", "Kevin", "Leah", "Leo", "Liam", "Lina", "Lucas", "Lucia", "Marcus", "Maria", "Mateo", "Maya", "Micah", "Mina", "Nadia", "Naomi", "Nathan", "Nora", "Oliver", "Olivia", "Omar", "Owen", "Paige", "Peter", "Rafael", "Rebecca", "Riley", "Rowan", "Samuel", "Sarah", "Sofia", "Stella", "Talia", "Theo", "Thomas", "Tobias", "Victor", "Violet", "William", "Yara", "Yuki", "Zoe", "Adrian", "Alina", "Amara", "Ansel", "Asher", "Beatrice", "Bennett", "Briar", "Bruno", "Celeste", "Cesar", "Colin", "Damian", "Darius", "Delia", "Dominic", "Edith", "Emmett", "Esme", "Estelle", "Farah", "Finn", "Francesca", "Gideon", "Helena", "Hugo", "Imogen", "Imani", "Ingrid", "Javier", "Josiah", "Kieran", "Layla", "Leona"]
+const CITIZEN_LAST_NAMES: Array[String] = ["Ashford", "Alvarez", "Bennett", "Brooks", "Chen", "Clarke", "Costa", "Delgado", "Ellis", "Foster", "Garcia", "Haddad", "Hayes", "Ibrahim", "Kim", "Laurent", "Morales", "Navarro", "Okafor", "Patel", "Price", "Reyes", "Rivera", "Rostova", "Santos", "Shah", "Singh", "Tanaka", "Vance", "Walker", "Young", "Adams", "Anderson", "Bailey", "Baker", "Bell", "Bishop", "Carter", "Castillo", "Chavez", "Collins", "Cooper", "Cruz", "Davis", "Edwards", "Flores", "Ford", "Franklin", "Gomez", "Gonzalez", "Gray", "Green", "Griffin", "Hall", "Harris", "Howard", "Hughes", "Jackson", "Jenkins", "Johnson", "Kelly", "King", "Lee", "Lewis", "Long", "Martin", "Mason", "Mitchell", "Morgan", "Morris", "Murphy", "Nelson", "Ortiz", "Parker", "Perry", "Phillips", "Powell", "Ramirez", "Reed", "Richardson", "Roberts", "Robinson", "Rogers", "Ross", "Russell", "Scott", "Simmons", "Stewart", "Sullivan", "Taylor", "Thomas", "Thompson", "Torres", "Turner", "Ward", "Washington", "Watson", "White", "Williams", "Wilson", "Wood", "Wright", "Zhang", "Abbott", "Acosta", "Aguirre", "Alexander", "Allen", "Arias", "Armstrong", "Arnold", "Atkinson", "Austin", "Banks", "Barnes", "Barrett", "Bates", "Beck", "Becker", "Benson"]
+
+func _milestone14_gcd(a: int, b: int) -> int:
+	var left: int = absi(a)
+	var right: int = absi(b)
+	while right != 0:
+		var remainder: int = left % right
+		left = right
+		right = remainder
+	return maxi(1, left)
+
+func _milestone14_name_for_id(_citizen_id: int) -> String:
+	# A randomized coprime stride permutes all 14,400 combinations without replacement.
+	var combination_count: int = CITIZEN_FIRST_NAMES.size() * CITIZEN_LAST_NAMES.size()
+	for attempt in range(combination_count):
+		var combination_index: int = posmod(citizen_name_permutation_offset + citizen_name_permutation_cursor * citizen_name_permutation_stride, combination_count)
+		citizen_name_permutation_cursor += 1
+		var first_index: int = combination_index % CITIZEN_FIRST_NAMES.size()
+		var last_index: int = int(combination_index / CITIZEN_FIRST_NAMES.size())
+		var candidate: String = CITIZEN_FIRST_NAMES[first_index] + " " + CITIZEN_LAST_NAMES[last_index]
+		if used_citizen_names.has(candidate):
+			continue
+		var already_present: bool = false
+		for person in citizens:
+			if str(person.get("name", "")) == candidate:
+				already_present = true
+				break
+		if already_present:
+			used_citizen_names[candidate] = true
+			continue
+		used_citizen_names[candidate] = true
+		return candidate
+	return "Survivor %05d" % citizen_name_permutation_cursor
 
 func _milestone14_proficiency_bonus(unit: Dictionary, skill: String) -> float:
 	var survivor_id: int = int(unit.get("survivor_id", -1))
