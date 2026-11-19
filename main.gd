@@ -1239,12 +1239,15 @@ func _outpost_placement_wood_cost() -> int:
 	return maxi(0, new_segments - old_segments) * 2
 
 func _outpost_placement_status() -> String:
-	if not _outpost_rect_valid(outpost_placement_rect):
+	return _outpost_placement_status_for_rect(outpost_placement_rect)
+
+func _outpost_placement_status_for_rect(rect: Rect2) -> String:
+	if not _outpost_rect_geometry_valid(rect):
 		return "OVERLAPS ROAD/OUTPOST"
 	if outpost_placement_kind == "hq":
-		var enclosed_hq_building := false
+		var enclosed_hq_building: bool = false
 		for building_index in range(buildings.size()):
-			if outpost_placement_rect.encloses(buildings[building_index]) and not bool(building_archetypes[building_index].get("destroyed", false)):
+			if rect.encloses(buildings[building_index]) and not bool(building_archetypes[building_index].get("destroyed", false)):
 				enclosed_hq_building = true
 				break
 		if not enclosed_hq_building:
@@ -1256,7 +1259,64 @@ func _outpost_placement_status() -> String:
 		return "NOT ENOUGH WOOD/SCRAP"
 	return "VALID"
 
-func _snap_outpost_size(size: Vector2) -> Vector2:
+func _outpost_rect_valid(rect: Rect2) -> bool:
+	return _outpost_placement_status_for_rect(rect) == "VALID"
+
+func _outpost_rect_geometry_vafunc _outpost_placement_status() -> String:
+	return _outpost_placement_status_for_rect(outpost_placement_rect)
+
+func _outpost_placement_status_for_rect(rect: Rect2) -> String:
+	if not _outpost_rect_geometry_valid(rect):
+		return "OVERLAPS ROAD/OUTPOST"
+	if outpost_placement_kind == "hq":
+		var enclosed_hq_building: bool = false
+		for building_index in range(buildings.size()):
+			if rect.encloses(buildings[building_index]) and not bool(building_archetypes[building_index].get("destroyed", false)):
+				enclosed_hq_building = true
+				break
+		if not enclosed_hq_building:
+			return "NO BUILDING ENCLOSED"
+	var initial_convoy_hq: bool = outpost_placement_kind == "hq" and outposts.is_empty()
+	var required_wood: int = 0 if initial_convoy_hq else _outpost_placement_wood_cost()
+	var required_scrap: int = 0 if initial_convoy_hq else _outpost_placement_cost() + (0 if outpost_placement_kind in ["hq", "expand"] else 40)
+	if wood < required_wood or scrap < required_scrap:
+		return "NOT ENOUGH WOOD/SCRAP"
+	return "VALID"
+
+func _outpost_rect_valid(rect: Rect2) -> bool:
+	return _outpost_placement_status_for_rect(rect) == "VALID"
+
+func _outpost_rect_geometry_valid(rect: Rect2) -> bool:
+	if rect.position.x < 20.0 or rect.position.y < 20.0 or rect.end.x > WORLD_SIZE.x - 20.0 or rect.end.y > WORLD_SIZE.y - 20.0:
+		return false
+	var edge: float = OUTPOST_WALL_THICKNESS + 8.0
+	var edge_bands: Array[Rect2] = [Rect2(rect.position, Vector2(rect.size.x, edge)), Rect2(rect.position, Vector2(edge, rect.size.y)), Rect2(Vector2(rect.end.x - edge, rect.position.y), Vector2(edge, rect.size.y)), Rect2(Vector2(rect.position.x, rect.end.y - edge), Vector2(rect.size.x, edge))]
+	for index in range(buildings.size()):
+		var building: Rect2 = buildings[index]
+		if not rect.intersects(building) or rect.encloses(building):
+			continue
+		if _building_type_at(index) == "HIGHRISE":
+			for edge_band in edge_bands:
+				if edge_band.intersects(building):
+					return false
+	for outpost_index in range(outposts.size()):
+		if outpost_placement_kind == "expand" and outpost_index == outpost_expanding_index:
+			continue
+		var other_rect: Rect2 = outposts[outpost_index].get("rect", Rect2(outposts[outpost_index]["pos"] - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
+		if rect.intersects(other_rect.grow(40.0)):
+			return false
+	var perimeter_edge: float = OUTPOST_WALL_THICKNESS + 8.0
+	var perimeter_bands: Array[Rect2] = [Rect2(rect.position, Vector2(rect.size.x, perimeter_edge)), Rect2(rect.position, Vector2(perimeter_edge, rect.size.y)), Rect2(Vector2(rect.end.x - perimeter_edge, rect.position.y), Vector2(perimeter_edge, rect.size.y)), Rect2(Vector2(rect.position.x, rect.end.y - perimeter_edge), Vector2(rect.size.x, perimeter_edge))]
+	for segment in highway_segments + secondary_road_segments:
+		var road_from: Vector2 = segment.get("from", Vector2.ZERO)
+		var road_to: Vector2 = segment.get("to", Vector2.ZERO)
+		var road_width: float = float(segment.get("width", 48.0))
+		var road_rect: Rect2 = Rect2(road_from, road_to - road_from).abs().grow(road_width * 0.5 + 8.0)
+		for perimeter_band in perimeter_bands:
+			if road_rect.intersects(perimeter_band):
+				return false
+	return true
+ize(size: Vector2) -> Vector2:
 	return Vector2(clampf(roundf(size.x / OUTPOST_SNAP) * OUTPOST_SNAP, OUTPOST_MIN_SIZE, OUTPOST_MAX_SIZE), clampf(roundf(size.y / OUTPOST_SNAP) * OUTPOST_SNAP, OUTPOST_MIN_SIZE, OUTPOST_MAX_SIZE))
 
 func _outpost_rect_valid(rect: Rect2) -> bool:
@@ -1353,10 +1413,12 @@ func _update_outpost_placement_from_anchor(world_position: Vector2) -> void:
 
 func _confirm_outpost_placement() -> void:
 	var size: Vector2 = outpost_placement_rect.size
-	var cost: int = _outpost_placement_cost()
-	var wood_cost: int = _outpost_placement_wood_cost()
-	outpost_placement_status = _outpost_placement_status()
-	if not outpost_placement_valid or outpost_placement_status != "VALID":
+	var initial_convoy_hq: bool = outpost_placement_kind == "hq" and outposts.is_empty()
+	var cost: int = 0 if initial_convoy_hq else _outpost_placement_cost()
+	var wood_cost: int = 0 if initial_convoy_hq else _outpost_placement_wood_cost()
+	outpost_placement_status = _outpost_placement_status_for_rect(outpost_placement_rect)
+	outpost_placement_valid = outpost_placement_status == "VALID" and (outpost_placement_kind in ["hq", "expand"] or outposts.size() < OUTPOST_MAX_COUNT + 1)
+	if not outpost_placement_valid:
 		message = outpost_placement_status
 		message_timer = 1.8
 		return
@@ -2743,12 +2805,22 @@ func _handle_tap(pos: Vector2) -> void:
 		var title_size: Vector2 = _safe_viewport_size()
 		var manual_rect: Rect2 = _title_manual_button_rect(title_size)
 		if title_manual_open:
+			# Modal owns input before either title stage can process underlying cards.
 			title_manual_open = false
 			_queue_sfx("menu_click")
-		elif manual_rect.has_point(title_pos):
+			queue_redraw()
+			return
+		if manual_rect.has_point(title_pos):
 			title_manual_open = true
 			_queue_sfx("menu_click")
-		elif game_state == "title":
+			queue_redraw()
+			return
+		if _title_sfx_button_rect(title_size).has_point(title_pos):
+			sfx_enabled = not sfx_enabled
+			_queue_sfx("menu_click")
+			queue_redraw()
+			return
+		if game_state == "title":
 			var resume_rect := Rect2(title_size.x * 0.08, title_size.y * 0.37, title_size.x * 0.84, 126.0)
 			var deploy_rect := Rect2(title_size.x * 0.14, title_size.y * 0.57, title_size.x * 0.72, 78.0)
 			if _has_valid_save() and resume_rect.has_point(title_pos):
@@ -3478,91 +3550,131 @@ func _get_title_save_preview() -> Dictionary:
 		population += saved_survivors.size()
 	return {"day": int(state.get("survival_day", 1)), "clock": clock_text, "population": population}
 
+func _title_ui_scale(title_size: Vector2) -> float:
+	return clampf(title_size.x / 720.0, 0.82, 1.55)
+
 func _title_manual_button_rect(title_size: Vector2) -> Rect2:
-	# Shared by rendering and touch input; always exceeds the 48 dp minimum target.
-	var button_height: float = maxf(64.0, title_size.y * 0.075)
-	return Rect2(title_size.x * 0.18, title_size.y * 0.835, title_size.x * 0.64, button_height)
+	var button_height: float = maxf(64.0, title_size.y * 0.058)
+	return Rect2(title_size.x * 0.055, title_size.y * 0.815, title_size.x * 0.43, button_height)
+
+func _title_sfx_button_rect(title_size: Vector2) -> Rect2:
+	var button_height: float = maxf(64.0, title_size.y * 0.058)
+	return Rect2(title_size.x * 0.515, title_size.y * 0.815, title_size.x * 0.43, button_height)
+
+func _title_manual_panel_rect(title_size: Vector2) -> Rect2:
+	var panel_size: Vector2 = Vector2(minf(title_size.x * 0.90, 680.0), minf(title_size.y * 0.62, 620.0))
+	return Rect2((title_size - panel_size) * 0.5, panel_size)
+
+func _title_manual_close_rect(title_size: Vector2) -> Rect2:
+	var panel: Rect2 = _title_manual_panel_rect(title_size)
+	return Rect2(panel.position.x + 20.0, panel.end.y - 78.0, panel.size.x - 40.0, 58.0)
+
+func _title_sector_card_rect(title_size: Vector2, index: int) -> Rect2:
+	var stack_top: float = title_size.y * 0.395
+	var stack_height: float = title_size.y * 0.385
+	var gap: float = 14.0
+	var card_height: float = (stack_height - gap * 2.0) / 3.0
+	return Rect2(title_size.x * 0.055, stack_top + float(index) * (card_height + gap), title_size.x * 0.89, card_height)
 
 func _draw_field_manual(title_size: Vector2) -> void:
 	if not title_manual_open:
 		return
-	var panel_size := Vector2(title_size.x * 0.88, minf(510.0, title_size.y * 0.66))
-	var panel := Rect2((title_size - panel_size) * 0.5, panel_size)
-	draw_rect(Rect2(Vector2.ZERO, title_size), Color(0.0, 0.01, 0.01, 0.80))
-	draw_rect(panel, Color("#0b1b19"))
-	draw_rect(panel, Color("#91ddb0"), false, 2.0)
-	_draw_text("QUICK FIELD MANUAL", panel.position + Vector2(22.0, 42.0), 23, Color("#e8fff0"))
+	var panel: Rect2 = _title_manual_panel_rect(title_size)
+	var ui_scale: float = _title_ui_scale(title_size)
+	draw_rect(Rect2(Vector2.ZERO, title_size), Color(0.0, 0.01, 0.01, 0.84))
+	draw_rect(panel.grow(5.0), Color("#37694e", 0.55))
+	draw_rect(panel, Color("#0b1b19", 0.99))
+	draw_rect(panel, Color("#91ddb0"), false, 2.5)
+	_draw_text("QUICK FIELD MANUAL", panel.position + Vector2(24.0, 48.0 * ui_scale), roundi(25.0 * ui_scale), Color("#e8fff0"))
 	var rules: Array[String] = [
 		"1. ENCLOSE BUILDINGS FOR HQ",
-		"   Build a perimeter around an intact structure.",
+		"Build a perimeter around an intact structure.",
 		"2. ASSIGN INDOOR / OUTDOOR WORKERS",
-		"   Balance shelter, production and scavenging.",
-		"3. LOOT / CRAFT WEAPONS FOR 8-UNIT RAID SQUADS",
-		"   Equip survivors before sending squads beyond the walls.",
+		"Balance shelter, production and scavenging.",
+		"3. LOOT / CRAFT WEAPONS FOR RAID SQUADS",
+		"Equip survivors before sending squads beyond the walls.",
 		"4. WATCH POPULATION NOISE & NIGHT SURGES",
-		"   Gunfire and dense settlements draw infected toward you."
+		"Gunfire and dense settlements draw infected toward you."
 	]
 	for index in range(rules.size()):
-		var y: float = panel.position.y + 94.0 + float(index) * 42.0
-		var is_heading: bool = index % 2 == 0
-		_draw_text(rules[index], panel.position + Vector2(22.0, y - panel.position.y), 12 if is_heading else 10, Color("#baf2cb") if is_heading else Color("#a8c2b5"))
-	var close_rect := Rect2(panel.position.x + 20.0, panel.end.y - 76.0, panel.size.x - 40.0, 54.0)
+		var y: float = panel.position.y + 104.0 * ui_scale + float(index) * 38.0 * ui_scale
+		var heading: bool = index % 2 == 0
+		_draw_text(rules[index], panel.position + Vector2(24.0, y - panel.position.y), roundi((13.0 if heading else 11.0) * ui_scale), Color("#baf2cb") if heading else Color("#a8c2b5"))
+	var close_rect: Rect2 = _title_manual_close_rect(title_size)
 	draw_rect(close_rect, Color("#24583c"))
 	draw_rect(close_rect, Color("#8ce5ad"), false, 2.0)
-	_draw_text("[CLOSE FIELD MANUAL]", close_rect.position + Vector2(16.0, 34.0), 14, Color("#f0fff5"))
+	_draw_text("[CLOSE MANUAL]", close_rect.position + Vector2(18.0, close_rect.size.y * 0.65), roundi(16.0 * ui_scale), Color("#f0fff5"))
 
 func _draw_title_screen() -> void:
 	var title_size: Vector2 = _safe_viewport_size()
-	var scale_factor: float = clampf(minf(title_size.x / 640.0, title_size.y / 1040.0), 0.72, 1.0)
-	var panel := Rect2(title_size.x * 0.035, title_size.y * 0.025, title_size.x * 0.93, title_size.y * 0.94)
-	draw_rect(panel, Color(0.015, 0.045, 0.04, 0.91))
+	var ui_scale: float = _title_ui_scale(title_size)
+	var panel: Rect2 = Rect2(title_size.x * 0.025, title_size.y * 0.025, title_size.x * 0.95, title_size.y * 0.95)
+	draw_rect(panel, Color(0.015, 0.045, 0.04, 0.94))
 	draw_rect(panel, Color("#5c9273"), false, 2.0)
-	_draw_containment_emblem(Vector2(title_size.x * 0.5, title_size.y * 0.105), 35.0 * scale_factor)
-	_draw_text("CONTAINMENT PROTOCOL", Vector2(title_size.x * 0.10, title_size.y * 0.205), roundi(27.0 * scale_factor), Color("#f0fff5"))
-	_draw_text("STATE EXCLUSION ZONE // SURVIVAL COMMAND", Vector2(title_size.x * 0.085, title_size.y * 0.245), roundi(10.0 * scale_factor), Color("#a9c8b7"))
-	if best_days_survived > 0 or best_civilians_saved > 0:
-		_draw_text("CAREER RECORD  //  BEST SURVIVAL: DAY %d  |  SAVED: %03d" % [best_days_survived, best_civilians_saved], Vector2(title_size.x * 0.09, title_size.y * 0.295), roundi(10.0 * scale_factor), Color("#f0d98c"))
+
+	# HERO: 14%-36% safe-area band.
+	var emblem_radius: float = minf(title_size.x * 0.075, 58.0 * ui_scale)
+	_draw_containment_emblem(Vector2(title_size.x * 0.5, title_size.y * 0.185), emblem_radius)
+	_draw_text("CONTAINMENT PROTOCOL", Vector2(title_size.x * 0.07, title_size.y * 0.285), roundi(34.0 * ui_scale), Color("#f0fff5"))
+	draw_rect(Rect2(title_size.x * 0.28, title_size.y * 0.315, title_size.x * 0.44, maxf(3.0, 3.0 * ui_scale)), Color("#75d99a"))
+	_draw_text("STATE EXCLUSION ZONE // SURVIVAL COMMAND", Vector2(title_size.x * 0.12, title_size.y * 0.345), roundi(11.0 * ui_scale), Color("#a9c8b7"))
+	var career_text: String = "CAREER RECORD  //  BEST DAY %d  |  SAVED %03d" % [best_days_survived, best_civilians_saved]
+	var career_width: float = minf(title_size.x * 0.72, 520.0 * ui_scale)
+	var career_rect: Rect2 = Rect2((title_size.x - career_width) * 0.5, title_size.y * 0.365, career_width, maxf(34.0, 34.0 * ui_scale))
+	draw_rect(career_rect, Color("#243c30"))
+	draw_rect(career_rect, Color("#927c42"), false, 1.0)
+	_draw_text(career_text, career_rect.position + Vector2(12.0, career_rect.size.y * 0.68), roundi(10.0 * ui_scale), Color("#f0d98c"))
+
+	# COMMAND / DISTRICT STACK: 39%-78% safe-area band.
 	if game_state == "title":
 		var preview: Dictionary = _get_title_save_preview()
+		var command_rect: Rect2 = Rect2(title_size.x * 0.055, title_size.y * 0.405, title_size.x * 0.89, title_size.y * 0.34)
+		draw_rect(command_rect, Color("#102a23", 0.97))
+		draw_rect(command_rect, Color("#6fba8b"), false, 2.0)
+		draw_rect(Rect2(command_rect.position, Vector2(7.0, command_rect.size.y)), Color("#63c88b"))
+		_draw_text("FIELD COMMAND", command_rect.position + Vector2(22.0, 42.0 * ui_scale), roundi(18.0 * ui_scale), Color("#e8fff0"))
 		if not preview.is_empty():
-			var resume_rect := Rect2(title_size.x * 0.08, title_size.y * 0.37, title_size.x * 0.84, 126.0)
-			draw_rect(resume_rect, Color("#273e32"))
-			draw_rect(resume_rect, Color("#e4c66d"), false, 3.0)
-			_draw_text("[RESUME OPERATION]", resume_rect.position + Vector2(16.0, 31.0), roundi(17.0 * scale_factor), Color("#fff1bd"))
-			_draw_text("SURVIVAL DAY %02d   //   CLOCK %s   //   ACTIVE POPULATION %03d" % [int(preview["day"]), str(preview["clock"]), int(preview["population"])], resume_rect.position + Vector2(16.0, 68.0), roundi(10.0 * scale_factor), Color("#f3f6dc"))
-			_draw_text("CONTINUE YOUR LAST FIELD OPERATION", resume_rect.position + Vector2(16.0, 99.0), roundi(9.0 * scale_factor), Color("#c1d8c8"))
-		var deploy_rect := Rect2(title_size.x * 0.14, title_size.y * 0.57, title_size.x * 0.72, 78.0)
-		draw_rect(deploy_rect, Color("#1d5939"))
-		draw_rect(deploy_rect, Color("#79e7a4"), false, 2.5)
-		_draw_text("[DEPLOY CONVOY]", deploy_rect.position + Vector2(22.0, 48.0), roundi(19.0 * scale_factor), Color("#f0fff5"))
+			_draw_text("RESUME OPERATION  //  DAY %02d  //  POPULATION %03d" % [int(preview["day"]), int(preview["population"])], command_rect.position + Vector2(22.0, 82.0 * ui_scale), roundi(13.0 * ui_scale), Color("#fff1bd"))
+			_draw_text("LOCAL CLOCK  %s" % str(preview["clock"]), command_rect.position + Vector2(22.0, 112.0 * ui_scale), roundi(11.0 * ui_scale), Color("#c1d8c8"))
+		var launch_rect: Rect2 = Rect2(command_rect.position.x + 18.0, command_rect.end.y - maxf(78.0, 78.0 * ui_scale), command_rect.size.x - 36.0, maxf(62.0, 62.0 * ui_scale))
+		draw_rect(launch_rect, Color("#245b3c"))
+		draw_rect(launch_rect, Color("#91ddb0"), false, 2.0)
+		var launch_label: String = "[RESUME]" if not preview.is_empty() else "[LAUNCH]"
+		_draw_text(launch_label, launch_rect.position + Vector2(launch_rect.size.x * 0.34, launch_rect.size.y * 0.66), roundi(20.0 * ui_scale), Color("#f0fff5"))
+		if not preview.is_empty():
+			_draw_text("NEW OPERATION", command_rect.position + Vector2(22.0, command_rect.size.y * 0.62), roundi(11.0 * ui_scale), Color("#a8c2b5"))
 	else:
-		_draw_text("SELECT OPERATIONAL DISTRICT", Vector2(title_size.x * 0.09, title_size.y * 0.335), roundi(17.0 * scale_factor), Color("#d8eee0"))
+		_draw_text("SELECT OPERATIONAL DISTRICT", Vector2(title_size.x * 0.08, title_size.y * 0.395), roundi(18.0 * ui_scale), Color("#d8eee0"))
 		var names: Array[String] = ["SUBURBAN OUTSKIRTS", "MEDICAL & URBAN CORE", "INDUSTRIAL HIGHWAY"]
-		var resource_ratings: Array[String] = ["SUPPLIES  HIGH  //  FOOD  HIGH", "MEDICAL  HIGH  //  SCRAP  MEDIUM", "FUEL  HIGH  //  MATERIALS  HIGH"]
-		var threat_ratings: Array[int] = [2, 4, 3]
+		var resources: Array[String] = ["SUPPLIES HIGH  /  FOOD HIGH", "MEDICAL HIGH  /  SCRAP MEDIUM", "FUEL HIGH  /  MATERIALS HIGH"]
 		var details: Array[String] = ["LOW-DENSITY STREETS  /  BALANCED THREAT", "DENSE BLOCKS  /  HOSPITALS  /  HIGH THREAT", "WAREHOUSES  /  HIGHWAY CHOKEPOINTS"]
-		var card_height: float = minf(150.0, title_size.y * 0.145)
-		var card_gap: float = 14.0
+		var threat: Array[int] = [2, 4, 3]
 		for index in range(3):
-			var card_rect := Rect2(title_size.x * 0.06, title_size.y * 0.36 + float(index) * (card_height + card_gap), title_size.x * 0.88, card_height)
-			draw_rect(card_rect, Color("#102a23", 0.96))
-			draw_rect(card_rect, Color("#6fba8b"), false, 2.0)
-			_draw_text("%02d  %s" % [index + 1, names[index]], card_rect.position + Vector2(12.0, 27.0), roundi(13.0 * scale_factor), Color("#e8fff0"))
-			_draw_text(resource_ratings[index], card_rect.position + Vector2(12.0, 53.0), roundi(9.0 * scale_factor), Color("#b7d7c2"))
-			_draw_text(details[index], card_rect.position + Vector2(12.0, 76.0), roundi(8.0 * scale_factor), Color("#8eaa99"))
-			_draw_text("THREAT", card_rect.position + Vector2(12.0, 103.0), roundi(8.0 * scale_factor), Color("#e2b2a4"))
+			var card: Rect2 = _title_sector_card_rect(title_size, index)
+			draw_rect(card, Color("#102a23", 0.97))
+			draw_rect(card, Color("#6fba8b"), false, 2.0)
+			draw_rect(Rect2(card.position, Vector2(7.0, card.size.y)), Color("#d18d62") if index == 1 else Color("#65c98b"))
+			_draw_text("%02d  %s" % [index + 1, names[index]], card.position + Vector2(20.0, card.size.y * 0.28), roundi(16.0 * ui_scale), Color("#e8fff0"))
+			_draw_text(resources[index], card.position + Vector2(20.0, card.size.y * 0.49), roundi(11.0 * ui_scale), Color("#b7d7c2"))
+			_draw_text(details[index], card.position + Vector2(20.0, card.size.y * 0.66), roundi(10.0 * ui_scale), Color("#8eaa99"))
+			_draw_text("THREAT", card.position + Vector2(20.0, card.size.y * 0.86), roundi(9.0 * ui_scale), Color("#e2b2a4"))
 			for pip in range(5):
-				var pip_color: Color = Color("#e45c50") if pip < threat_ratings[index] else Color("#46574f")
-				draw_circle(card_rect.position + Vector2(74.0 + float(pip) * 15.0, 99.0), 4.5, pip_color)
-			var launch_rect := Rect2(card_rect.end.x - 166.0, card_rect.position.y + card_rect.size.y - 58.0, 154.0, 48.0)
+				var pip_color: Color = Color("#e45c50") if pip < threat[index] else Color("#46574f")
+				draw_circle(card.position + Vector2(92.0 + float(pip) * 16.0, card.size.y * 0.84), 5.0 * ui_scale, pip_color)
+			var launch_rect: Rect2 = Rect2(card.end.x - 150.0 * ui_scale, card.end.y - 58.0 * ui_scale, 132.0 * ui_scale, 44.0 * ui_scale)
 			draw_rect(launch_rect, Color("#245b3c"))
 			draw_rect(launch_rect, Color("#91ddb0"), false, 1.5)
-			_draw_text("[DEPLOY CONVOY]", launch_rect.position + Vector2(8.0, 30.0), roundi(10.0 * scale_factor), Color("#f0fff5"))
-	var manual_button: Rect2 = _title_manual_button_rect(title_size)
-	draw_rect(manual_button, Color("#173b2b", 0.96))
-	draw_rect(manual_button, Color("#79c995"), false, 2.0)
-	_draw_text("[FIELD MANUAL]", Vector2(title_size.x * 0.31, manual_button.position.y + manual_button.size.y * 0.66), roundi(14.0 * scale_factor), Color("#c9e6d1"))
-	_draw_text("TACTICAL RESPONSE COMMAND  //  SECURE THE EXCLUSION ZONE", Vector2(title_size.x * 0.07, title_size.y * 0.925), roundi(8.0 * scale_factor), Color("#6e9680"))
+			_draw_text("[LAUNCH]", launch_rect.position + Vector2(launch_rect.size.x * 0.20, launch_rect.size.y * 0.68), roundi(12.0 * ui_scale), Color("#f0fff5"))
+
+	var manual_rect: Rect2 = _title_manual_button_rect(title_size)
+	var sfx_rect: Rect2 = _title_sfx_button_rect(title_size)
+	draw_rect(manual_rect, Color("#173b2b", 0.98))
+	draw_rect(manual_rect, Color("#79c995"), false, 2.0)
+	_draw_text("[FIELD MANUAL]", manual_rect.position + Vector2(18.0, manual_rect.size.y * 0.65), roundi(14.0 * ui_scale), Color("#c9e6d1"))
+	draw_rect(sfx_rect, Color("#173b2b", 0.98))
+	draw_rect(sfx_rect, Color("#79c995"), false, 2.0)
+	_draw_text("[SFX: %s]" % ("ON" if sfx_enabled else "OFF"), sfx_rect.position + Vector2(18.0, sfx_rect.size.y * 0.65), roundi(14.0 * ui_scale), Color("#c9e6d1"))
+	_draw_text("TACTICAL RESPONSE COMMAND  //  SECURE THE EXCLUSION ZONE", Vector2(title_size.x * 0.07, title_size.y * 0.925), roundi(9.0 * ui_scale), Color("#6e9680"))
 	_draw_field_manual(title_size)
 
 func _draw_pause_overlay() -> void:
