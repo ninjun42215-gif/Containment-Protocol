@@ -1030,7 +1030,7 @@ func _update_building_effects(delta: float) -> void:
 					continue
 				var ally: Dictionary = units[ally_index]
 				if unit["pos"].distance_squared_to(ally["pos"]) <= 110.0 * 110.0:
-					ally["hp"] = minf(float(ally.get("max_hp", 100.0)), float(ally.get("hp", 100.0)) + 6.0 * delta)
+					ally["hp"] = minf(float(ally.get("max_hp", 100.0)), float(ally.get("hp", 100.0)) + 6.0 * delta * _milestone14_proficiency_bonus(unit, "medical"))
 					for survivor_index in range(survivors.size()):
 						if int(survivors[survivor_index].get("id", -2)) == int(unit.get("survivor_id", -1)):
 							survivors[survivor_index]["medical_xp"] = int(survivors[survivor_index].get("medical_xp", 0)) + 1
@@ -4428,7 +4428,7 @@ func _milestone13_tick_construction(delta: float) -> void:
 		for unit in units:
 			var worker_kind: String = str(unit.get("kind", ""))
 			if not bool(unit.get("garrisoned", false)) and unit["pos"].distance_to(site.get("pos", Vector2.ZERO)) <= 56.0 and worker_kind in ["worker", "engineer"]:
-				rate += 2.0 if worker_kind == "engineer" else 1.0
+				rate += (2.0 if worker_kind == "engineer" else 1.0) * _milestone14_proficiency_bonus(unit, "engineering")
 		if rate > 0.0:
 			site["progress"] = minf(100.0, float(site.get("progress", 0.0)) + delta * rate * 4.0)
 			if float(site["progress"]) >= 100.0:
@@ -4945,7 +4945,11 @@ func _milestone14_initialize_citizens() -> void:
 		citizens.append(person.duplicate(true))
 
 func _milestone14_add_refugee(expertise_hint: String = "") -> void:
-	var next_id: int = citizens.size()
+	var next_id: int = 1
+	for existing_person in citizens:
+		next_id = maxi(next_id, int(existing_person.get("id", 0)) + 1)
+	if next_id >= 10000:
+		next_id = posmod(next_id, 10000)
 	var full_name: String = _milestone14_name_for_id(next_id)
 	for attempt in range(10000):
 		var exists := false
@@ -4983,8 +4987,10 @@ func _milestone14_adjust_allocation(category: String, delta: int) -> void:
 		var chosen: Dictionary = survivors[candidates[0]]
 		if category == "ENGINEERS":
 			chosen["role"] = "ENGINEER"
+			chosen["assignment_category"] = "ENGINEERS"
 		elif category == "GATHERERS" or category == "FACILITY":
 			chosen["role"] = "WORKER"
+			chosen["assignment_category"] = category
 		elif category == "SQUAD" and int(weapons.get("rifles", 0)) > 0:
 			chosen["role"] = "INFANTRY"
 			chosen["equipped_weapon"] = "rifles"
@@ -5018,6 +5024,7 @@ func _milestone14_create_raid_squad() -> void:
 		message = "ALLOCATE ARMED SURVIVORS BEFORE FORMING A SQUAD"
 	else:
 		raid_squads.append({"id": raid_squads.size() + 1, "members": members, "name": "RAID SQUAD %02d" % (raid_squads.size() + 1)})
+		role_allocations["SQUAD"] = raid_squads.size()
 		message = "RAID SQUAD FORMED — %d MEMBERS" % members.size()
 	message_timer = 1.8
 	_save_operation()
