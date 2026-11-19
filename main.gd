@@ -2821,22 +2821,22 @@ func _handle_tap(pos: Vector2) -> void:
 			queue_redraw()
 			return
 		if game_state == "title":
-			var resume_rect := Rect2(title_size.x * 0.08, title_size.y * 0.37, title_size.x * 0.84, 126.0)
-			var deploy_rect := Rect2(title_size.x * 0.14, title_size.y * 0.57, title_size.x * 0.72, 78.0)
-			if _has_valid_save() and resume_rect.has_point(title_pos):
-				_queue_sfx("menu_click")
-				_resume_operation()
-			elif deploy_rect.has_point(title_pos):
-				menu_transition_action = "sector_select"
-				menu_transition_timer = 0.24
-				menu_fade_alpha = 0.0
-				_queue_sfx("radar")
+			var preview: Dictionary = _get_title_save_preview()
+			var command_rect: Rect2 = Rect2(title_size.x * 0.055, title_size.y * 0.405, title_size.x * 0.89, title_size.y * 0.34)
+			var ui_scale: float = _title_ui_scale(title_size)
+			var launch_rect: Rect2 = Rect2(command_rect.position.x + 18.0, command_rect.end.y - maxf(78.0, 78.0 * ui_scale), command_rect.size.x - 36.0, maxf(62.0, 62.0 * ui_scale))
+			if launch_rect.has_point(title_pos):
+				if not preview.is_empty():
+					_queue_sfx("menu_click")
+					_resume_operation()
+				else:
+					menu_transition_action = "sector_select"
+					menu_transition_timer = 0.24
+					menu_fade_alpha = 0.0
+					_queue_sfx("radar")
 		else:
-			var card_top: float = title_size.y * 0.36
-			var card_height: float = minf(150.0, title_size.y * 0.145)
-			var card_gap: float = 14.0
 			for sector in range(3):
-				var card_rect := Rect2(title_size.x * 0.06, card_top + float(sector) * (card_height + card_gap), title_size.x * 0.88, card_height)
+				var card_rect: Rect2 = _title_sector_card_rect(title_size, sector)
 				if card_rect.has_point(title_pos):
 					menu_transition_action = "deploy"
 					menu_transition_sector = sector
@@ -3570,8 +3570,8 @@ func _title_manual_close_rect(title_size: Vector2) -> Rect2:
 	return Rect2(panel.position.x + 20.0, panel.end.y - 78.0, panel.size.x - 40.0, 58.0)
 
 func _title_sector_card_rect(title_size: Vector2, index: int) -> Rect2:
-	var stack_top: float = title_size.y * 0.395
-	var stack_height: float = title_size.y * 0.385
+	var stack_top: float = title_size.y * 0.425
+	var stack_height: float = title_size.y * 0.355
 	var gap: float = 14.0
 	var card_height: float = (stack_height - gap * 2.0) / 3.0
 	return Rect2(title_size.x * 0.055, stack_top + float(index) * (card_height + gap), title_size.x * 0.89, card_height)
@@ -3580,7 +3580,7 @@ func _draw_field_manual(title_size: Vector2) -> void:
 	if not title_manual_open:
 		return
 	var panel: Rect2 = _title_manual_panel_rect(title_size)
-	var ui_scale: float = _title_ui_scale(title_size)
+	var ui_scale: float = minf(_title_ui_scale(title_size), panel.size.y / 560.0)
 	draw_rect(Rect2(Vector2.ZERO, title_size), Color(0.0, 0.01, 0.01, 0.84))
 	draw_rect(panel.grow(5.0), Color("#37694e", 0.55))
 	draw_rect(panel, Color("#0b1b19", 0.99))
