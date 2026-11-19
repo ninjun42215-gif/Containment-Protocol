@@ -5711,11 +5711,11 @@ func _milestone15_handle_ops_tap(position: Vector2) -> bool:
 	if close_rect.has_point(position):
 		ops_monitor_open = false
 		return true
-	var action_y: float = panel.position.y + 324.0
+	var action_y: float = panel.position.y + 340.0
 	if position.y >= action_y and position.y <= action_y + 48.0:
 		_milestone15_dispatch_recall_all(position.x < panel.position.x + panel.size.x * 0.5)
 		return true
-	var start_y: float = panel.position.y + 116.0
+	var start_y: float = panel.position.y + 132.0
 	if position.y >= start_y and position.y < start_y + 200.0:
 		var column_width: float = (panel.size.x - 24.0) * 0.5
 		var column: int = 0 if position.x < panel.position.x + 8.0 + column_width else 1
@@ -5744,10 +5744,11 @@ func _milestone15_apply_pathogen_exposure(unit_index: int, attacker_kind: String
 			return
 		var max_hp: float = maxf(1.0, float(unit.get("max_hp", 100.0)))
 		var remaining_hp: float = clampf(float(unit.get("hp", max_hp)) / max_hp, 0.0, 1.0)
+		var natural_immunity_roll: bool = randf() < 0.08
 		var turn_risk: float = 0.75 if attacker_kind == "brute" else (0.40 if remaining_hp > 0.65 else (0.50 if remaining_hp >= 0.30 else 0.65))
-		if randf() > turn_risk:
+		if not natural_immunity_roll and randf() > turn_risk:
 			return
-		if randf() < 0.08:
+		if natural_immunity_roll:
 			traits.append("IMMUNE")
 			survivor["traits"] = traits
 			survivor["max_hp"] = float(survivor.get("max_hp", max_hp)) * 1.15
