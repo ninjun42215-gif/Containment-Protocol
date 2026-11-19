@@ -4968,6 +4968,9 @@ func _milestone14_add_refugee(expertise_hint: String = "", recruit_to_workforce:
 	citizens.append(refugee)
 	if recruit_to_workforce:
 		survivors.append(refugee.duplicate(true))
+		if not outposts.is_empty():
+			var recruit_origin: Vector2 = _outpost_recruit_spawn(0, outposts[0]["pos"])
+			units.append({"id": _next_unit_id(), "survivor_id": next_id, "pos": recruit_origin, "kind": "worker", "cooldown": 0.2, "hp": 100.0, "max_hp": 100.0, "kills": 0, "rank": 0, "garrisoned": false, "garrison_building": -1, "move_target": null, "manual_order": false, "ai_task": "", "steering": {}})
 
 func _milestone14_adjust_allocation(category: String, delta: int) -> void:
 	if not role_allocations.has(category):
