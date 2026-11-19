@@ -1444,26 +1444,14 @@ func _confirm_outpost_placement() -> void:
 			message_timer = 1.8
 			return
 		var expanded_outpost: Dictionary = outposts[outpost_expanding_index]
-		for wall_index in range(barricades.size() - 1, -1, -1):
-			if int(barricades[wall_index].get("outpost_index", -1)) == outpost_expanding_index:
-				barricades.remove_at(wall_index)
-		for gate_index in range(gates.size() - 1, -1, -1):
-			if int(gates[gate_index].get("outpost_index", -1)) == outpost_expanding_index:
-				gates.remove_at(gate_index)
-		var newly_fortified: int = _fortify_enclosed_buildings(outpost_placement_rect, outpost_expanding_index)
-		expanded_outpost["fortified_buildings"] = _fortified_building_indices(outpost_expanding_index)
 		expanded_outpost["rect"] = outpost_placement_rect
-		expanded_outpost["pos"] = center
-		expanded_outpost["safe_radius"] = minf(size.x, size.y) * 0.42
-		expanded_outpost["capacity"] = int(expanded_outpost.get("capacity", 12)) + newly_fortified * 8
+		expanded_outpost["territory_rect"] = outpost_placement_rect
+		expanded_outpost["safe_radius"] = maxf(size.x, size.y) * 0.5
 		outposts[outpost_expanding_index] = expanded_outpost
-		_create_outpost_perimeter(outpost_placement_rect, outpost_expanding_index)
-		wood -= wood_cost
-		scrap -= cost
-		message = "OUTPOST PERIMETER EXPANDED — +%d SHELTER" % (newly_fortified * 8)
 		outpost_expanding_index = -1
 		outpost_placement_active = false
 		outpost_placement_dragging = false
+		message = "TERRITORY EXPANDED FREE — OPEN BORDERS / NO WALLS BUILT"
 		message_timer = 2.5
 		_save_operation()
 		queue_redraw()
@@ -2722,7 +2710,7 @@ func _input(event: InputEvent) -> void:
 					work_zone_start = touch_world
 					work_zone_current = touch_world
 					return
-				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and touch_pos.y < _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and touch_pos.y > safe_insets.y + 520.0 and touch_pos.y < _safe_bottom_y(260.0) and command_tab == 0 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
+				var can_start_placement: bool = not outpost_placement_active and game_state == "playing" and touch_pos.y > safe_insets.y + 520.0 and touch_pos.y < _safe_bottom_y(260.0) and command_tab == 0 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"
 				if can_start_placement:
 					_begin_outpost_placement(touch_world, "hq" if game_state == "hq_placement" else "outpost")
 				elif outpost_placement_active:
@@ -2806,7 +2794,7 @@ func _input(event: InputEvent) -> void:
 		if mouse.button_index == MOUSE_BUTTON_LEFT:
 			if mouse.pressed:
 				var mouse_world: Vector2 = _screen_to_world(mouse_pos)
-				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and mouse_pos.y < _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and mouse_pos.y > safe_insets.y + 520.0 and mouse_pos.y < _safe_bottom_y(260.0) and command_tab == 0 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
+				var can_start_placement: bool = not outpost_placement_active and game_state == "playing" and mouse_pos.y > safe_insets.y + 520.0 and mouse_pos.y < _safe_bottom_y(260.0) and command_tab == 0 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"
 				if can_start_placement:
 					_begin_outpost_placement(mouse_world, "hq" if game_state == "hq_placement" else "outpost")
 				elif outpost_placement_active:
@@ -4081,7 +4069,7 @@ func _draw_outpost_placement_hud(top: float) -> void:
 	draw_rect(Rect2(safe_left, top, half_width - 6.0, touch_target_size), confirm_color)
 	draw_rect(Rect2(safe_left, top, half_width - 6.0, touch_target_size), Color("#72d69a") if outpost_placement_valid else Color("#ff6868"), false, 2.0)
 	var initial_convoy_hq: bool = outpost_placement_kind == "hq" and outposts.is_empty()
-	var confirm_label: String = "[CONFIRM HQ — FREE (CONVOY HQ)]" if initial_convoy_hq else "[CONFIRM (W%d S%d)]" % [_outpost_placement_wood_cost(), _outpost_placement_cost()]
+	var confirm_label: String = "[CLAIM TERRITORY — FREE]" if outpost_placement_kind == "expand" else ("[CONFIRM HQ — FREE]" if initial_convoy_hq else "[CONFIRM (W%d S%d)]" % [_outpost_placement_wood_cost(), _outpost_placement_cost()])
 	_draw_text(confirm_label, Vector2(safe_left + 10.0, top + touch_target_size * 0.62), 14, Color("#f0fff5"))
 	var cancel_left: float = safe_left + half_width + 6.0
 	draw_rect(Rect2(cancel_left, top, half_width - 6.0, touch_target_size), Color("#472a2a"))
@@ -4137,7 +4125,7 @@ func _draw_structure_actions() -> void:
 			var expand_rect := Rect2(safe_insets.x + 24.0, action_top + 48.0 + touch_target_size, 346.0, touch_target_size)
 			draw_rect(expand_rect, Color("#244b3a"))
 			draw_rect(expand_rect, Color("#72d69a"), false, 2.0)
-			_draw_text("[EXPAND OUTPOST]", expand_rect.position + Vector2(16.0, touch_target_size * 0.62), 15, Color("#f0fff5"))
+			_draw_text("[EXPAND TERRITORY — FREE]", expand_rect.position + Vector2(8.0, touch_target_size * 0.62), 13, Color("#f0fff5"))
 
 func _draw_milestone13_rooftop_bars() -> void:
 	var visible_rect: Rect2 = _camera_view_rect().grow(80.0)
