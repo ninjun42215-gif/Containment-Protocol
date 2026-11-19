@@ -226,6 +226,7 @@ var doctrine_morale_recovery_day: int = 0
 var selected_raid_squad: int = 0
 var ops_monitor_open: bool = false
 var outpost_expanding_index: int = -1
+var selected_hq_building_idx: int = -1
 var outpost_placement_status: String = "VALID"
 var recent_gunfire: Array[Dictionary] = []
 var population_heat_targets: Array[Dictionary] = []
@@ -1314,6 +1315,54 @@ func _outpost_rect_geometry_valid(rect: Rect2) -> bool:
 func _snap_outpost_size(size: Vector2) -> Vector2:
 	return Vector2(clampf(roundf(size.x / OUTPOST_SNAP) * OUTPOST_SNAP, OUTPOST_MIN_SIZE, OUTPOST_MAX_SIZE), clampf(roundf(size.y / OUTPOST_SNAP) * OUTPOST_SNAP, OUTPOST_MIN_SIZE, OUTPOST_MAX_SIZE))
 
+
+func _hq_building_capacity(building_index: int) -> int:
+	if building_index < 0 or building_index >= building_archetypes.size():
+		return 0
+	var archetype: String = _building_type_at(building_index)
+	return 8 if archetype == "HIGHRISE" else 4
+
+func _hq_establish_button_rect() -> Rect2:
+	var top: float = _safe_bottom_y(touch_target_size + 6.0)
+	return Rect2(safe_insets.x + HUD_EDGE_PADDING, top, viewport_size.x - safe_insets.x - safe_insets.z - HUD_EDGE_PADDING * 2.0, touch_target_size)
+
+func _establish_hq_from_selected_building() -> void:
+	if not outposts.is_empty() or selected_hq_building_idx < 0 or selected_hq_building_idx >= buildings.size() or selected_hq_building_idx >= building_archetypes.size():
+		return
+	var building_state: Dictionary = building_archetypes[selected_hq_building_idx]
+	if bool(building_state.get("destroyed", false)):
+		selected_hq_building_idx = -1
+		return
+	var hq_center: Vector2 = buildings[selected_hq_building_idx].get_center()
+	building_state["converted_to"] = "HEADQUARTERS"
+	building_archetypes[selected_hq_building_idx] = building_state
+	primary_hq_position = hq_center
+	_milestone13_spawn_survivors(hq_center)
+	evacuation_zones.clear()
+	evacuation_zones.append(hq_center)
+	wood = 180
+	scrap = 140
+	food = 120
+	fuel = 80.0
+	weapons = {"rifles": 4, "snipers": 1, "heavy_mgs": 0, "medkits": 2}
+	var territory_rect := Rect2(hq_center - Vector2(210.0, 210.0), Vector2(420.0, 420.0))
+	territory_rect.position.x = clampf(territory_rect.position.x, 20.0, WORLD_SIZE.x - territory_rect.size.x - 20.0)
+	territory_rect.position.y = clampf(territory_rect.position.y, 20.0, WORLD_SIZE.y - territory_rect.size.y - 20.0)
+	outposts.append({"pos": hq_center, "rect": territory_rect, "territory_rect": territory_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": 210.0, "vision_radius": 300.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 1200.0, "max_hp": 1200.0, "level": 1, "capacity": _hq_building_capacity(selected_hq_building_idx), "sheltered": 0, "evac_timer": 11.25, "rescue_beacon_timer": 0.0, "fortified_buildings": [], "is_hq": true})
+	game_state = "playing"
+	campaign_started = true
+	campaign_start_grace_timer = 60.0
+	wave_timer = 60.0
+	endless_containment = true
+	radio_banner_text = "COMMANDER VANCE: CONTAINMENT PROTOCOL IS LIVE. DR. ROSTOVA, CONFIRM THE HOSPITAL CHANNEL."
+	radio_log.append("DAY 1 — " + radio_banner_text)
+	radio_banner_timer = 7.0
+	radio_day_announced = 1
+	selected_hq_building_idx = -1
+	message = "HEADQUARTERS ESTABLISHED — 60s PREPARATION / TERRITORY UNFORTIFIED"
+	message_timer = 3.0
+	_save_operation()
+	queue_redraw()
 
 func _begin_outpost_placement(world_position: Vector2, placement_kind: String) -> void:
 	outpost_placement_active = true
@@ -2858,18 +2907,20 @@ func _handle_tap(pos: Vector2) -> void:
 		queue_redraw()
 		return
 	if game_state == "hq_placement":
-		if outpost_placement_active and pos.y >= _safe_bottom_y(touch_target_size + 6.0) and pos.y <= viewport_size.y - safe_insets.w:
-			if pos.x < safe_insets.x + (viewport_size.x - safe_insets.x - safe_insets.z) * 0.5:
-				_confirm_outpost_placement()
-			else:
-				outpost_placement_active = false
-				outpost_placement_dragging = false
+		if _hq_establish_button_rect().has_point(pos):
+			_establish_hq_from_selected_building()
 			queue_redraw()
 			return
 		if pos.y >= _safe_bottom_y(touch_target_size + 126.0):
 			return
-		_begin_outpost_placement(_screen_to_world(pos), "hq")
-		outpost_placement_dragging = false
+		var world_tap: Vector2 = _screen_to_world(pos)
+		var building_index: int = _building_index_at(world_tap)
+		if building_index >= 0 and building_index < building_archetypes.size() and not bool(building_archetypes[building_index].get("destroyed", false)):
+			selected_hq_building_idx = building_index
+			message = "%s SELECTED — SHELTER CAPACITY %d" % [_building_type_at(building_index), _hq_building_capacity(building_index)]
+			message_timer = 2.0
+		else:
+			selected_hq_building_idx = -1
 		queue_redraw()
 		return
 	if game_state == "sector_select":
@@ -3308,20 +3359,29 @@ func _draw() -> void:
 			draw_rect(Rect2(Vector2.ZERO, viewport_size), Color(0.0, 0.015, 0.012, menu_fade_alpha))
 		return
 	if game_state == "hq_placement":
-		var hq_hint := "DRAG A PERIMETER AROUND AN INTACT BUILDING" if outpost_placement_active else "SELECT AN INTACT BUILDING TO ANCHOR HQ"
 		_draw_world_scene()
-		if outpost_placement_active:
-			var hq_origin: Vector2 = viewport_size * 0.5 - camera_position * camera_zoom
-			draw_set_transform(hq_origin, 0.0, Vector2(camera_zoom, camera_zoom))
-			_draw_placement_preview()
+		var world_origin: Vector2 = viewport_size * 0.5 - camera_position * camera_zoom
+		if selected_hq_building_idx >= 0 and selected_hq_building_idx < buildings.size():
+			draw_set_transform(world_origin, 0.0, Vector2(camera_zoom, camera_zoom))
+			var selected_building_rect: Rect2 = buildings[selected_hq_building_idx]
+			var pulse_alpha: float = 0.72 + 0.28 * sin(title_animation_time * 5.0)
+			draw_rect(selected_building_rect.grow(8.0), Color(0.12, 1.0, 0.48, 0.16 * pulse_alpha), false, 10.0)
+			draw_rect(selected_building_rect.grow(4.0), Color(0.12, 1.0, 0.48, 0.98), false, 4.0)
 			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 		var hq_panel_top: float = _safe_bottom_y(touch_target_size + 126.0)
-		draw_rect(Rect2(safe_insets.x, hq_panel_top, viewport_size.x - safe_insets.x - safe_insets.z, viewport_size.y - hq_panel_top), Color("#071713", 0.96))
-		_draw_text("SELECT HQ LOCATION", Vector2(safe_insets.x + 24.0, hq_panel_top + 24.0), 20, Color("#e8fff0"))
-		_draw_text(hq_hint, Vector2(safe_insets.x + 24.0, hq_panel_top + 48.0), 13, Color("#a9c8b7"))
-		if outpost_placement_active:
-			_draw_text("%.0f x %.0f  WOOD %d  SCRAP %d  SHELTER %d  %s" % [outpost_placement_rect.size.x, outpost_placement_rect.size.y, _outpost_placement_wood_cost(), _outpost_placement_cost(), maxi(12, roundi(outpost_placement_rect.size.x * outpost_placement_rect.size.y / 18000.0)), outpost_placement_status], Vector2(safe_insets.x + 24.0, hq_panel_top + 76.0), 10, Color("#e8fff0"))
-			_draw_outpost_placement_hud(_safe_bottom_y(touch_target_size + 6.0))
+		draw_rect(Rect2(safe_insets.x, hq_panel_top, viewport_size.x - safe_insets.x - safe_insets.z, viewport_size.y - hq_panel_top), Color("#071713", 0.97))
+		_draw_text("SELECT HQ LOCATION — TAP AN INTACT BUILDING", Vector2(safe_insets.x + 18.0, hq_panel_top + 22.0), 14, Color("#e8fff0"))
+		var archetype_label: String = "NO BUILDING SELECTED"
+		var shelter_capacity: int = 0
+		if selected_hq_building_idx >= 0 and selected_hq_building_idx < buildings.size():
+			archetype_label = _building_type_at(selected_hq_building_idx)
+			shelter_capacity = _hq_building_capacity(selected_hq_building_idx)
+		_draw_text("%s  |  SHELTER CAPACITY %d  |  0 WOOD / 0 SCRAP" % [archetype_label, shelter_capacity], Vector2(safe_insets.x + 18.0, hq_panel_top + 46.0), 11, Color("#a9c8b7"))
+		var establish_rect: Rect2 = _hq_establish_button_rect()
+		draw_rect(establish_rect, Color("#245a3c") if selected_hq_building_idx >= 0 else Color("#28332e"))
+		draw_rect(establish_rect, Color("#72e6a0") if selected_hq_building_idx >= 0 else Color("#59675f"), false, 2.0)
+		_draw_text("[ESTABLISH HQ HERE — FREE]", establish_rect.position + Vector2(12.0, touch_target_size * 0.62), 14, Color("#f0fff5"))
+		_draw_text("Territory starts open and unfortified. Build walls separately.", Vector2(safe_insets.x + 18.0, establish_rect.end.y + 17.0), 10, Color("#a9c8b7"))
 		if menu_fade_alpha > 0.0:
 			draw_rect(Rect2(Vector2.ZERO, viewport_size), Color(0.0, 0.015, 0.012, menu_fade_alpha))
 		return
