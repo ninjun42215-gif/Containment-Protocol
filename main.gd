@@ -2662,6 +2662,7 @@ func _input(event: InputEvent) -> void:
 		var touch := event as InputEventScreenTouch
 		var touch_pos: Vector2 = _to_canvas_pos(touch.position)
 		if touch.pressed and _handle_title_touch(touch_pos):
+			get_viewport().set_input_as_handled()
 			return
 		if touch.pressed:
 			touch_points[touch.index] = touch_pos
@@ -2751,6 +2752,7 @@ func _input(event: InputEvent) -> void:
 		var mouse := event as InputEventMouseButton
 		var mouse_pos: Vector2 = _to_canvas_pos(mouse.position)
 		if mouse.button_index == MOUSE_BUTTON_LEFT and mouse.pressed and _handle_title_touch(mouse_pos):
+			get_viewport().set_input_as_handled()
 			return
 		if mouse.button_index == MOUSE_BUTTON_LEFT:
 			if mouse.pressed:
