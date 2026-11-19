@@ -745,10 +745,10 @@ func _process(delta: float) -> void:
 					marked_zombie["siege_building"] = firing_building_index
 					zombies[target_index] = marked_zombie
 			var unit_rank: int = clampi(int(unit.get("rank", 0)), 0, 3)
-			var unit_damage: float = 80.0 if is_sniper else (16.0 if is_militia else (25.0 if is_heavy else 35.0)) * combat_proficiency
 			var combat_proficiency: float = _milestone14_citizen_multiplier(int(unit.get("survivor_id", -1)), "combat")
 			if faction_doctrine == "MARTIAL LAW":
 				combat_proficiency *= 1.2
+			var unit_damage: float = (80.0 if is_sniper else (16.0 if is_militia else (25.0 if is_heavy else 35.0))) * combat_proficiency
 			var fire_interval: float = (1.05 if is_sniper else (0.24 if is_heavy else (0.85 if is_militia else 0.62))) / ((1.0 + float(unit_rank) * 0.10) * combat_proficiency)
 			if is_heavy and str(zombies[target_index].get("kind", "")) == "brute":
 				var staggered_brute: Dictionary = zombies[target_index]
