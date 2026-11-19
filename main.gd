@@ -2593,7 +2593,7 @@ func _update_vehicles(delta: float) -> void:
 					_add_bullet_tracer(position + side_offset, zombie_target)
 					if helicopter:
 						_add_bullet_tracer(position - side_offset, zombie_target)
-					_damage_zombie(target_zombie, 28.0 if helicopter else 32.0)
+					_damage_zombie(target_zombie, 28.0 if helicopter else 32.0, -1, position)
 					vehicle["cooldown"] = 0.28 if helicopter else 0.35
 		vehicles[index] = vehicle
 	_rebuild_zombie_spatial_grid()
@@ -4794,6 +4794,11 @@ func _update_triage(delta: float) -> void:
 				if unit["pos"].distance_squared_to(buildings[building_index].get_center()) <= 180.0 * 180.0:
 					healing_rate = maxf(healing_rate, 18.0 * _milestone14_facility_medical_multiplier())
 					break
+			if healing_rate <= 0.0:
+				for clinic in constructed_buildings:
+					if str(clinic.get("kind", "")) == "clinic" and unit["pos"].distance_squared_to(clinic.get("pos", Vector2.ZERO)) <= 150.0 * 150.0:
+						healing_rate = maxf(healing_rate, 12.0 * _milestone14_facility_medical_multiplier())
+						break
 			if healing_rate <= 0.0:
 				for medic_index in range(units.size()):
 					if medic_index == unit_index:
