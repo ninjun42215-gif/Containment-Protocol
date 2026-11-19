@@ -1245,12 +1245,22 @@ func _outpost_placement_status_for_rect(rect: Rect2) -> String:
 	if not _outpost_rect_geometry_valid(rect):
 		return "OVERLAPS ROAD/OUTPOST"
 	if outpost_placement_kind == "hq":
-		var enclosed_hq_building: bool = false
+		var anchored_building: bool = false
 		for building_index in range(buildings.size()):
-			if rect.encloses(buildings[building_index]) and not bool(building_archetypes[building_index].get("destroyed", false)):
-				enclosed_hq_building = true
+			if building_index >= building_archetypes.size():
+				continue
+			var building_state: Dictionary = building_archetypes[building_index]
+			if bool(building_state.get("destroyed", false)):
+				continue
+			var building_rect: Rect2 = buildings[building_index]
+			var building_area: float = building_rect.get_area()
+			if building_area <= 0.0:
+				continue
+			var overlap_area: float = rect.intersection(building_rect).get_area()
+			if overlap_area >= building_area * 0.5:
+				anchored_building = true
 				break
-		if not enclosed_hq_building:
+		if not anchored_building:
 			return "NO BUILDING ENCLOSED"
 	var initial_convoy_hq: bool = outpost_placement_kind == "hq" and outposts.is_empty()
 	var required_wood: int = 0 if initial_convoy_hq else _outpost_placement_wood_cost()
@@ -1265,6 +1275,15 @@ func _outpost_rect_valid(rect: Rect2) -> bool:
 func _outpost_rect_geometry_valid(rect: Rect2) -> bool:
 	if rect.position.x < 20.0 or rect.position.y < 20.0 or rect.end.x > WORLD_SIZE.x - 20.0 or rect.end.y > WORLD_SIZE.y - 20.0:
 		return false
+	if outpost_placement_kind == "hq" and outposts.is_empty():
+		for segment in highway_segments:
+			var highway_from: Vector2 = segment.get("from", Vector2.ZERO)
+			var highway_to: Vector2 = segment.get("to", Vector2.ZERO)
+			var highway_width: float = float(segment.get("width", 48.0))
+			var highway_rect: Rect2 = Rect2(highway_from, highway_to - highway_from).abs().grow(highway_width * 0.5)
+			if rect.intersects(highway_rect):
+				return false
+		return true
 	var edge: float = OUTPOST_WALL_THICKNESS + 8.0
 	var edge_bands: Array[Rect2] = [Rect2(rect.position, Vector2(rect.size.x, edge)), Rect2(rect.position, Vector2(edge, rect.size.y)), Rect2(Vector2(rect.end.x - edge, rect.position.y), Vector2(edge, rect.size.y)), Rect2(Vector2(rect.position.x, rect.end.y - edge), Vector2(rect.size.x, edge))]
 	for index in range(buildings.size()):
@@ -2614,30 +2633,38 @@ func _spawn_one_wave_zombie() -> bool:
 	zombies.append({"pos": spawn_point, "kind": kind, "hp": hp, "max_hp": hp, "wall_cooldown": 0.0})
 	return true
 
+func _to_canvas_pos(raw_pos: Vector2) -> Vector2:
+	return get_viewport().get_canvas_transform().affine_inverse() * raw_pos
+
+func _to_canvas_delta(raw_delta: Vector2) -> Vector2:
+	return get_viewport().get_canvas_transform().affine_inverse().basis_xform(raw_delta)
+
 func _input(event: InputEvent) -> void:
 	if event is InputEventScreenDrag and work_zone_dragging:
 		var zone_drag := event as InputEventScreenDrag
-		work_zone_current = _screen_to_world(zone_drag.position)
+		var zone_drag_pos: Vector2 = _to_canvas_pos(zone_drag_pos)
+		work_zone_current = _screen_to_world(zone_drag_pos)
 		queue_redraw()
 		return
 	if event is InputEventScreenTouch:
 		var touch := event as InputEventScreenTouch
+		var touch_pos: Vector2 = _to_canvas_pos(touch_pos)
 		if touch.pressed:
-			touch_points[touch.index] = touch.position
+			touch_points[touch.index] = touch_pos
 			if touch_points.size() == 1:
-				var touch_world: Vector2 = _screen_to_world(touch.position)
-				if game_state == "playing" and command_tab == 1 and touch.position.y < _safe_bottom_y(_deployment_panel_height()) - 90.0 and touch.position.y > safe_insets.y + 360.0:
+				var touch_world: Vector2 = _screen_to_world(touch_pos)
+				if game_state == "playing" and command_tab == 1 and touch_pos.y < _safe_bottom_y(_deployment_panel_height()) - 90.0 and touch_pos.y > safe_insets.y + 360.0:
 					work_zone_dragging = true
 					work_zone_start = touch_world
 					work_zone_current = touch_world
 					return
-				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and touch.position.y < _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and touch.position.y > safe_insets.y + 520.0 and touch.position.y < _safe_bottom_y(260.0) and command_tab == 0 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
+				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and touch_pos.y < _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and touch_pos.y > safe_insets.y + 520.0 and touch_pos.y < _safe_bottom_y(260.0) and command_tab == 0 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
 				if can_start_placement:
 					_begin_outpost_placement(touch_world, "hq" if game_state == "hq_placement" else "outpost")
 				elif outpost_placement_active:
 					if outpost_placement_rect.grow(maxf(24.0, touch_target_size * 0.5 / maxf(camera_zoom, 0.01))).has_point(touch_world):
 						_begin_outpost_resize(touch_world)
-					elif (game_state == "hq_placement" and touch.position.y >= _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and touch.position.y >= _safe_bottom_y(260.0) and touch.position.y <= _safe_bottom_y(260.0 - touch_target_size)):
+					elif (game_state == "hq_placement" and touch_pos.y >= _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and touch_pos.y >= _safe_bottom_y(260.0) and touch_pos.y <= _safe_bottom_y(260.0 - touch_target_size)):
 						outpost_placement_gesture_mode = ""
 						outpost_placement_dragging = false
 					else:
@@ -2645,8 +2672,8 @@ func _input(event: InputEvent) -> void:
 						outpost_placement_dragging = true
 				else:
 					outpost_placement_gesture_mode = ""
-				camera_drag_origin = touch.position
-				camera_last_position = touch.position
+				camera_drag_origin = touch_pos
+				camera_last_position = touch_pos
 				camera_drag_distance = 0.0
 				camera_dragging = false
 			elif touch_points.size() == 2:
@@ -2667,7 +2694,7 @@ func _input(event: InputEvent) -> void:
 					outpost_placement_dragging = false
 					outpost_placement_gesture_mode = ""
 				elif touch_points.size() == 1 and not multi_touch_gesture and not camera_dragging and camera_drag_distance < CAMERA_DRAG_THRESHOLD:
-					_handle_tap(touch.position)
+					_handle_tap(touch_pos)
 				touch_points.erase(touch.index)
 			if touch_points.is_empty():
 				multi_touch_gesture = false
@@ -2679,8 +2706,10 @@ func _input(event: InputEvent) -> void:
 				camera_dragging = false
 	elif event is InputEventScreenDrag:
 		var drag := event as InputEventScreenDrag
+		var drag_pos: Vector2 = _to_canvas_pos(drag_pos)
+		var drag_delta: Vector2 = _to_canvas_delta(drag_delta)
 		if touch_points.has(drag.index):
-			touch_points[drag.index] = drag.position
+			touch_points[drag.index] = drag_pos
 		if touch_points.size() >= 2:
 			var points: Array = touch_points.values()
 			var first_point: Vector2 = points[0]
@@ -2695,53 +2724,56 @@ func _input(event: InputEvent) -> void:
 			previous_pinch_center = center
 		else:
 			if outpost_placement_active and outpost_placement_dragging and outpost_placement_gesture_mode == "resize":
-				_update_outpost_placement_from_anchor(_screen_to_world(drag.position))
+				_update_outpost_placement_from_anchor(_screen_to_world(drag_pos))
 				return
-			camera_drag_distance += drag.relative.length()
+			camera_drag_distance += drag_delta.length()
 			if camera_drag_distance > CAMERA_DRAG_THRESHOLD:
 				camera_dragging = true
 			if camera_dragging:
-				camera_position -= drag.relative / camera_zoom
+				camera_position -= drag_delta / camera_zoom
 				_clamp_camera()
 				queue_redraw()
 	elif event is InputEventMouseButton:
 		var mouse := event as InputEventMouseButton
+		var mouse_pos: Vector2 = _to_canvas_pos(mouse_pos)
 		if mouse.button_index == MOUSE_BUTTON_LEFT:
 			if mouse.pressed:
-				var mouse_world: Vector2 = _screen_to_world(mouse.position)
-				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and mouse.position.y < _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and mouse.position.y > safe_insets.y + 520.0 and mouse.position.y < _safe_bottom_y(260.0) and command_tab == 0 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
+				var mouse_world: Vector2 = _screen_to_world(mouse_pos)
+				var can_start_placement: bool = not outpost_placement_active and ((game_state == "hq_placement" and mouse_pos.y < _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and mouse_pos.y > safe_insets.y + 520.0 and mouse_pos.y < _safe_bottom_y(260.0) and command_tab == 0 and selected_deployment < BASE_DEPLOYMENTS.size() and str(BASE_DEPLOYMENTS[selected_deployment]["kind"]) == "outpost"))
 				if can_start_placement:
 					_begin_outpost_placement(mouse_world, "hq" if game_state == "hq_placement" else "outpost")
 				elif outpost_placement_active:
 					if outpost_placement_rect.grow(maxf(24.0, touch_target_size * 0.5 / maxf(camera_zoom, 0.01))).has_point(mouse_world):
 						_begin_outpost_resize(mouse_world)
-					elif (game_state == "hq_placement" and mouse.position.y >= _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and mouse.position.y >= _safe_bottom_y(260.0) and mouse.position.y <= _safe_bottom_y(260.0 - touch_target_size)):
+					elif (game_state == "hq_placement" and mouse_pos.y >= _safe_bottom_y(touch_target_size + 126.0)) or (game_state == "playing" and mouse_pos.y >= _safe_bottom_y(260.0) and mouse_pos.y <= _safe_bottom_y(260.0 - touch_target_size)):
 						outpost_placement_gesture_mode = ""
 						outpost_placement_dragging = false
 					else:
 						outpost_placement_gesture_mode = "pan"
 						outpost_placement_dragging = true
-				camera_drag_origin = mouse.position
+				camera_drag_origin = mouse_pos
 				camera_drag_distance = 0.0
 				camera_dragging = false
 			elif outpost_placement_active and outpost_placement_dragging:
 				outpost_placement_dragging = false
 				outpost_placement_gesture_mode = ""
 			elif not camera_dragging and camera_drag_distance < CAMERA_DRAG_THRESHOLD:
-				_handle_tap(mouse.position)
+				_handle_tap(mouse_pos)
 		elif mouse.pressed and mouse.button_index == MOUSE_BUTTON_WHEEL_UP:
-			_zoom_camera(1.12, mouse.position)
+			_zoom_camera(1.12, mouse_pos)
 		elif mouse.pressed and mouse.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			_zoom_camera(0.89, mouse.position)
+			_zoom_camera(0.89, mouse_pos)
 	elif event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		var motion := event as InputEventMouseMotion
-		camera_drag_distance += motion.relative.length()
+		var motion_pos: Vector2 = _to_canvas_pos(motion_pos)
+		var motion_delta: Vector2 = _to_canvas_delta(motion_delta)
+		camera_drag_distance += motion_delta.length()
 		if camera_drag_distance > CAMERA_DRAG_THRESHOLD:
 			camera_dragging = true
 		if outpost_placement_active and outpost_placement_dragging and outpost_placement_gesture_mode == "resize":
-			_update_outpost_placement_from_anchor(_screen_to_world(motion.position))
+			_update_outpost_placement_from_anchor(_screen_to_world(motion_pos))
 		elif camera_dragging:
-			camera_position -= motion.relative / camera_zoom
+			camera_position -= motion_delta / camera_zoom
 			_clamp_camera()
 			queue_redraw()
 
@@ -2768,7 +2800,7 @@ func _handle_tap(pos: Vector2) -> void:
 			return
 		if game_state == "title":
 			var preview: Dictionary = _get_title_save_preview()
-			var command_rect: Rect2 = Rect2(title_size.x * 0.055, title_size.y * 0.405, title_size.x * 0.89, title_size.y * 0.34)
+			var command_rect: Rect2 = Rect2(title_size.x * 0.055, title_size.y * 0.405, title_size.x * 0.89, title_size.y * 0.30)
 			var ui_scale: float = _title_ui_scale(title_size)
 			var launch_rect: Rect2 = Rect2(command_rect.position.x + 18.0, command_rect.end.y - maxf(78.0, 78.0 * ui_scale), command_rect.size.x - 36.0, maxf(62.0, 62.0 * ui_scale))
 			if launch_rect.has_point(title_pos):
@@ -3561,7 +3593,7 @@ func _draw_title_screen() -> void:
 	# HERO: 14%-36% safe-area band.
 	var emblem_radius: float = minf(title_size.x * 0.075, 58.0 * ui_scale)
 	_draw_containment_emblem(Vector2(title_size.x * 0.5, title_size.y * 0.185), emblem_radius)
-	_draw_text("CONTAINMENT PROTOCOL", Vector2(title_size.x * 0.07, title_size.y * 0.285), roundi(34.0 * ui_scale), Color("#f0fff5"))
+	_draw_text("CONTAINMENT PROTOCOL", Vector2(title_size.x * 0.07, title_size.y * 0.285), clampi(roundi(34.0 * ui_scale), 28, 36), Color("#f0fff5"))
 	draw_rect(Rect2(title_size.x * 0.28, title_size.y * 0.315, title_size.x * 0.44, maxf(3.0, 3.0 * ui_scale)), Color("#75d99a"))
 	_draw_text("STATE EXCLUSION ZONE // SURVIVAL COMMAND", Vector2(title_size.x * 0.12, title_size.y * 0.345), roundi(11.0 * ui_scale), Color("#a9c8b7"))
 	var career_text: String = "CAREER RECORD  //  BEST DAY %d  |  SAVED %03d" % [best_days_survived, best_civilians_saved]
@@ -3574,11 +3606,11 @@ func _draw_title_screen() -> void:
 	# COMMAND / DISTRICT STACK: 39%-78% safe-area band.
 	if game_state == "title":
 		var preview: Dictionary = _get_title_save_preview()
-		var command_rect: Rect2 = Rect2(title_size.x * 0.055, title_size.y * 0.405, title_size.x * 0.89, title_size.y * 0.34)
+		var command_rect: Rect2 = Rect2(title_size.x * 0.055, title_size.y * 0.405, title_size.x * 0.89, title_size.y * 0.30)
 		draw_rect(command_rect, Color("#102a23", 0.97))
 		draw_rect(command_rect, Color("#6fba8b"), false, 2.0)
 		draw_rect(Rect2(command_rect.position, Vector2(7.0, command_rect.size.y)), Color("#63c88b"))
-		_draw_text("FIELD COMMAND", command_rect.position + Vector2(22.0, 42.0 * ui_scale), roundi(18.0 * ui_scale), Color("#e8fff0"))
+		_draw_text("FIELD COMMAND", command_rect.position + Vector2(22.0, 42.0 * ui_scale), clampi(roundi(20.0 * ui_scale), 18, 22), Color("#e8fff0"))
 		if not preview.is_empty():
 			_draw_text("RESUME OPERATION  //  DAY %02d  //  POPULATION %03d" % [int(preview["day"]), int(preview["population"])], command_rect.position + Vector2(22.0, 82.0 * ui_scale), roundi(13.0 * ui_scale), Color("#fff1bd"))
 			_draw_text("LOCAL CLOCK  %s" % str(preview["clock"]), command_rect.position + Vector2(22.0, 112.0 * ui_scale), roundi(11.0 * ui_scale), Color("#c1d8c8"))
@@ -3600,9 +3632,9 @@ func _draw_title_screen() -> void:
 			draw_rect(card, Color("#102a23", 0.97))
 			draw_rect(card, Color("#6fba8b"), false, 2.0)
 			draw_rect(Rect2(card.position, Vector2(7.0, card.size.y)), Color("#d18d62") if index == 1 else Color("#65c98b"))
-			_draw_text("%02d  %s" % [index + 1, names[index]], card.position + Vector2(20.0, card.size.y * 0.28), roundi(16.0 * ui_scale), Color("#e8fff0"))
-			_draw_text(resources[index], card.position + Vector2(20.0, card.size.y * 0.49), roundi(11.0 * ui_scale), Color("#b7d7c2"))
-			_draw_text(details[index], card.position + Vector2(20.0, card.size.y * 0.66), roundi(10.0 * ui_scale), Color("#8eaa99"))
+			_draw_text("%02d  %s" % [index + 1, names[index]], card.position + Vector2(20.0, card.size.y * 0.28), clampi(roundi(20.0 * ui_scale), 18, 22), Color("#e8fff0"))
+			_draw_text(resources[index], card.position + Vector2(20.0, card.size.y * 0.49), clampi(roundi(14.0 * ui_scale), 13, 15), Color("#b7d7c2"))
+			_draw_text(details[index], card.position + Vector2(20.0, card.size.y * 0.66), clampi(roundi(13.0 * ui_scale), 13, 15), Color("#8eaa99"))
 			_draw_text("THREAT", card.position + Vector2(20.0, card.size.y * 0.86), roundi(9.0 * ui_scale), Color("#e2b2a4"))
 			for pip in range(5):
 				var pip_color: Color = Color("#e45c50") if pip < threat[index] else Color("#46574f")
