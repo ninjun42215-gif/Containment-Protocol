@@ -5461,9 +5461,9 @@ func _milestone15_ops_metrics() -> Dictionary:
 	for survivor in survivors:
 		var survivor_id: int = int(survivor.get("id", -1))
 		var unit_index: int = _milestone15_find_unit_index(survivor_id)
-		var is_infected: bool = bool(survivor.get("infection_active", false))
-		if is_infected:
+		if bool(survivor.get("infection_active", false)):
 			infected += 1
+			continue
 		var is_deployed: bool = false
 		if squad_members.has(survivor_id):
 			for squad in raid_squads:
@@ -5472,13 +5472,18 @@ func _milestone15_ops_metrics() -> Dictionary:
 					is_deployed = true
 					deployed += 1
 					break
-		if not is_deployed and unit_index >= 0:
-			var unit: Dictionary = units[unit_index]
-			if bool(unit.get("garrisoned", false)) or _milestone15_inside_outpost(unit.get("pos", Vector2.ZERO)):
-				indoors += 1
-			else:
-				outdoors += 1
-		if not is_infected and not squad_members.has(survivor_id) and str(survivor.get("ops_assignment", "")).is_empty() and (unit_index < 0 or (not bool(units[unit_index].get("garrisoned", false)) and not _milestone15_inside_outpost(units[unit_index].get("pos", Vector2.ZERO)))):
+		if is_deployed:
+			continue
+		if unit_index < 0:
+			idle += 1
+			continue
+		var unit: Dictionary = units[unit_index]
+		var is_indoors: bool = bool(unit.get("garrisoned", false)) or _milestone15_inside_outpost(unit.get("pos", Vector2.ZERO))
+		if is_indoors:
+			indoors += 1
+		elif squad_members.has(survivor_id) or not str(survivor.get("ops_assignment", "")).is_empty() or unit.get("move_target", null) is Vector2 or not str(unit.get("ai_task", "")).is_empty():
+			outdoors += 1
+		else:
 			idle += 1
 	return {"indoors": indoors, "outdoors": outdoors, "deployed": deployed, "infected": infected, "idle": idle}
 
@@ -5646,10 +5651,12 @@ func _milestone15_draw_ops_monitor() -> void:
 			infected_summary = "BIOHAZARD: %s  %ds TO TURN" % [str(survivor.get("name", "SURVIVOR")), ceili(float(survivor.get("infection_timer", 0.0)))]
 			break
 	_draw_text(infected_summary, panel.position + Vector2(10.0, 94.0), 9, Color("#ff7777") if int(metrics["infected"]) > 0 else Color("#75d99a"))
+	_draw_text("INDOOR OUTPOST ALLOCATIONS", panel.position + Vector2(10.0, 116.0), 9, Color("#91e5b2"))
+	_draw_text("OUTDOOR FIELD ALLOCATIONS", panel.position + Vector2(panel.size.x * 0.5 + 8.0, 116.0), 9, Color("#83e6f2"))
 	var labels: Array[String] = ["Bakery Staff", "Field Clinic Medics", "Workshop Crafters", "Perimeter Guards", "Lumber / Demo Crew", "Scavengers / Haulers", "Farm / Livestock Hands", "Deployed Raid Squads"]
 	var keys: Array[String] = ["INDOOR_BAKERY", "INDOOR_CLINIC", "INDOOR_WORKSHOP", "INDOOR_GUARD", "OUTDOOR_LUMBER", "OUTDOOR_SCAVENGER", "OUTDOOR_FARM", "OUTDOOR_SQUADS"]
 	var row_height: float = 50.0
-	var start_y: float = panel.position.y + 116.0
+	var start_y: float = panel.position.y + 132.0
 	var column_gap: float = 8.0
 	var column_width: float = (panel.size.x - 24.0) * 0.5
 	for item_index in range(8):
@@ -5668,7 +5675,7 @@ func _milestone15_draw_ops_monitor() -> void:
 		draw_rect(plus_rect, Color("#79dfa1"), false, 1.0)
 		_draw_text("-", minus_rect.position + Vector2(19.0, 32.0), 22, Color("#ffffff"))
 		_draw_text("+", plus_rect.position + Vector2(16.0, 32.0), 22, Color("#ffffff"))
-	var action_y: float = panel.position.y + 324.0
+	var action_y: float = panel.position.y + 340.0
 	var action_width: float = (panel.size.x - 24.0) * 0.5
 	var dispatch_rect := Rect2(panel.position.x + 8.0, action_y, action_width, 48.0)
 	var recall_rect := Rect2(panel.position.x + 16.0 + action_width, action_y, action_width, 48.0)
@@ -5804,8 +5811,7 @@ func _milestone15_tick_infections(delta: float) -> void:
 		survivor["infection_timer"] = maxf(0.0, float(survivor.get("infection_timer", 180.0)) - delta * infection_rate)
 		survivors[survivor_index] = survivor
 		if float(survivor["infection_timer"]) <= 0.0:
-			if zombies.size() < MAX_ACTIVE_ZOMBIES:
-				zombies.append({"pos": infection_position, "kind": "shambler", "hp": 45.0, "max_hp": 45.0, "wall_cooldown": 0.0, "turned_inside_outpost": _milestone15_inside_outpost(infection_position), "turned_survivor_id": survivor_id})
+			zombies.append({"pos": infection_position, "kind": "shambler", "hp": 45.0, "max_hp": 45.0, "wall_cooldown": 0.0, "turned_inside_outpost": _milestone15_inside_outpost(infection_position), "turned_survivor_id": survivor_id})
 			if unit_index >= 0:
 				units.remove_at(unit_index)
 				if selected_unit_index == unit_index:
