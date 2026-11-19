@@ -488,6 +488,7 @@ func _process(delta: float) -> void:
 			else:
 				saved_count += 1
 				scrap += 35
+				_milestone14_award_rescue_standing(civilian)
 			message = "CIVILIAN SHELTERED / EVACUATED  +MATS"
 			message_timer = 1.1
 
@@ -2220,6 +2221,7 @@ func _update_vehicles(delta: float) -> void:
 							var rescued: int = int(vehicle["onboard"])
 							vehicle["onboard"] = 0
 							saved_count += rescued
+							_milestone14_award_rescue_standing(position)
 							scrap += rescued * 35
 							world_callouts.append({"pos": position, "text": "+MATS %d" % (rescued * 35), "life": 2.0})
 							message = "VEHICLE EVACUATION — %d CIVILIANS" % rescued
@@ -4264,6 +4266,8 @@ func _update_work_orders(delta: float) -> void:
 			work_target = trees[target_index]["pos"]
 		elif work_kind == "hunt" and target_index >= 0 and target_index < wildlife.size() and bool(wildlife[target_index].get("alive", false)):
 			work_target = wildlife[target_index]["pos"]
+		elif work_kind == "fuel" and target_index >= 0 and target_index < supply_crates.size():
+			work_target = supply_crates[target_index].get("pos", Vector2(-1.0, -1.0))
 		elif work_kind == "demolish" and target_index >= 0 and target_index < buildings.size() and not bool(building_archetypes[target_index].get("destroyed", false)):
 			var rect: Rect2 = buildings[target_index]
 			work_target = Vector2(clampf(unit["pos"].x, rect.position.x - 28.0, rect.end.x + 28.0), clampf(unit["pos"].y, rect.position.y - 28.0, rect.end.y + 28.0))
@@ -4295,6 +4299,11 @@ func _update_work_orders(delta: float) -> void:
 					unit["cargo_type"] = "food"
 					unit["cargo_amount"] = 30
 					world_callouts.append({"pos": work_target, "text": "FOOD SECURED — HAULING", "life": 2.0})
+				"fuel":
+					unit["cargo_type"] = "fuel"
+					unit["cargo_amount"] = int(supply_crates[target_index].get("fuel", 25))
+					supply_crates.remove_at(target_index)
+					world_callouts.append({"pos": work_target, "text": "FUEL SECURED — HAULING", "life": 2.0})
 				"demolish":
 					var salvage_amount: int = randi_range(40, 90)
 					if faction_doctrine == "PRAGMATIC FREEHOLD":
@@ -4487,6 +4496,16 @@ func _milestone13_tick_construction(delta: float) -> void:
 		var site: Dictionary = constructed_buildings[i]
 		if not bool(site.get("constructing", false)):
 			continue
+		if work_outside_enabled:
+			var assigned_worker: bool = false
+			for unit_index in range(units.size()):
+				var candidate: Dictionary = units[unit_index]
+				if str(candidate.get("kind", "")) in ["worker", "engineer"] and not bool(candidate.get("garrisoned", false)) and candidate.get("move_target") == null and str(candidate.get("ai_task", "")).is_empty():
+					candidate["move_target"] = site.get("pos", Vector2.ZERO)
+					candidate["ai_task"] = "CONSTRUCTION"
+					units[unit_index] = candidate
+					assigned_worker = true
+					break
 		var rate := 0.0
 		for unit in units:
 			var worker_kind: String = str(unit.get("kind", ""))
@@ -5194,6 +5213,26 @@ func _milestone14_tick_workforce(_delta: float) -> void:
 			continue
 		if worker.get("move_target") is Vector2 or not str(worker.get("ai_task", "")).is_empty():
 			continue
+		var fuel_crate_index: int = -1
+		var fuel_crate_distance: float = INF
+		for crate_index in range(supply_crates.size()):
+			var crate_position: Vector2 = supply_crates[crate_index].get("pos", Vector2.ZERO)
+			var in_work_zone: bool = false
+			for zone in work_zones:
+				if bool(zone.get("active", true)) and zone.get("rect", Rect2()).has_point(crate_position):
+					in_work_zone = true
+					break
+			if in_work_zone and worker["pos"].distance_squared_to(crate_position) < fuel_crate_distance:
+				fuel_crate_distance = worker["pos"].distance_squared_to(crate_position)
+				fuel_crate_index = crate_index
+		if fuel_crate_index >= 0:
+			worker["work_kind"] = "fuel"
+			worker["work_target_index"] = fuel_crate_index
+			worker["work_timer"] = 2.0
+			worker["move_target"] = supply_crates[fuel_crate_index].get("pos", Vector2.ZERO)
+			worker["ai_task"] = "WORK_ZONE"
+			units[unit_index] = worker
+			continue
 		var best_tree: int = -1
 		var best_distance: float = INF
 		for tree_index in range(trees.size()):
@@ -5388,6 +5427,13 @@ func _milestone14_update_factions(delta: float) -> void:
 			faction["patrol_support"] = true
 		faction_settlements[faction_index] = faction
 
+
+
+func _milestone14_award_rescue_standing(rescue_position: Vector2) -> void:
+	for i in range(faction_settlements.size()):
+		var settlement: Dictionary = faction_settlements[i]
+		if str(settlement.get("faction", "")) == "NEUTRAL" and rescue_position.distance_to(settlement.get("pos", Vector2.ZERO)) <= 500.0:
+			_milestone14_change_relation(i, 8)
 
 func _milestone14_relation_tier(standing: int) -> String:
 	if standing >= 60: return "ALLIED"
