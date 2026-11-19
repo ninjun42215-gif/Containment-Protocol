@@ -34,7 +34,7 @@ const FLARE_LURE_RADIUS := 220.0
 const AUDIO_SAMPLE_RATE := 22050.0
 const MAX_ACTIVE_ZOMBIES := 650
 const PENDING_WAVE_SPAWN_INTERVAL := 0.20
-const SAVE_VERSION := 8
+const SAVE_VERSION := 9
 const PREPARATION_SECONDS := 60.0
 const GAME_MINUTES_PER_SECOND := 2.4
 const MAX_TACTICAL_DECALS := 80
@@ -211,6 +211,12 @@ var work_zone_start := Vector2.ZERO
 var work_zone_current := Vector2.ZERO
 var work_outside_enabled := true
 var citizen_name_seed: int = 0
+var faction_doctrine: String = "PRAGMATIC FREEHOLD"
+var doctrine_change_day: int = 1
+var doctrine_morale_shock_days: int = 0
+var faction_settlements: Array[Dictionary] = []
+var faction_foundation_timer: float = 720.0
+var specialists_panel_open: bool = false
 
 func _ready() -> void:
 	randomize()
@@ -315,7 +321,13 @@ func _start_sector(index: int) -> void:
 	work_zones.clear()
 	role_allocations = {"GATHERERS": 0, "ENGINEERS": 0, "FACILITY": 0, "SQUAD": 0}
 	citizen_name_seed = campaign_map_seed
+	faction_doctrine = "PRAGMATIC FREEHOLD"
+	doctrine_change_day = 1
+	doctrine_morale_shock_days = 0
+	faction_settlements.clear()
+	faction_foundation_timer = 720.0
 	_milestone14_initialize_citizens()
+	_milestone14_seed_factions()
 	crafting_orders.clear()
 	saved_count = 0
 	lost_count = 0
@@ -409,6 +421,7 @@ func _process(delta: float) -> void:
 	_update_vehicles(sim_delta)
 	_update_auto_ops(sim_delta)
 	_milestone14_tick_workforce(sim_delta)
+	_milestone14_update_factions(sim_delta)
 	_refresh_light_source_cache()
 	message_timer = maxf(0.0, message_timer - sim_delta)
 	airstrike_timer = maxf(0.0, airstrike_timer - sim_delta)
@@ -730,8 +743,11 @@ func _process(delta: float) -> void:
 					marked_zombie["siege_building"] = firing_building_index
 					zombies[target_index] = marked_zombie
 			var unit_rank: int = clampi(int(unit.get("rank", 0)), 0, 3)
-			var unit_damage: float = 80.0 if is_sniper else (16.0 if is_militia else (25.0 if is_heavy else 35.0))
-			var fire_interval: float = (1.05 if is_sniper else (0.24 if is_heavy else (0.85 if is_militia else 0.62))) / (1.0 + float(unit_rank) * 0.10)
+			var unit_damage: float = 80.0 if is_sniper else (16.0 if is_militia else (25.0 if is_heavy else 35.0)) * combat_proficiency
+			var combat_proficiency: float = _milestone14_citizen_multiplier(int(unit.get("survivor_id", -1)), "combat")
+			if faction_doctrine == "MARTIAL LAW":
+				combat_proficiency *= 1.2
+			var fire_interval: float = (1.05 if is_sniper else (0.24 if is_heavy else (0.85 if is_militia else 0.62))) / ((1.0 + float(unit_rank) * 0.10) * combat_proficiency)
 			if is_heavy and str(zombies[target_index].get("kind", "")) == "brute":
 				var staggered_brute: Dictionary = zombies[target_index]
 				staggered_brute["stagger_timer"] = maxf(float(staggered_brute.get("stagger_timer", 0.0)), 0.65)
@@ -4714,7 +4730,7 @@ func _save_operation() -> void:
 	# Never replace a prior valid campaign with an incomplete HQ-placement state.
 	if not campaign_started or game_state == "hq_placement":
 		return
-	var state: Dictionary = {"version": SAVE_VERSION, "weapons": weapons, "survivors": survivors, "citizens": citizens, "role_allocations": role_allocations, "raid_squads": raid_squads, "work_zones": work_zones, "wood": wood, "scrap": scrap, "food": food, "last_upkeep_day": last_upkeep_day, "trees": trees, "wildlife": wildlife, "raider_camps": raider_camps, "constructed_buildings": constructed_buildings, "radio_log": radio_log, "radio_day_announced": radio_day_announced, "radio_banner_text": radio_banner_text, "radio_banner_timer": radio_banner_timer, "fuel": fuel, "world_clock_minutes": world_clock_minutes, "survival_day": survival_day, "best_days_survived": best_days_survived, "best_civilians_saved": best_civilians_saved, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer, "tactical_decals": tactical_decals}
+	var state: Dictionary = {"version": SAVE_VERSION, "faction_doctrine": faction_doctrine, "doctrine_change_day": doctrine_change_day, "doctrine_morale_shock_days": doctrine_morale_shock_days, "faction_settlements": faction_settlements, "faction_foundation_timer": faction_foundation_timer, "weapons": weapons, "survivors": survivors, "citizens": citizens, "role_allocations": role_allocations, "raid_squads": raid_squads, "work_zones": work_zones, "wood": wood, "scrap": scrap, "food": food, "last_upkeep_day": last_upkeep_day, "trees": trees, "wildlife": wildlife, "raider_camps": raider_camps, "constructed_buildings": constructed_buildings, "radio_log": radio_log, "radio_day_announced": radio_day_announced, "radio_banner_text": radio_banner_text, "radio_banner_timer": radio_banner_timer, "fuel": fuel, "world_clock_minutes": world_clock_minutes, "survival_day": survival_day, "best_days_survived": best_days_survived, "best_civilians_saved": best_civilians_saved, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer, "tactical_decals": tactical_decals}
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify(_save_variant(state)))
@@ -4745,6 +4761,20 @@ func _resume_operation() -> void:
 		state["raid_squads"] = []
 		state["work_zones"] = []
 		state["version"] = 8
+	if int(state.get("version", 8)) < 9:
+		state["faction_doctrine"] = "PRAGMATIC FREEHOLD"
+		state["doctrine_change_day"] = int(state.get("survival_day", 1))
+		state["doctrine_morale_shock_days"] = 0
+		state["faction_settlements"] = []
+		state["faction_foundation_timer"] = 720.0
+		state["version"] = 9
+	faction_doctrine = str(state.get("faction_doctrine", "PRAGMATIC FREEHOLD"))
+	doctrine_change_day = int(state.get("doctrine_change_day", 1))
+	doctrine_morale_shock_days = int(state.get("doctrine_morale_shock_days", 0))
+	faction_settlements.assign(state.get("faction_settlements", []))
+	faction_foundation_timer = float(state.get("faction_foundation_timer", 720.0))
+	if faction_settlements.is_empty():
+		_milestone14_seed_factions()
 	_configure_sector(int(state.get("sector_index", 0)))
 	sector_index = int(state.get("sector_index", 0))
 	campaign_map_seed = int(state.get("campaign_map_seed", campaign_map_seed))
@@ -5142,7 +5172,7 @@ func _milestone14_draw_work_zones() -> void:
 func _milestone14_draw_hud_panel() -> void:
 	if game_state != "playing" or command_tab != 1:
 		return
-	var panel_rect := Rect2(safe_insets.x + 8.0, safe_insets.y + 286.0, viewport_size.x - safe_insets.x - safe_insets.z - 16.0, 66.0)
+	var panel_rect := Rect2(safe_insets.x + 8.0, safe_insets.y + 286.0, viewport_size.x - safe_insets.x - safe_insets.z - 16.0, 154.0)
 	draw_rect(panel_rect, Color("#091713", 0.96))
 	draw_rect(panel_rect, Color("#5ecf91"), false, 2.0)
 	var population: int = citizens.size()
@@ -5156,11 +5186,15 @@ func _milestone14_draw_hud_panel() -> void:
 		var x: float = panel_rect.position.x + 8.0 + float(i) * ((panel_rect.size.x - 16.0) / 4.0)
 		_draw_text(labels[i] + "  [-] " + str(int(role_allocations.get(labels[i], 0))) + " [+]", Vector2(x, panel_rect.position.y + 42.0), 8, Color("#f2d98a"))
 	_draw_text("DRAG MAP TO BOX A WORK ZONE  |  " + ("WORK OUTSIDE" if work_outside_enabled else "RECALL TO OUTPOST"), panel_rect.position + Vector2(8.0, 60.0), 8, Color("#83e6f2"))
+	_draw_text("DOCTRINE: " + faction_doctrine + "  |  READY IN %dD" % _milestone14_doctrine_cooldown(), panel_rect.position + Vector2(8.0, 86.0), 9, Color("#f2d98a"))
+	_draw_text("[CYCLE DOCTRINE]   [SPECIALISTS]   SETTLEMENTS %d" % faction_settlements.size(), panel_rect.position + Vector2(8.0, 110.0), 9, Color("#83e6f2"))
+	if specialists_panel_open:
+		_milestone14_draw_specialists(panel_rect)
 
 func _milestone14_handle_panel_tap(position: Vector2) -> bool:
 	if game_state != "playing" or command_tab != 1:
 		return false
-	var panel_rect := Rect2(safe_insets.x + 8.0, safe_insets.y + 286.0, viewport_size.x - safe_insets.x - safe_insets.z - 16.0, 66.0)
+	var panel_rect := Rect2(safe_insets.x + 8.0, safe_insets.y + 286.0, viewport_size.x - safe_insets.x - safe_insets.z - 16.0, 154.0)
 	if not panel_rect.has_point(position):
 		return false
 	var keys: Array[String] = ["GATHERERS", "ENGINEERS", "FACILITY", "SQUAD"]
@@ -5170,5 +5204,90 @@ func _milestone14_handle_panel_tap(position: Vector2) -> bool:
 	if position.y >= panel_rect.position.y + 24.0 and position.y <= panel_rect.position.y + 52.0:
 		_milestone14_adjust_allocation(keys[cell_index], -1 if local_x < cell_width * 0.5 else 1)
 		return true
+	if position.y >= panel_rect.position.y + 90.0 and position.y <= panel_rect.position.y + 128.0:
+		if position.x < panel_rect.position.x + panel_rect.size.x * 0.52:
+			_milestone14_cycle_doctrine()
+		else:
+			specialists_panel_open = not specialists_panel_open
+		return true
 	return true
 
+
+func _milestone14_citizen_multiplier(citizen_id: int, skill: String) -> float:
+	for person in survivors:
+		if int(person.get("id", -1)) == citizen_id:
+			var key: String = "combat_xp" if skill == "combat" else ("medical_xp" if skill == "medical" else ("gathering_xp" if skill == "gathering" else "engineering_xp"))
+			return 1.0 + minf(0.75, float(person.get(key, 0)) / 1000.0)
+	return 1.0
+
+func _milestone14_doctrine_cooldown() -> int:
+	return maxi(0, 14 - (survival_day - doctrine_change_day))
+
+func _milestone14_cycle_doctrine() -> void:
+	if _milestone14_doctrine_cooldown() > 0:
+		message = "DOCTRINE LOCKED — %d DAYS REMAIN" % _milestone14_doctrine_cooldown()
+		message_timer = 2.0
+		return
+	var doctrines: Array[String] = ["HUMANITARIAN SANCTUARY", "MARTIAL LAW", "PRAGMATIC FREEHOLD"]
+	var index: int = doctrines.find(faction_doctrine)
+	faction_doctrine = doctrines[(index + 1) % doctrines.size()]
+	doctrine_change_day = survival_day
+	doctrine_morale_shock_days = 3 if faction_doctrine == "MARTIAL LAW" else 0
+	for faction_index in range(faction_settlements.size()):
+		var faction: Dictionary = faction_settlements[faction_index]
+		var faction_type: String = str(faction.get("faction", "NEUTRAL"))
+		var change: int = 0
+		if faction_doctrine == "HUMANITARIAN SANCTUARY":
+			change = 25 if faction_type == "NEUTRAL" else (-15 if faction_type == "MILITARISTIC" else 0)
+		elif faction_doctrine == "MARTIAL LAW":
+			change = 25 if faction_type == "MILITARISTIC" else (-20 if faction_type == "NEUTRAL" else 0)
+		else:
+			change = 10 if faction_type in ["NEUTRAL", "MILITARISTIC"] else 0
+		faction["relation"] = clampi(int(faction.get("relation", 0)) + change, -100, 100)
+		faction_settlements[faction_index] = faction
+	message = "FACTION DOCTRINE: " + faction_doctrine
+	message_timer = 3.0
+	_save_operation()
+
+func _milestone14_seed_factions() -> void:
+	faction_settlements.clear()
+	var types: Array[String] = ["NEUTRAL", "MILITARISTIC", "RAIDER"]
+	for i in range(3):
+		var region: Rect2 = district_regions[posmod(i + 1, district_regions.size())]
+		var pos := region.position + region.size * 0.5
+		faction_settlements.append({"id": i + 1, "faction": types[i], "name": ["WAYFARER ENCLAVE", "STATE GUARD GARRISON", "IRON JACKALS"][i], "pos": pos, "relation": 0 if i == 0 else (-35 if i == 2 else 10), "strength": 1, "banner": true})
+
+func _milestone14_update_factions(delta: float) -> void:
+	faction_foundation_timer -= delta
+	if faction_foundation_timer <= 0.0:
+		faction_foundation_timer = 720.0
+		if faction_settlements.size() < 12 and not district_regions.is_empty():
+			var index: int = randi_range(0, district_regions.size() - 1)
+			var region: Rect2 = district_regions[index]
+			var kinds: Array[String] = ["NEUTRAL", "MILITARISTIC", "RAIDER"]
+			var kind: String = kinds[randi_range(0, 2)]
+			var pos := region.position + Vector2(randf_range(0.25, 0.75) * region.size.x, randf_range(0.25, 0.75) * region.size.y)
+			faction_settlements.append({"id": faction_settlements.size() + 1, "faction": kind, "name": kind + " SETTLEMENT %02d" % (faction_settlements.size() + 1), "pos": pos, "relation": -25 if kind == "RAIDER" else 0, "strength": 1, "banner": true})
+	for faction_index in range(faction_settlements.size()):
+		var faction: Dictionary = faction_settlements[faction_index]
+		if faction_doctrine == "HUMANITARIAN SANCTUARY" and str(faction.get("faction", "")) == "RAIDER":
+			faction["strength"] = int(faction.get("strength", 1)) + (1 if randf() < delta / 900.0 else 0)
+		elif str(faction.get("faction", "")) == "MILITARISTIC" and int(faction.get("relation", 0)) >= 25:
+			faction["patrol_support"] = true
+		faction_settlements[faction_index] = faction
+
+func _milestone14_draw_specialists(panel_rect: Rect2) -> void:
+	var categories: Array[String] = ["combat", "engineering", "medical", "gathering"]
+	for i in range(categories.size()):
+		var best: Dictionary = {}
+		var best_xp: int = -1
+		var xp_key: String = categories[i] + "_xp"
+		for person in survivors:
+			var xp: int = int(person.get(xp_key, 0))
+			if xp > best_xp:
+				best_xp = xp
+				best = person
+		if not best.is_empty():
+			var multiplier: float = 1.0 + minf(0.75, float(best_xp) / 1000.0)
+			var y: float = panel_rect.position.y + 132.0 + float(i) * 15.0
+			_draw_text(categories[i].to_upper() + ": " + str(best.get("name", "UNKNOWN")) + " / " + str(best.get("expertise", "GENERALIST")) + " / " + str(best.get("role", "WORKER")) + " / %.2fx" % multiplier, Vector2(panel_rect.position.x + 8.0, y), 8, Color("#d7f4e4"))
