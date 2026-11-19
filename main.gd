@@ -2582,8 +2582,8 @@ func _handle_tap(pos: Vector2) -> void:
 	var safe_left: float = safe_insets.x
 	var safe_width: float = viewport_size.x - safe_insets.x - safe_insets.z
 	if command_tab == 1:
-		var roster_top: float = safe_insets.y + 293.0
-		var row_height: float = 29.0
+		var roster_top: float = _milestone13_roster_top() + 25.0
+		var row_height: float = _milestone13_roster_row_height()
 		var roster_index: int = floori((pos.y - roster_top) / row_height)
 		if roster_index >= 0 and roster_index < survivors.size() and pos.y < roster_top + row_height * float(survivors.size()):
 			selected_survivor_index = roster_index
@@ -4398,11 +4398,18 @@ func _milestone13_tick_construction(delta: float) -> void:
 						survivors[survivor_index]["build_xp"] = int(survivors[survivor_index].get("build_xp", 0)) + 5
 		constructed_buildings[i] = site
 
+func _milestone13_roster_top() -> float:
+	return safe_insets.y + 268.0
+
+func _milestone13_roster_row_height() -> float:
+	var available_height: float = viewport_size.y - safe_insets.w - _milestone13_roster_top() - 70.0
+	return clampf(available_height / maxf(1.0, float(survivors.size())), 14.0, 29.0)
+
 func _draw_milestone13_roster_panel() -> void:
 	var panel_left: float = safe_insets.x + 8.0
-	var panel_top: float = safe_insets.y + 268.0
+	var panel_top: float = _milestone13_roster_top()
 	var panel_width: float = viewport_size.x - safe_insets.x - safe_insets.z - 16.0
-	var row_height: float = 29.0
+	var row_height: float = _milestone13_roster_row_height()
 	var panel_height: float = row_height * float(survivors.size()) + 92.0
 	draw_rect(Rect2(panel_left, panel_top, panel_width, panel_height), Color("#071713", 0.96))
 	draw_rect(Rect2(panel_left, panel_top, panel_width, panel_height), Color("#6ccf91"), false, 2.0)
