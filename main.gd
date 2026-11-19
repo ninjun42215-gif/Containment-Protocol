@@ -2575,9 +2575,34 @@ func _handle_tap(pos: Vector2) -> void:
 		if pos.x >= safe_insets.x + 204.0 and pos.x <= safe_insets.x + 370.0:
 			_upgrade_selected_structure()
 			return
-	var bar_top: float = _safe_bottom_y(_deployment_panel_height())
 	var safe_left: float = safe_insets.x
 	var safe_width: float = viewport_size.x - safe_insets.x - safe_insets.z
+	if command_tab == 1:
+		var roster_top: float = safe_insets.y + 293.0
+		var row_height: float = 29.0
+		var roster_index: int = floori((pos.y - roster_top) / row_height)
+		if roster_index >= 0 and roster_index < survivors.size() and pos.y < roster_top + row_height * float(survivors.size()):
+			selected_survivor_index = roster_index
+			var role_order: Array[String] = ["WORKER", "ENGINEER", "INFANTRY", "SNIPER", "HEAVY", "MEDIC"]
+			var current_role: String = str(survivors[roster_index].get("role", "WORKER"))
+			var current_index: int = role_order.find(current_role)
+			for step in range(1, role_order.size() + 1):
+				var next_role: String = role_order[(current_index + step) % role_order.size()]
+				var required_key: String = "rifles" if next_role == "INFANTRY" else ("snipers" if next_role == "SNIPER" else ("heavy_mgs" if next_role == "HEAVY" else ("medkits" if next_role == "MEDIC" else "")))
+				var current_weapon: String = str(survivors[roster_index].get("equipped_weapon", ""))
+				if required_key.is_empty() or required_key == current_weapon or int(weapons.get(required_key, 0)) > 0:
+					_milestone13_assign_role(roster_index, next_role)
+					break
+			queue_redraw()
+			return
+		var craft_y: float = roster_top + row_height * float(survivors.size()) + 8.0
+		if pos.y >= craft_y and pos.y <= craft_y + 34.0:
+			var craft_slot: int = clampi(floori((pos.x - safe_left) / (safe_width / 4.0)), 0, 3)
+			var craft_keys: Array[String] = ["rifles", "snipers", "heavy_mgs", "medkits"]
+			_milestone13_queue_craft(craft_keys[craft_slot])
+			queue_redraw()
+			return
+	var bar_top: float = _safe_bottom_y(_deployment_panel_height())
 	if pos.y >= bar_top and pos.x >= safe_left and pos.x <= safe_left + safe_width:
 		if pos.y <= bar_top + touch_target_size:
 			var safe_tab_width: float = safe_width / 3.0
@@ -2585,31 +2610,6 @@ func _handle_tap(pos: Vector2) -> void:
 			selected_deployment = 0
 			selected_unit_index = -1
 			selected_vehicle_index = -1
-			queue_redraw()
-			return
-		if command_tab == 1:
-			var roster_top: float = safe_insets.y + 293.0
-			var row_height: float = 29.0
-			var roster_index: int = floori((pos.y - roster_top) / row_height)
-			if roster_index >= 0 and roster_index < survivors.size() and pos.y < roster_top + row_height * float(survivors.size()):
-				selected_survivor_index = roster_index
-				var role_order: Array[String] = ["WORKER", "ENGINEER", "INFANTRY", "SNIPER", "HEAVY", "MEDIC"]
-				var current_role: String = str(survivors[roster_index].get("role", "WORKER"))
-				var current_index: int = role_order.find(current_role)
-				for step in range(1, role_order.size() + 1):
-					var next_role: String = role_order[(current_index + step) % role_order.size()]
-					var required_key: String = "rifles" if next_role == "INFANTRY" else ("snipers" if next_role == "SNIPER" else ("heavy_mgs" if next_role == "HEAVY" else ("medkits" if next_role == "MEDIC" else "")))
-					var current_weapon: String = str(survivors[roster_index].get("equipped_weapon", ""))
-					if required_key.is_empty() or required_key == current_weapon or int(weapons.get(required_key, 0)) > 0:
-						_milestone13_assign_role(roster_index, next_role)
-						break
-			queue_redraw()
-			return
-		var craft_y: float = safe_insets.y + 293.0 + 29.0 * float(survivors.size()) + 8.0
-		if command_tab == 1 and pos.y >= craft_y and pos.y <= craft_y + 34.0:
-			var craft_slot: int = clampi(floori((pos.x - safe_left) / (safe_width / 4.0)), 0, 3)
-			var craft_keys: Array[String] = ["rifles", "snipers", "heavy_mgs", "medkits"]
-			_milestone13_queue_craft(craft_keys[craft_slot])
 			queue_redraw()
 			return
 		var choices: Array = BASE_DEPLOYMENTS if command_tab == 0 else (RECRUIT_DEPLOYMENTS if command_tab == 1 else UNIT_DEPLOYMENTS)
@@ -4274,14 +4274,22 @@ func _interact_raider_camp(position: Vector2) -> void:
 			message = "RAIDER CACHE CAPTURED — FOOD / MATS / FUEL"
 		elif scrap >= 30:
 			scrap -= 30
-			food += 60
-			message = "BARTER COMPLETE — 30 MATS FOR +60 FOOD"
+			if fuel < 120.0:
+				fuel = minf(300.0, fuel + 40.0)
+				message = "BARTER COMPLETE — 30 MATS FOR +40 FUEL"
+			else:
+				food += 60
+				message = "BARTER COMPLETE — 30 MATS FOR +60 FOOD"
 		elif int(weapons.get("rifles", 0)) > 0:
 			weapons["rifles"] = int(weapons.get("rifles", 0)) - 1
-			food += 60
-			message = "BARTER COMPLETE — 1 RIFLE FOR +60 FOOD"
+			if fuel < 120.0:
+				fuel = minf(300.0, fuel + 40.0)
+				message = "BARTER COMPLETE — 1 RIFLE FOR +40 FUEL"
+			else:
+				food += 60
+				message = "BARTER COMPLETE — 1 RIFLE FOR +60 FOOD"
 		else:
-			message = "BARTER: 30 MATS OR 1 RIFLE; SQUAD CAN RAID"
+			message = "BARTER: 30 MATS OR 1 RIFLE FOR FOOD / FUEL; SQUAD CAN RAID"
 		message_timer = 2.2
 		return
 
