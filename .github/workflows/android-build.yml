@@ -7,6 +7,12 @@ on:
 permissions:
   contents: write
 
+      - name: Validate workflow YAML
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c "import yaml; yaml.safe_load(open('.github/workflows/WORKFLOW_FILE', encoding='utf-8')); print('YAML syntax: OK')"
+
 jobs:
   export-android:
     runs-on: ubuntu-latest
