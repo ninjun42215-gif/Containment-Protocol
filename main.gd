@@ -170,6 +170,9 @@ var outposts: Array[Dictionary] = []
 var turrets: Array[Dictionary] = []
 var civilian_grid: Dictionary = {}
 var zombie_grid: Dictionary = {}
+var static_building_grid: Dictionary = {}
+var smoothed_frame_time_ms: float = 16.67
+var simulation_frame_index: int = 0
 var zombie_positions: Array[Vector2] = []
 var selected_unit_index := -1
 var time_scale_index := 0
@@ -421,6 +424,9 @@ func _start_sector(index: int) -> void:
 func _process(delta: float) -> void:
 	_update_audio()
 	if delta > 0.0:
+		smoothed_frame_time_ms = lerpf(smoothed_frame_time_ms, delta * 1000.0, 0.08)
+		simulation_frame_index += 1
+	if delta > 0.0:
 		fps_frame_count += 1
 		fps_sample_timer += delta
 		if fps_sample_timer >= 0.5:
@@ -558,6 +564,8 @@ func _process(delta: float) -> void:
 			message_timer = 1.1
 
 	_rebuild_spatial_grid(civilian_grid, civilians)
+	var viewport_world_rect: Rect2 = _camera_view_rect()
+	var stagger_offscreen_zombies: bool = zombies.size() > 450 or smoothed_frame_time_ms > 18.5
 	for i in range(zombies.size() - 1, -1, -1):
 		var zombie: Dictionary = zombies[i]
 		zombie["turret_attack_cooldown"] = maxf(0.0, float(zombie.get("turret_attack_cooldown", 0.0)) - sim_delta)
@@ -565,6 +573,10 @@ func _process(delta: float) -> void:
 		zombie["building_attack_cooldown"] = maxf(0.0, float(zombie.get("building_attack_cooldown", 0.0)) - sim_delta)
 		zombie["unit_attack_cooldown"] = maxf(0.0, float(zombie.get("unit_attack_cooldown", 0.0)) - sim_delta)
 		var zpos: Vector2 = zombie["pos"]
+		var offscreen_stagger_frame: bool = stagger_offscreen_zombies and not viewport_world_rect.has_point(zpos) and posmod(simulation_frame_index + i, 2) == 1
+		if offscreen_stagger_frame:
+			zombies[i] = zombie
+			continue
 		var target_index: int = _find_nearest_entity(civilian_grid, civilians, zpos, 640.0 * (1.25 if day_phase == "NIGHT" else 1.0))
 		var target: Vector2 = _nearest_evac_zone(zpos)
 		if target_index >= 0:
@@ -617,17 +629,13 @@ func _process(delta: float) -> void:
 				if float(building_state["hp"]) <= 0.0:
 					building_state["destroyed"] = true
 					building_state["secured"] = false
-					for garrison_index in range(units.size()):
-						var trapped: Dictionary = units[garrison_index]
-						if bool(trapped.get("garrisoned", false)) and int(trapped.get("garrison_building", -1)) == contacted_building_index:
-							trapped["garrisoned"] = false
-							trapped["garrison_building"] = -1
-							trapped["hp"] = maxf(1.0, float(trapped.get("hp", 100.0)) - 25.0)
-							trapped["pos"] = zpos + Vector2(randf_range(-36.0, 36.0), randf_range(-36.0, 36.0))
-							units[garrison_index] = trapped
-					message = "BUILDING BREACHED — GARRISON EXPOSED"
+					building_archetypes[contacted_building_index] = building_state
+					_rebuild_static_building_grid()
+					_eject_building_garrison(contacted_building_index)
+					message = "BUILDING BREACHED — GARRISON EJECTED / TRIAGE"
 					message_timer = 2.0
-				building_archetypes[contacted_building_index] = building_state
+				else:
+					building_archetypes[contacted_building_index] = building_state
 
 		for wall_index in range(barricades.size() - 1, -1, -1):
 			var wall: Dictionary = barricades[wall_index]
@@ -778,7 +786,7 @@ func _process(delta: float) -> void:
 					_add_bullet_tracer(turret["pos"] - tracer_direction, turret_target - tracer_direction)
 				else:
 					_add_bullet_tracer(turret["pos"], turret_target)
-				_damage_zombie(target_zombie, turret_damage)
+				_damage_zombie(target_zombie, turret_damage, -1, turret["pos"])
 				turret["cooldown"] = fire_interval
 				_rebuild_zombie_spatial_grid()
 		turrets[turret_index] = turret
@@ -794,6 +802,8 @@ func _process(delta: float) -> void:
 				var unit_steering: Dictionary = raw_unit_steering if raw_unit_steering is Dictionary else {}
 				var unit_kind_for_speed: String = str(unit.get("kind", ""))
 				var unit_speed: float = 60.0 if unit_kind_for_speed == "infantry" else (58.0 if unit_kind_for_speed == "militia" else (48.0 if unit_kind_for_speed == "engineer" else (50.0 if unit_kind_for_speed == "heavy" else 52.0)))
+				if float(unit.get("triage_timer", 0.0)) > 0.0:
+					unit_speed *= 0.5
 				var unit_displacement: Vector2 = (unit_waypoint - unit_position).normalized() * unit_speed * sim_delta
 				unit["pos"] = _move_circle_with_buildings(unit_position, unit_displacement, 8.0, sim_delta, unit_waypoint, unit_steering)
 				unit["facing"] = unit_displacement.normalized()
@@ -849,7 +859,7 @@ func _process(delta: float) -> void:
 				zombies[target_index] = staggered_brute
 			if _is_near_building_type(unit_pos, "ARMORY", ARMORY_RADIUS):
 				fire_interval /= 1.15
-			_damage_zombie(target_index, unit_damage, unit_index)
+			_damage_zombie(target_index, unit_damage, unit_index, firing_origin)
 			unit = units[unit_index]
 			unit["cooldown"] = fire_interval
 			muzzle_flashes.append({"pos": firing_origin, "life": 0.10, "max_life": 0.10})
@@ -889,6 +899,7 @@ func _configure_sector(index: int) -> void:
 		2:
 			sector_name = "Industrial Highway"
 	_generate_state_map()
+	_rebuild_static_building_grid()
 	starting_district_index = randi_range(0, maxi(0, district_regions.size() - 1))
 	if starting_district_index < district_regions.size():
 		scenario_camera_target = district_regions[starting_district_index].get_center()
@@ -1122,6 +1133,7 @@ func _update_engineer_repairs(delta: float) -> void:
 				turrets[target_index]["hp"] = minf(float(turrets[target_index]["max_hp"]), float(turrets[target_index]["hp"]) + 8.0 * delta)
 
 func _update_building_effects(delta: float) -> void:
+	_update_triage(delta)
 	_update_engineer_repairs(delta)
 	for unit_index in range(units.size()):
 		var unit: Dictionary = units[unit_index]
@@ -1337,7 +1349,7 @@ func _establish_hq_from_selected_building() -> void:
 	building_state["converted_to"] = "HEADQUARTERS"
 	building_archetypes[selected_hq_building_idx] = building_state
 	primary_hq_position = hq_center
-	_milestone13_spawn_survivors(hq_center)
+	_milestone13_spawn_survivors(hq_center, selected_hq_building_idx)
 	evacuation_zones.clear()
 	evacuation_zones.append(hq_center)
 	wood = 180
@@ -1663,6 +1675,43 @@ func _find_nearest_entity(grid: Dictionary, positions: Array[Vector2], origin: V
 func _find_nearest_zombie(origin: Vector2, radius: float) -> int:
 	return _find_nearest_entity(zombie_grid, zombie_positions, origin, radius)
 
+func _rebuild_static_building_grid() -> void:
+	static_building_grid.clear()
+	for building_index in range(buildings.size()):
+		if building_index < building_archetypes.size() and bool(building_archetypes[building_index].get("destroyed", false)):
+			continue
+		var building_rect: Rect2 = buildings[building_index]
+		var minimum_cell: Vector2i = Vector2i(floori(building_rect.position.x / GRID_CELL_SIZE), floori(building_rect.position.y / GRID_CELL_SIZE))
+		var maximum_cell: Vector2i = Vector2i(floori(building_rect.end.x / GRID_CELL_SIZE), floori(building_rect.end.y / GRID_CELL_SIZE))
+		for cell_y in range(minimum_cell.y, maximum_cell.y + 1):
+			for cell_x in range(minimum_cell.x, maximum_cell.x + 1):
+				var cell_key: Vector2i = Vector2i(cell_x, cell_y)
+				var cell_buildings: Array = static_building_grid.get(cell_key, [])
+				cell_buildings.append(building_index)
+				static_building_grid[cell_key] = cell_buildings
+
+func _building_indices_for_rect(query_rect: Rect2) -> Array[int]:
+	var result: Array[int] = []
+	var seen: Dictionary = {}
+	if static_building_grid.is_empty():
+		for building_index in range(buildings.size()):
+			if building_index < building_archetypes.size() and not bool(building_archetypes[building_index].get("destroyed", false)):
+				result.append(building_index)
+		return result
+	var minimum_cell: Vector2i = Vector2i(floori(query_rect.position.x / GRID_CELL_SIZE), floori(query_rect.position.y / GRID_CELL_SIZE))
+	var maximum_cell: Vector2i = Vector2i(floori(query_rect.end.x / GRID_CELL_SIZE), floori(query_rect.end.y / GRID_CELL_SIZE))
+	for cell_y in range(minimum_cell.y, maximum_cell.y + 1):
+		for cell_x in range(minimum_cell.x, maximum_cell.x + 1):
+			var cell_key: Vector2i = Vector2i(cell_x, cell_y)
+			var cell_buildings: Array = static_building_grid.get(cell_key, [])
+			for raw_index in cell_buildings:
+				var building_index: int = int(raw_index)
+				if seen.has(building_index) or building_index >= building_archetypes.size() or bool(building_archetypes[building_index].get("destroyed", false)):
+					continue
+				seen[building_index] = true
+				result.append(building_index)
+	return result
+
 func _building_index_at(position: Vector2) -> int:
 	for index in range(buildings.size()):
 		if bool(building_archetypes[index].get("destroyed", false)):
@@ -1747,8 +1796,8 @@ func _move_circle_with_buildings(origin: Vector2, displacement: Vector2, radius:
 		remaining = locked_tangent.normalized() * displacement.length()
 	for iteration in range(2):
 		var candidate: Vector2 = position + remaining
-		for building_index in range(buildings.size()):
-			if bool(building_archetypes[building_index].get("destroyed", false)):
+		for building_index in _building_indices_for_rect(Rect2(candidate - Vector2(radius, radius), Vector2(radius * 2.0, radius * 2.0))):
+			if building_index >= building_archetypes.size() or bool(building_archetypes[building_index].get("destroyed", false)):
 				continue
 			var building: Rect2 = buildings[building_index]
 			var closest: Vector2 = Vector2(
@@ -1846,8 +1895,10 @@ func _generate_city_blocks(style: int) -> Array[Rect2]:
 func _is_open_world_position(position: Vector2, margin: float = 28.0) -> bool:
 	if position.x < margin or position.x > WORLD_SIZE.x - margin or position.y < margin or position.y > WORLD_SIZE.y - margin:
 		return false
-	for building in buildings:
-		if building.grow(margin).has_point(position):
+	for building_index in range(buildings.size()):
+		if building_index < building_archetypes.size() and bool(building_archetypes[building_index].get("destroyed", false)):
+			continue
+		if buildings[building_index].grow(margin).has_point(position):
 			return false
 	return true
 
@@ -1868,8 +1919,10 @@ func _is_vehicle_ground_position(position: Vector2) -> bool:
 func _is_valid_street_position(position: Vector2) -> bool:
 	if position.x < 28.0 or position.x > WORLD_SIZE.x - 28.0 or position.y < 270.0 or position.y > WORLD_SIZE.y - 220.0:
 		return false
-	for building in buildings:
-		var expanded := building.grow(UNIT_SELECT_RADIUS)
+	for building_index in range(buildings.size()):
+		if building_index < building_archetypes.size() and bool(building_archetypes[building_index].get("destroyed", false)):
+			continue
+		var expanded: Rect2 = buildings[building_index].grow(UNIT_SELECT_RADIUS)
 		if expanded.has_point(position):
 			return false
 	return true
@@ -2051,34 +2104,39 @@ func _engineer_button_rect() -> Rect2:
 func _salvage_button_rect() -> Rect2:
 	return Rect2(Vector2(safe_insets.x + 390.0, safe_insets.y + 196.0 + 4.0 * (touch_target_size + 6.0)), Vector2(140.0, touch_target_size))
 
+func _has_clear_building_line_of_sight(origin: Vector2, target: Vector2) -> bool:
+	var segment_rect: Rect2 = Rect2(origin, target - origin).abs().grow(1.0)
+	for building_index in _building_indices_for_rect(segment_rect):
+		if building_index >= building_archetypes.size() or bool(building_archetypes[building_index].get("destroyed", false)):
+			continue
+		var building_rect: Rect2 = buildings[building_index]
+		if building_rect.has_point(origin) or building_rect.has_point(target):
+			continue
+		if building_rect.intersects_segment(origin, target):
+			return false
+	return true
+
 func _find_unit_combat_target(position: Vector2, attack_range: float, sniper: bool) -> int:
-	if sniper:
-		var special_index: int = -1
-		var special_distance: float = attack_range * attack_range
-		for index in range(zombies.size()):
-			var zombie: Dictionary = zombies[index]
-			if str(zombie.get("kind", "")) != "brute" and str(zombie.get("kind", "")) != "spitter":
-				continue
-			var distance: float = position.distance_squared_to(zombie["pos"])
-			if distance <= special_distance:
-				special_distance = distance
-				special_index = index
-		if special_index >= 0:
-			return special_index
-	else:
-		var melee_index: int = -1
-		var melee_distance: float = attack_range * attack_range
-		for index in range(zombies.size()):
-			var zombie: Dictionary = zombies[index]
-			if str(zombie.get("kind", "")) == "spitter":
-				continue
-			var distance: float = position.distance_squared_to(zombie["pos"])
-			if distance <= melee_distance:
-				melee_distance = distance
-				melee_index = index
-		if melee_index >= 0:
-			return melee_index
-	return _find_nearest_zombie(position, attack_range)
+	var best_target_index: int = -1
+	var best_score: float = -INF
+	var maximum_distance_squared: float = attack_range * attack_range
+	for target_idx in range(zombies.size()):
+		var zombie: Dictionary = zombies[target_idx]
+		var target_position: Vector2 = zombie.get("pos", Vector2.ZERO)
+		var dist_sq: float = position.distance_squared_to(target_position)
+		if dist_sq > maximum_distance_squared or not _has_clear_building_line_of_sight(position, target_position):
+			continue
+		var zombie_kind: String = str(zombie.get("kind", "")).to_lower()
+		var threat_weight: float = 1.0
+		if zombie_kind in ["brute", "spitter"]:
+			threat_weight = 3.0
+		elif zombie_kind in ["raider", "hostile_raider", "hostile raider"]:
+			threat_weight = 2.0
+		var score: float = (threat_weight * 100000.0) - dist_sq - (float(target_idx) * 0.001)
+		if score > best_score:
+			best_score = score
+			best_target_index = target_idx
+	return best_target_index
 
 func _update_auto_ops(delta: float) -> void:
 	if delta <= 0.0 or not auto_ops_enabled:
@@ -4348,10 +4406,12 @@ func _update_flares(delta: float) -> void:
 		else:
 			flares[index] = flare
 
-func _damage_zombie(index: int, damage: float, attacker_unit_index: int = -1) -> void:
+func _damage_zombie(index: int, damage: float, attacker_unit_index: int = -1, projectile_origin: Vector2 = Vector2(-1.0, -1.0)) -> void:
 	if index < 0 or index >= zombies.size():
 		return
 	var zombie: Dictionary = zombies[index]
+	if projectile_origin != Vector2(-1.0, -1.0) and not _has_clear_building_line_of_sight(projectile_origin, zombie.get("pos", Vector2.ZERO)):
+		return
 	var final_damage: float = damage
 	if day_phase == "NIGHT" and _is_position_illuminated(zombie["pos"]) and randf() < 0.15:
 		final_damage *= 1.75
@@ -4650,6 +4710,106 @@ func _update_outpost_damage(delta: float) -> void:
 			break
 		zombies[zombie_index] = zombie
 
+func _nearest_walkable_building_exit(building_rect: Rect2, preferred_position: Vector2, occupied_positions: Array[Vector2]) -> Vector2:
+	var search_rect: Rect2 = building_rect.grow(UNIT_SELECT_RADIUS + 14.0)
+	var candidates: Array[Vector2] = []
+	var horizontal_steps: int = maxi(1, ceili(search_rect.size.x / 32.0))
+	var vertical_steps: int = maxi(1, ceili(search_rect.size.y / 32.0))
+	for step_index in range(horizontal_steps + 1):
+		var x_value: float = lerpf(search_rect.position.x, search_rect.end.x, float(step_index) / float(horizontal_steps))
+		candidates.append(Vector2(x_value, search_rect.position.y))
+		candidates.append(Vector2(x_value, search_rect.end.y))
+	for step_index in range(vertical_steps + 1):
+		var y_value: float = lerpf(search_rect.position.y, search_rect.end.y, float(step_index) / float(vertical_steps))
+		candidates.append(Vector2(search_rect.position.x, y_value))
+		candidates.append(Vector2(search_rect.end.x, y_value))
+	var best_position: Vector2 = preferred_position
+	var best_distance: float = INF
+	for candidate in candidates:
+		if building_rect.grow(UNIT_SELECT_RADIUS + 4.0).has_point(candidate) or not _is_valid_street_position(candidate):
+			continue
+		var occupied: bool = false
+		for existing_position in occupied_positions:
+			if candidate.distance_squared_to(existing_position) < 22.0 * 22.0:
+				occupied = true
+				break
+		if occupied:
+			continue
+		var distance: float = preferred_position.distance_squared_to(candidate)
+		if distance < best_distance:
+			best_distance = distance
+			best_position = candidate
+	if best_distance < INF:
+		return best_position
+	for radius_step in range(1, 17):
+		var radius: float = maxf(building_rect.size.x, building_rect.size.y) * 0.5 + 48.0 + float(radius_step) * 24.0
+		for angle_index in range(24):
+			var angle: float = TAU * float(angle_index) / 24.0
+			var candidate: Vector2 = building_rect.get_center() + Vector2(cos(angle), sin(angle)) * radius
+			if not _is_valid_street_position(candidate):
+				continue
+			var occupied: bool = false
+			for existing_position in occupied_positions:
+				if candidate.distance_squared_to(existing_position) < 22.0 * 22.0:
+					occupied = true
+					break
+			if not occupied:
+				return candidate
+	return building_rect.get_center() + Vector2(0.0, -(maxf(building_rect.size.x, building_rect.size.y) * 0.5 + UNIT_SELECT_RADIUS + 16.0))
+
+func _eject_building_garrison(building_index: int) -> void:
+	if building_index < 0 or building_index >= buildings.size():
+		return
+	var building_rect: Rect2 = buildings[building_index]
+	var occupied_positions: Array[Vector2] = []
+	for unit_index in range(units.size()):
+		var unit: Dictionary = units[unit_index]
+		if not bool(unit.get("garrisoned", false)) or int(unit.get("garrison_building", -1)) != building_index:
+			continue
+		var exit_position: Vector2 = _nearest_walkable_building_exit(building_rect, building_rect.get_center(), occupied_positions)
+		occupied_positions.append(exit_position)
+		unit["garrisoned"] = false
+		unit["garrison_building"] = -1
+		unit["pos"] = exit_position
+		unit["triage_timer"] = 2.5
+		unit["status"] = "TRIAGE"
+		unit["move_target"] = null
+		unit["manual_order"] = false
+		unit["hp"] = maxf(1.0, float(unit.get("hp", 100.0)) - 25.0)
+		units[unit_index] = unit
+
+func _update_triage(delta: float) -> void:
+	if delta <= 0.0:
+		return
+	for unit_index in range(units.size()):
+		var unit: Dictionary = units[unit_index]
+		var triage_remaining: float = maxf(0.0, float(unit.get("triage_timer", 0.0)) - delta)
+		unit["triage_timer"] = triage_remaining
+		unit["status"] = "TRIAGE" if triage_remaining > 0.0 else ""
+		if triage_remaining <= 0.0:
+			units[unit_index] = unit
+			continue
+		var healing_rate: float = 0.0
+		if food > 0:
+			for building_index in range(building_archetypes.size()):
+				var building_state: Dictionary = building_archetypes[building_index]
+				if bool(building_state.get("destroyed", false)) or str(building_state.get("converted_to", "")) != "FIELD_CLINIC":
+					continue
+				if unit["pos"].distance_squared_to(buildings[building_index].get_center()) <= 180.0 * 180.0:
+					healing_rate = maxf(healing_rate, 18.0 * _milestone14_facility_medical_multiplier())
+					break
+			if healing_rate <= 0.0:
+				for medic_index in range(units.size()):
+					if medic_index == unit_index:
+						continue
+					var medic: Dictionary = units[medic_index]
+					if str(medic.get("kind", "")) == "medic" and not bool(medic.get("garrisoned", false)) and unit["pos"].distance_squared_to(medic.get("pos", Vector2.ZERO)) <= 120.0 * 120.0:
+						healing_rate = maxf(healing_rate, 12.0 * _milestone14_proficiency_bonus(medic, "medical"))
+						break
+		if healing_rate > 0.0:
+			unit["hp"] = minf(float(unit.get("max_hp", 100.0)), float(unit.get("hp", 100.0)) + healing_rate * delta)
+		units[unit_index] = unit
+
 func _eject_outpost_shelter(outpost: Dictionary) -> void:
 	var sheltered: int = maxi(0, int(outpost.get("sheltered", 0)))
 	if sheltered <= 0:
@@ -4932,6 +5092,8 @@ func _update_work_orders(delta: float) -> void:
 						salvage_amount = int(round(float(salvage_amount) * 1.2))
 					building_archetypes[target_index]["destroyed"] = true
 					building_archetypes[target_index]["cache_available"] = false
+					_rebuild_static_building_grid()
+					_eject_building_garrison(target_index)
 					unit["cargo_type"] = "scrap"
 					unit["cargo_amount"] = salvage_amount
 					world_callouts.append({"pos": buildings[target_index].get_center(), "text": "%d SCRAP — HAULING" % salvage_amount, "life": 2.5})
@@ -5074,13 +5236,59 @@ func _milestone13_nearest_building(position: Vector2, radius: float) -> int:
 			best = i
 	return best
 
-func _milestone13_spawn_survivors(origin: Vector2) -> void:
+func _milestone13_spawn_survivors(origin: Vector2, hq_building_index: int = -1) -> void:
 	if not units.is_empty():
 		return
+	var hq_rect: Rect2 = buildings[hq_building_index] if hq_building_index >= 0 and hq_building_index < buildings.size() else Rect2(origin - Vector2(24.0, 24.0), Vector2(48.0, 48.0))
+	var half_extent: Vector2 = hq_rect.size * 0.5
+	var spawn_positions: Array[Vector2] = []
+	var clearance_values: Array[float] = [36.0, 52.0, 72.0, 96.0, 128.0, 168.0, 216.0]
 	for i in range(survivors.size()):
-		var angle: float = TAU * float(i) / float(maxi(1, survivors.size()))
-		var spawn: Vector2 = origin + Vector2(cos(angle), sin(angle)) * 58.0
-		units.append({"id": _next_unit_id(), "survivor_id": int(survivors[i]["id"]), "pos": spawn, "kind": str(survivors[i]["role"]).to_lower(), "cooldown": 0.2, "hp": 100.0, "max_hp": 100.0, "kills": 0, "rank": 0, "garrisoned": false, "garrison_building": -1, "move_target": null, "manual_order": false, "ai_task": "", "steering": {}})
+		var base_angle: float = TAU * float(i) / float(maxi(1, survivors.size()))
+		var selected_spawn: Vector2 = origin + Vector2(cos(base_angle), sin(base_angle)) * (maxf(half_extent.x, half_extent.y) + 80.0)
+		var found_spawn: bool = false
+		for attempt in range(72):
+			var angle: float = base_angle + TAU * float(attempt) / 72.0
+			var direction: Vector2 = Vector2(cos(angle), sin(angle)).normalized()
+			var boundary_distance: float = minf(half_extent.x / maxf(absf(direction.x), 0.001), half_extent.y / maxf(absf(direction.y), 0.001))
+			for clearance in clearance_values:
+				var candidate: Vector2 = origin + direction * (boundary_distance + clearance)
+				if not _is_valid_street_position(candidate):
+					continue
+				var overlaps_spawn: bool = false
+				for existing_spawn in spawn_positions:
+					if candidate.distance_squared_to(existing_spawn) < 24.0 * 24.0:
+						overlaps_spawn = true
+						break
+				if not overlaps_spawn:
+					selected_spawn = candidate
+					found_spawn = true
+					break
+			if found_spawn:
+				break
+		if not found_spawn:
+			for fallback_radius in range(1, 13):
+				var candidate_radius: float = maxf(half_extent.x, half_extent.y) + 40.0 + float(fallback_radius) * 24.0
+				for angle_index in range(24):
+					var fallback_angle: float = TAU * float(angle_index) / 24.0
+					var candidate: Vector2 = origin + Vector2(cos(fallback_angle), sin(fallback_angle)) * candidate_radius
+					if not _is_valid_street_position(candidate):
+						continue
+					var overlaps_spawn: bool = false
+					for existing_spawn in spawn_positions:
+						if candidate.distance_squared_to(existing_spawn) < 24.0 * 24.0:
+							overlaps_spawn = true
+							break
+					if not overlaps_spawn:
+						selected_spawn = candidate
+						found_spawn = true
+						break
+				if found_spawn:
+					break
+				if found_spawn:
+					break
+		spawn_positions.append(selected_spawn)
+		units.append({"id": _next_unit_id(), "survivor_id": int(survivors[i]["id"]), "pos": selected_spawn, "kind": str(survivors[i]["role"]).to_lower(), "cooldown": 0.2, "hp": 100.0, "max_hp": 100.0, "kills": 0, "rank": 0, "garrisoned": false, "garrison_building": -1, "move_target": null, "manual_order": false, "ai_task": "", "steering": {}, "triage_timer": 0.0, "status": ""})
 
 func _milestone13_assign_role(index: int, role: String) -> void:
 	if index < 0 or index >= survivors.size():
@@ -5628,6 +5836,29 @@ func _resume_operation() -> void:
 	message_timer = 3.0
 	queue_redraw()
 
+func _draw_dashed_territory_edge(from_point: Vector2, to_point: Vector2, line_color: Color) -> void:
+	var edge_length: float = from_point.distance_to(to_point)
+	if edge_length <= 0.1:
+		return
+	var direction: Vector2 = (to_point - from_point) / edge_length
+	var offset: float = 0.0
+	while offset < edge_length:
+		var dash_end: float = minf(edge_length, offset + 18.0)
+		draw_line(from_point + direction * offset, from_point + direction * dash_end, line_color, 3.0, true)
+		offset += 30.0
+
+func _draw_outpost_territory_bounds() -> void:
+	var visible_rect: Rect2 = _camera_view_rect().grow(24.0)
+	for outpost in outposts:
+		var territory_rect: Rect2 = outpost.get("territory_rect", outpost.get("rect", Rect2(outpost.get("pos", Vector2.ZERO) - Vector2(110.0, 110.0), Vector2(220.0, 220.0))))
+		if not visible_rect.intersects(territory_rect):
+			continue
+		var boundary_color: Color = Color(0.36, 0.92, 0.62, 0.92) if bool(outpost.get("is_hq", false)) else Color(0.40, 0.74, 0.94, 0.82)
+		_draw_dashed_territory_edge(territory_rect.position, Vector2(territory_rect.end.x, territory_rect.position.y), boundary_color)
+		_draw_dashed_territory_edge(Vector2(territory_rect.end.x, territory_rect.position.y), territory_rect.end, boundary_color)
+		_draw_dashed_territory_edge(territory_rect.end, Vector2(territory_rect.position.x, territory_rect.end.y), boundary_color)
+		_draw_dashed_territory_edge(Vector2(territory_rect.position.x, territory_rect.end.y), territory_rect.position, boundary_color)
+
 func _draw_world_scene() -> void:
 	var origin: Vector2 = viewport_size * 0.5 - camera_position * camera_zoom
 	draw_set_transform(origin, 0.0, Vector2(camera_zoom, camera_zoom))
@@ -5635,6 +5866,7 @@ func _draw_world_scene() -> void:
 	_draw_grid()
 	_draw_roads()
 	_draw_buildings()
+	_draw_outpost_territory_bounds()
 	for district_index in range(district_regions.size()):
 		var district_rect: Rect2 = district_regions[district_index]
 		if _camera_view_rect().intersects(district_rect):
