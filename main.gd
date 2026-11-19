@@ -1292,7 +1292,7 @@ func _outpost_rect_geometry_valid(rect: Rect2) -> bool:
 			if road_rect.intersects(perimeter_band):
 				return false
 	return true
-ize(size: Vector2) -> Vector2:
+func _snap_outpost_size(size: Vector2) -> Vector2:
 	return Vector2(clampf(roundf(size.x / OUTPOST_SNAP) * OUTPOST_SNAP, OUTPOST_MIN_SIZE, OUTPOST_MAX_SIZE), clampf(roundf(size.y / OUTPOST_SNAP) * OUTPOST_SNAP, OUTPOST_MIN_SIZE, OUTPOST_MAX_SIZE))
 
 
