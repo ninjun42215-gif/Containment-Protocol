@@ -211,6 +211,10 @@ var work_zone_start := Vector2.ZERO
 var work_zone_current := Vector2.ZERO
 var work_outside_enabled := true
 var citizen_name_seed: int = 0
+var used_citizen_names: Dictionary = {}
+var citizen_name_permutation_offset: int = 0
+var citizen_name_permutation_stride: int = 1
+var citizen_name_permutation_cursor: int = 0
 var faction_doctrine: String = "PRAGMATIC FREEHOLD"
 var doctrine_change_day: int = 1
 var doctrine_morale_shock_days: int = 0
@@ -344,6 +348,14 @@ func _start_sector(index: int) -> void:
 	work_zones.clear()
 	role_allocations = {"GATHERERS": 0, "ENGINEERS": 0, "FACILITY": 0, "SQUAD": 0}
 	citizen_name_seed = campaign_map_seed
+	used_citizen_names.clear()
+	citizen_name_permutation_offset = randi_range(0, 14399)
+	citizen_name_permutation_stride = randi_range(1, 14399)
+	while _milestone14_gcd(citizen_name_permutation_stride, 14400) != 1:
+		citizen_name_permutation_stride = posmod(citizen_name_permutation_stride + 1, 14400)
+		if citizen_name_permutation_stride == 0:
+			citizen_name_permutation_stride = 1
+	citizen_name_permutation_cursor = 0
 	faction_doctrine = "PRAGMATIC FREEHOLD"
 	doctrine_change_day = 1
 	doctrine_morale_shock_days = 0
@@ -377,6 +389,12 @@ func _start_sector(index: int) -> void:
 	audio_effect = ""
 	message = "EVACUATE CIVILIANS. HOLD THE LINE."
 	message_timer = 4.0
+	# Re-assert convoy stock after all campaign state and roster resets.
+	scrap = 140
+	wood = 180
+	food = 120
+	fuel = 80.0
+	weapons = {"rifles": 4, "snipers": 1, "heavy_mgs": 0, "medkits": 2}
 	for district_index in range(spawn_districts.size()):
 		var district: Rect2 = spawn_districts[district_index]
 		var civilian_spawn_count: int = _scenario_civilian_count(district_index, 30 + _residential_density_bonus(district))
@@ -1231,8 +1249,9 @@ func _outpost_placement_status() -> String:
 				break
 		if not enclosed_hq_building:
 			return "NO BUILDING ENCLOSED"
-	var required_wood: int = _outpost_placement_wood_cost()
-	var required_scrap: int = _outpost_placement_cost() + (0 if outpost_placement_kind in ["hq", "expand"] else 40)
+	var initial_convoy_hq: bool = outpost_placement_kind == "hq" and outposts.is_empty()
+	var required_wood: int = 0 if initial_convoy_hq else _outpost_placement_wood_cost()
+	var required_scrap: int = 0 if initial_convoy_hq else _outpost_placement_cost() + (0 if outpost_placement_kind in ["hq", "expand"] else 40)
 	if wood < required_wood or scrap < required_scrap:
 		return "NOT ENOUGH WOOD/SCRAP"
 	return "VALID"
@@ -2722,7 +2741,7 @@ func _handle_tap(pos: Vector2) -> void:
 	if game_state == "title" or game_state == "sector_select":
 		var title_pos: Vector2 = pos - safe_area_rect.position
 		var title_size: Vector2 = _safe_viewport_size()
-		var manual_rect := Rect2(title_size.x * 0.30, title_size.y * 0.84, title_size.x * 0.40, 58.0)
+		var manual_rect: Rect2 = _title_manual_button_rect(title_size)
 		if title_manual_open:
 			title_manual_open = false
 			_queue_sfx("menu_click")
@@ -3459,6 +3478,11 @@ func _get_title_save_preview() -> Dictionary:
 		population += saved_survivors.size()
 	return {"day": int(state.get("survival_day", 1)), "clock": clock_text, "population": population}
 
+func _title_manual_button_rect(title_size: Vector2) -> Rect2:
+	# Shared by rendering and touch input; always exceeds the 48 dp minimum target.
+	var button_height: float = maxf(64.0, title_size.y * 0.075)
+	return Rect2(title_size.x * 0.18, title_size.y * 0.835, title_size.x * 0.64, button_height)
+
 func _draw_field_manual(title_size: Vector2) -> void:
 	if not title_manual_open:
 		return
@@ -3534,7 +3558,10 @@ func _draw_title_screen() -> void:
 			draw_rect(launch_rect, Color("#245b3c"))
 			draw_rect(launch_rect, Color("#91ddb0"), false, 1.5)
 			_draw_text("[DEPLOY CONVOY]", launch_rect.position + Vector2(8.0, 30.0), roundi(10.0 * scale_factor), Color("#f0fff5"))
-	_draw_text("[FIELD MANUAL]", Vector2(title_size.x * 0.31, title_size.y * 0.875), roundi(14.0 * scale_factor), Color("#c9e6d1"))
+	var manual_button: Rect2 = _title_manual_button_rect(title_size)
+	draw_rect(manual_button, Color("#173b2b", 0.96))
+	draw_rect(manual_button, Color("#79c995"), false, 2.0)
+	_draw_text("[FIELD MANUAL]", Vector2(title_size.x * 0.31, manual_button.position.y + manual_button.size.y * 0.66), roundi(14.0 * scale_factor), Color("#c9e6d1"))
 	_draw_text("TACTICAL RESPONSE COMMAND  //  SECURE THE EXCLUSION ZONE", Vector2(title_size.x * 0.07, title_size.y * 0.925), roundi(8.0 * scale_factor), Color("#6e9680"))
 	_draw_field_manual(title_size)
 
@@ -3878,7 +3905,9 @@ func _draw_outpost_placement_hud(top: float) -> void:
 	var half_width: float = safe_width * 0.5
 	draw_rect(Rect2(safe_left, top, half_width - 6.0, touch_target_size), confirm_color)
 	draw_rect(Rect2(safe_left, top, half_width - 6.0, touch_target_size), Color("#72d69a") if outpost_placement_valid else Color("#ff6868"), false, 2.0)
-	_draw_text("[CONFIRM (W%d S%d)]" % [_outpost_placement_wood_cost(), _outpost_placement_cost()], Vector2(safe_left + 10.0, top + touch_target_size * 0.62), 14, Color("#f0fff5"))
+	var initial_convoy_hq: bool = outpost_placement_kind == "hq" and outposts.is_empty()
+	var confirm_label: String = "[CONFIRM HQ — FREE (CONVOY HQ)]" if initial_convoy_hq else "[CONFIRM (W%d S%d)]" % [_outpost_placement_wood_cost(), _outpost_placement_cost()]
+	_draw_text(confirm_label, Vector2(safe_left + 10.0, top + touch_target_size * 0.62), 14, Color("#f0fff5"))
 	var cancel_left: float = safe_left + half_width + 6.0
 	draw_rect(Rect2(cancel_left, top, half_width - 6.0, touch_target_size), Color("#472a2a"))
 	draw_rect(Rect2(cancel_left, top, half_width - 6.0, touch_target_size), Color("#d77b7b"), false, 2.0)
