@@ -3493,7 +3493,7 @@ func _draw_title_screen() -> void:
 	var panel := Rect2(title_size.x * 0.035, title_size.y * 0.025, title_size.x * 0.93, title_size.y * 0.94)
 	draw_rect(panel, Color(0.015, 0.045, 0.04, 0.91))
 	draw_rect(panel, Color("#5c9273"), false, 2.0)
-	_draw_containment_emblem(Vector2(title_size.x * 0.5, title_size.y * 0.105), 35.roundi(0.0 * scale_factor))
+	_draw_containment_emblem(Vector2(title_size.x * 0.5, title_size.y * 0.105), 35.0 * scale_factor)
 	_draw_text("CONTAINMENT PROTOCOL", Vector2(title_size.x * 0.10, title_size.y * 0.205), roundi(27.0 * scale_factor), Color("#f0fff5"))
 	_draw_text("STATE EXCLUSION ZONE // SURVIVAL COMMAND", Vector2(title_size.x * 0.085, title_size.y * 0.245), roundi(10.0 * scale_factor), Color("#a9c8b7"))
 	if best_days_survived > 0 or best_civilians_saved > 0:
