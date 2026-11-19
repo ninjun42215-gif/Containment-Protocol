@@ -2108,7 +2108,7 @@ func _has_clear_building_line_of_sight(origin: Vector2, target: Vector2) -> bool
 		if building_index >= building_archetypes.size() or bool(building_archetypes[building_index].get("destroyed", false)):
 			continue
 		var building_rect: Rect2 = buildings[building_index]
-		if building_rect.has_point(origin) or building_rect.has_point(target):
+		if building_rect.has_point(origin):
 			continue
 		if building_rect.intersects_segment(origin, target):
 			return false
@@ -5240,7 +5240,7 @@ func _milestone13_spawn_survivors(origin: Vector2, hq_building_index: int = -1) 
 	var hq_rect: Rect2 = buildings[hq_building_index] if hq_building_index >= 0 and hq_building_index < buildings.size() else Rect2(origin - Vector2(24.0, 24.0), Vector2(48.0, 48.0))
 	var half_extent: Vector2 = hq_rect.size * 0.5
 	var spawn_positions: Array[Vector2] = []
-	var clearance_values: Array[float] = [36.0, 52.0, 72.0, 96.0, 128.0, 168.0, 216.0]
+	var clearance_values: Array[float] = [44.0, 60.0, 80.0, 104.0, 136.0, 176.0, 224.0]
 	for i in range(survivors.size()):
 		var base_angle: float = TAU * float(i) / float(maxi(1, survivors.size()))
 		var selected_spawn: Vector2 = origin + Vector2(cos(base_angle), sin(base_angle)) * (maxf(half_extent.x, half_extent.y) + 80.0)
