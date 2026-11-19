@@ -172,7 +172,6 @@ var civilian_grid: Dictionary = {}
 var zombie_grid: Dictionary = {}
 var static_building_grid: Dictionary = {}
 var smoothed_frame_time_ms: float = 16.67
-var simulation_frame_index: int = 0
 var zombie_positions: Array[Vector2] = []
 var selected_unit_index := -1
 var time_scale_index := 0
@@ -425,7 +424,6 @@ func _process(delta: float) -> void:
 	_update_audio()
 	if delta > 0.0:
 		smoothed_frame_time_ms = lerpf(smoothed_frame_time_ms, delta * 1000.0, 0.08)
-		simulation_frame_index += 1
 	if delta > 0.0:
 		fps_frame_count += 1
 		fps_sample_timer += delta
@@ -573,7 +571,7 @@ func _process(delta: float) -> void:
 		zombie["building_attack_cooldown"] = maxf(0.0, float(zombie.get("building_attack_cooldown", 0.0)) - sim_delta)
 		zombie["unit_attack_cooldown"] = maxf(0.0, float(zombie.get("unit_attack_cooldown", 0.0)) - sim_delta)
 		var zpos: Vector2 = zombie["pos"]
-		var offscreen_stagger_frame: bool = stagger_offscreen_zombies and not viewport_world_rect.has_point(zpos) and posmod(simulation_frame_index + i, 2) == 1
+		var offscreen_stagger_frame: bool = stagger_offscreen_zombies and not viewport_world_rect.has_point(zpos) and posmod(Engine.get_physics_frames() + i, 2) == 1
 		if offscreen_stagger_frame:
 			zombies[i] = zombie
 			continue
