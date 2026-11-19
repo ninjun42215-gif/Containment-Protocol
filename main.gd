@@ -226,6 +226,12 @@ var outpost_placement_status: String = "VALID"
 var recent_gunfire: Array[Dictionary] = []
 var population_heat_targets: Array[Dictionary] = []
 var population_heat_refresh_timer: float = 0.0
+var title_animation_time: float = 0.0
+var title_manual_open: bool = false
+var menu_fade_alpha: float = 0.0
+var menu_transition_timer: float = 0.0
+var menu_transition_action: String = ""
+var menu_transition_sector: int = 0
 
 func _ready() -> void:
 	randomize()
@@ -407,6 +413,26 @@ func _process(delta: float) -> void:
 		world_callouts[callout_index]["life"] = float(world_callouts[callout_index].get("life", 0.0)) - delta
 		if float(world_callouts[callout_index]["life"]) <= 0.0:
 			world_callouts.remove_at(callout_index)
+	if game_state == "title" or game_state == "sector_select" or game_state == "prologue":
+		title_animation_time += minf(delta, 0.05)
+		if menu_transition_timer > 0.0:
+			menu_transition_timer = maxf(0.0, menu_transition_timer - delta)
+			menu_fade_alpha = clampf(1.0 - menu_transition_timer / 0.24, 0.0, 1.0)
+			if menu_transition_timer <= 0.0:
+				var action: String = menu_transition_action
+				menu_transition_action = ""
+				if action == "deploy":
+					_start_sector(menu_transition_sector)
+					menu_fade_alpha = 1.0
+					menu_transition_timer = 0.24
+				elif action == "sector_select":
+					game_state = "sector_select"
+					menu_fade_alpha = 1.0
+					menu_transition_timer = 0.24
+				else:
+					menu_fade_alpha = 0.0
+		queue_redraw()
+		return
 	if game_state != "playing":
 		queue_redraw()
 		return
@@ -2689,13 +2715,40 @@ func _input(event: InputEvent) -> void:
 			queue_redraw()
 
 func _handle_tap(pos: Vector2) -> void:
-	if game_state == "title":
+	if game_state == "title" or game_state == "sector_select":
 		var title_pos: Vector2 = pos - safe_area_rect.position
 		var title_size: Vector2 = _safe_viewport_size()
-		if title_pos.y >= title_size.y * 0.63 and _has_valid_save():
-			_resume_operation()
+		var manual_rect := Rect2(title_size.x * 0.30, title_size.y * 0.84, title_size.x * 0.40, 58.0)
+		if title_manual_open:
+			title_manual_open = false
+			_queue_sfx("menu_click")
+		elif manual_rect.has_point(title_pos):
+			title_manual_open = true
+			_queue_sfx("menu_click")
+		elif game_state == "title":
+			var resume_rect := Rect2(title_size.x * 0.08, title_size.y * 0.52, title_size.x * 0.84, 116.0)
+			var deploy_rect := Rect2(title_size.x * 0.16, title_size.y * 0.69, title_size.x * 0.68, 76.0)
+			if _has_valid_save() and resume_rect.has_point(title_pos):
+				_queue_sfx("menu_click")
+				_resume_operation()
+			elif deploy_rect.has_point(title_pos):
+				menu_transition_action = "sector_select"
+				menu_transition_timer = 0.24
+				menu_fade_alpha = 0.0
+				_queue_sfx("radar")
 		else:
-			game_state = "sector_select"
+			var card_top: float = title_size.y * 0.35
+			var card_height: float = minf(150.0, title_size.y * 0.145)
+			var card_gap: float = 14.0
+			for sector in range(3):
+				var card_rect := Rect2(title_size.x * 0.06, card_top + float(sector) * (card_height + card_gap), title_size.x * 0.88, card_height)
+				if card_rect.has_point(title_pos):
+					menu_transition_action = "deploy"
+					menu_transition_sector = sector
+					menu_transition_timer = 0.24
+					menu_fade_alpha = 0.0
+					_queue_sfx("radar")
+					break
 		queue_redraw()
 		return
 	if game_state == "prologue":
@@ -3126,14 +3179,12 @@ func _execute_airstrike(center: Vector2) -> void:
 func _draw() -> void:
 	viewport_size = get_viewport_rect().size
 	if game_state == "title" or game_state == "sector_select":
-		draw_rect(Rect2(Vector2.ZERO, viewport_size), Color("#07110f"))
-		for x in range(0, int(viewport_size.x) + 1, 60):
-			draw_line(Vector2(x, 0.0), Vector2(x, viewport_size.y), Color(0.12, 0.23, 0.19, 0.32), 1.0)
-		for y in range(0, int(viewport_size.y) + 1, 60):
-			draw_line(Vector2(0.0, y), Vector2(viewport_size.x, y), Color(0.12, 0.23, 0.19, 0.32), 1.0)
+		_draw_satellite_backdrop()
 		draw_set_transform(safe_area_rect.position, 0.0, Vector2.ONE)
 		_draw_title_screen()
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		if menu_fade_alpha > 0.0:
+			draw_rect(Rect2(Vector2.ZERO, viewport_size), Color(0.0, 0.015, 0.012, menu_fade_alpha))
 		return
 	if game_state == "prologue":
 		draw_rect(Rect2(Vector2.ZERO, viewport_size), Color("#07110f"))
@@ -3154,6 +3205,8 @@ func _draw() -> void:
 		draw_rect(Rect2(40.0, viewport_size.y - 140.0, viewport_size.x - 80.0, 48.0), Color("#75e6a0"), false, 2.0)
 		_draw_text("[ESTABLISH HEADQUARTERS]", Vector2(58.0, viewport_size.y - 109.0), 15, Color("#f0fff5"))
 		_draw_text("[SKIP]", Vector2(viewport_size.x - 105.0, viewport_size.y - 74.0), 12, Color("#a9c8b7"))
+		if menu_fade_alpha > 0.0:
+			draw_rect(Rect2(Vector2.ZERO, viewport_size), Color(0.0, 0.015, 0.012, menu_fade_alpha))
 		return
 	if game_state == "hq_placement":
 		var hq_hint := "DRAG A PERIMETER AROUND AN INTACT BUILDING" if outpost_placement_active else "SELECT AN INTACT BUILDING TO ANCHOR HQ"
@@ -3316,32 +3369,165 @@ func _draw_evac_zone() -> void:
 		draw_arc(outpost["pos"], float(outpost["vision_radius"]), 0.0, TAU, 48, Color(0.25, 0.85, 0.48, 0.16), 1.0)
 		_draw_dashed_circle(outpost["pos"], OUTPOST_COMMAND_RADIUS, Color(0.35, 0.88, 0.55, 0.34), 48)
 
+func _draw_satellite_backdrop() -> void:
+	var size: Vector2 = viewport_size
+	draw_rect(Rect2(Vector2.ZERO, size), Color("#050b0e"))
+	var cell: float = maxf(42.0, size.x / 13.0)
+	for y in range(-1, ceili(size.y / cell) + 1):
+		for x in range(-1, ceili(size.x / cell) + 1):
+			var seed_value: int = posmod(x * 73 + y * 137 + x * y * 19, 11)
+			var rect := Rect2(Vector2(float(x) * cell + 5.0, float(y) * cell + 5.0), Vector2(cell - 11.0, cell - 11.0))
+			var tint: float = 0.035 + float(seed_value) * 0.003
+			draw_rect(rect, Color(0.16 + tint, 0.23 + tint, 0.22 + tint, 0.82))
+			if seed_value % 4 == 0:
+				draw_rect(Rect2(rect.position + Vector2(8.0, 8.0), rect.size * Vector2(0.30, 0.22)), Color(0.35, 0.48, 0.40, 0.22))
+	for x in range(0, int(size.x) + 1, int(cell)):
+		draw_line(Vector2(float(x), 0.0), Vector2(float(x), size.y), Color(0.34, 0.53, 0.43, 0.14), 2.0)
+	for y in range(0, int(size.y) + 1, int(cell)):
+		draw_line(Vector2(0.0, float(y)), Vector2(size.x, float(y)), Color(0.34, 0.53, 0.43, 0.14), 2.0)
+	var beacon_points: Array[Vector2] = [Vector2(size.x * 0.17, size.y * 0.29), Vector2(size.x * 0.79, size.y * 0.34), Vector2(size.x * 0.64, size.y * 0.76), Vector2(size.x * 0.28, size.y * 0.83)]
+	for index in range(beacon_points.size()):
+		var point: Vector2 = beacon_points[index]
+		var pulse: float = 0.5 + 0.5 * sin(title_animation_time * 2.2 + float(index) * 1.7)
+		draw_circle(point, 13.0 + pulse * 10.0, Color(0.95, 0.12, 0.10, 0.06 + pulse * 0.08))
+		draw_arc(point, 20.0 + pulse * 13.0, 0.0, TAU, 36, Color(1.0, 0.20, 0.16, 0.45), 1.5)
+		draw_circle(point, 3.5 + pulse * 1.5, Color("#ff5147"))
+	for signature in range(3):
+		var t: float = title_animation_time * (0.035 + float(signature) * 0.009) + float(signature) * 2.1
+		var infection := Vector2(size.x * (0.12 + fposmod(t, 0.78)), size.y * (0.24 + 0.19 * sin(t * 4.0 + float(signature))))
+		draw_circle(infection, 18.0, Color(1.0, 0.08, 0.06, 0.08))
+		draw_arc(infection, 11.0, 0.0, TAU, 24, Color(1.0, 0.16, 0.12, 0.55), 2.0)
+		draw_circle(infection, 3.0, Color("#f0443d"))
+	var scan_y: float = fposmod(title_animation_time * 72.0, maxf(1.0, size.y))
+	draw_line(Vector2(0.0, scan_y), Vector2(size.x, scan_y), Color(0.34, 0.94, 0.65, 0.17), 2.0)
+	for particle in range(30):
+		var px: float = fposmod(float(particle * 97) + title_animation_time * (7.0 + float(particle % 5)), maxf(1.0, size.x))
+		var py: float = fposmod(float(particle * 173) - title_animation_time * (11.0 + float(particle % 7)), maxf(1.0, size.y))
+		var alpha: float = 0.10 + 0.12 * (0.5 + 0.5 * sin(title_animation_time * 1.8 + float(particle)))
+		draw_circle(Vector2(px, py), 1.0 + float(particle % 3) * 0.45, Color(1.0, 0.48, 0.20, alpha))
+	draw_rect(Rect2(Vector2.ZERO, size), Color(0.005, 0.018, 0.022, 0.48))
+
+func _draw_containment_emblem(center: Vector2, radius: float) -> void:
+	var shield_points := PackedVector2Array([
+		center + Vector2(0.0, -radius),
+		center + Vector2(radius * 0.78, -radius * 0.58),
+		center + Vector2(radius * 0.68, radius * 0.36),
+		center + Vector2(0.0, radius),
+		center + Vector2(-radius * 0.68, radius * 0.36),
+		center + Vector2(-radius * 0.78, -radius * 0.58)
+	])
+	draw_colored_polygon(shield_points, Color(0.04, 0.16, 0.12, 0.92))
+	for point_index in range(shield_points.size()):
+		draw_line(shield_points[point_index], shield_points[(point_index + 1) % shield_points.size()], Color("#9be9b5"), 2.5)
+	draw_arc(center, radius * 0.49, 0.0, TAU, 48, Color("#e9f6e8"), 2.0)
+	draw_circle(center, radius * 0.13, Color("#e9f6e8"))
+	for arm in range(3):
+		var angle: float = -PI * 0.5 + float(arm) * TAU / 3.0
+		var origin: Vector2 = center + Vector2(cos(angle), sin(angle)) * radius * 0.18
+		var end: Vector2 = center + Vector2(cos(angle), sin(angle)) * radius * 0.43
+		draw_line(origin, end, Color("#e9f6e8"), 3.0)
+		draw_circle(end, radius * 0.10, Color("#e9f6e8"))
+
+func _get_title_save_preview() -> Dictionary:
+	if not _has_valid_save():
+		return {}
+	var file := FileAccess.open(save_path, FileAccess.READ)
+	if file == null:
+		return {}
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	file.close()
+	if not parsed is Dictionary:
+		return {}
+	var state: Dictionary = parsed
+	var clock_minutes: float = fposmod(float(state.get("world_clock_minutes", 450.0)), 1440.0)
+	var clock_text: String = "%02d:%02d" % [int(clock_minutes / 60.0), int(fposmod(clock_minutes, 60.0))]
+	var population: int = 0
+	var saved_civilians: Variant = state.get("civilians", [])
+	var saved_survivors: Variant = state.get("survivors", [])
+	if saved_civilians is Array:
+		population += saved_civilians.size()
+	if saved_survivors is Array:
+		population += saved_survivors.size()
+	return {"day": int(state.get("survival_day", 1)), "clock": clock_text, "population": population}
+
+func _draw_field_manual(title_size: Vector2) -> void:
+	if not title_manual_open:
+		return
+	var panel_size := Vector2(title_size.x * 0.88, minf(510.0, title_size.y * 0.66))
+	var panel := Rect2((title_size - panel_size) * 0.5, panel_size)
+	draw_rect(Rect2(Vector2.ZERO, title_size), Color(0.0, 0.01, 0.01, 0.80))
+	draw_rect(panel, Color("#0b1b19"))
+	draw_rect(panel, Color("#91ddb0"), false, 2.0)
+	_draw_text("QUICK FIELD MANUAL", panel.position + Vector2(22.0, 42.0), 23, Color("#e8fff0"))
+	var rules: Array[String] = [
+		"1. ENCLOSE BUILDINGS FOR HQ",
+		"   Build a perimeter around an intact structure.",
+		"2. ASSIGN INDOOR / OUTDOOR WORKERS",
+		"   Balance shelter, production and scavenging.",
+		"3. LOOT / CRAFT WEAPONS FOR 8-UNIT RAID SQUADS",
+		"   Equip survivors before sending squads beyond the walls.",
+		"4. WATCH POPULATION NOISE & NIGHT SURGES",
+		"   Gunfire and dense settlements draw infected toward you."
+	]
+	for index in range(rules.size()):
+		var y: float = panel.position.y + 94.0 + float(index) * 42.0
+		var is_heading: bool = index % 2 == 0
+		_draw_text(rules[index], panel.position + Vector2(22.0, y - panel.position.y), 12 if is_heading else 10, Color("#baf2cb") if is_heading else Color("#a8c2b5"))
+	var close_rect := Rect2(panel.position.x + 20.0, panel.end.y - 76.0, panel.size.x - 40.0, 54.0)
+	draw_rect(close_rect, Color("#24583c"))
+	draw_rect(close_rect, Color("#8ce5ad"), false, 2.0)
+	_draw_text("[CLOSE FIELD MANUAL]", close_rect.position + Vector2(16.0, 34.0), 14, Color("#f0fff5"))
+
 func _draw_title_screen() -> void:
 	var title_size: Vector2 = _safe_viewport_size()
-	draw_rect(Rect2(title_size.x * 0.06, title_size.y * 0.08, title_size.x * 0.88, title_size.y * 0.84), Color(0.02, 0.07, 0.055, 0.96))
-	draw_rect(Rect2(title_size.x * 0.06, title_size.y * 0.08, title_size.x * 0.88, title_size.y * 0.84), Color("#4d7964"), false, 2.0)
-	_draw_text("CONTAINMENT", Vector2(title_size.x * 0.14, title_size.y * 0.26), 42, Color("#e4f6e9"))
-	_draw_text("PROTOCOL", Vector2(title_size.x * 0.29, title_size.y * 0.30), 42, Color("#79e7a4"))
-	_draw_text("TACTICAL EVACUATION COMMAND", Vector2(title_size.x * 0.17, title_size.y * 0.35), 18, Color("#a9c8b7"))
+	var scale_factor: float = clampf(minf(title_size.x / 640.0, title_size.y / 1040.0), 0.72, 1.0)
+	var panel := Rect2(title_size.x * 0.035, title_size.y * 0.025, title_size.x * 0.93, title_size.y * 0.94)
+	draw_rect(panel, Color(0.015, 0.045, 0.04, 0.91))
+	draw_rect(panel, Color("#5c9273"), false, 2.0)
+	_draw_containment_emblem(Vector2(title_size.x * 0.5, title_size.y * 0.105), 35.0 * scale_factor)
+	_draw_text("CONTAINMENT PROTOCOL", Vector2(title_size.x * 0.10, title_size.y * 0.205), 27 * scale_factor, Color("#f0fff5"))
+	_draw_text("STATE EXCLUSION ZONE // SURVIVAL COMMAND", Vector2(title_size.x * 0.085, title_size.y * 0.245), 10 * scale_factor, Color("#a9c8b7"))
+	if best_days_survived > 0 or best_civilians_saved > 0:
+		_draw_text("CAREER RECORD  //  BEST SURVIVAL: DAY %d  |  SAVED: %03d" % [best_days_survived, best_civilians_saved], Vector2(title_size.x * 0.09, title_size.y * 0.295), 10 * scale_factor, Color("#f0d98c"))
 	if game_state == "title":
-		draw_rect(Rect2(title_size.x * 0.19, title_size.y * 0.51, title_size.x * 0.62, 100.0), Color("#1d4935"))
-		draw_rect(Rect2(title_size.x * 0.19, title_size.y * 0.51, title_size.x * 0.62, 100.0), Color("#75e6a0"), false, 3.0)
-		_draw_text("TAP TO SELECT SECTOR", Vector2(title_size.x * 0.27, title_size.y * 0.56), 22, Color("#f0fff5"))
-		if _has_valid_save():
-			draw_rect(Rect2(title_size.x * 0.14, title_size.y * 0.66, title_size.x * 0.72, 78.0), Color("#294c3c"))
-			draw_rect(Rect2(title_size.x * 0.14, title_size.y * 0.66, title_size.x * 0.72, 78.0), Color("#e4c66d"), false, 2.0)
-			_draw_text("RESUME SAVED OPERATION", Vector2(title_size.x * 0.19, title_size.y * 0.71), 18, Color("#fff4c7"))
+		var preview: Dictionary = _get_title_save_preview()
+		if not preview.is_empty():
+			var resume_rect := Rect2(title_size.x * 0.08, title_size.y * 0.37, title_size.x * 0.84, 126.0)
+			draw_rect(resume_rect, Color("#273e32"))
+			draw_rect(resume_rect, Color("#e4c66d"), false, 3.0)
+			_draw_text("[RESUME OPERATION]", resume_rect.position + Vector2(16.0, 31.0), 17 * scale_factor, Color("#fff1bd"))
+			_draw_text("SURVIVAL DAY %02d   //   CLOCK %s   //   ACTIVE POPULATION %03d" % [int(preview["day"]), str(preview["clock"]), int(preview["population"])], resume_rect.position + Vector2(16.0, 68.0), 10 * scale_factor, Color("#f3f6dc"))
+			_draw_text("CONTINUE YOUR LAST FIELD OPERATION", resume_rect.position + Vector2(16.0, 99.0), 9 * scale_factor, Color("#c1d8c8"))
+		var deploy_rect := Rect2(title_size.x * 0.14, title_size.y * 0.57, title_size.x * 0.72, 78.0)
+		draw_rect(deploy_rect, Color("#1d5939"))
+		draw_rect(deploy_rect, Color("#79e7a4"), false, 2.5)
+		_draw_text("[DEPLOY CONVOY]", deploy_rect.position + Vector2(22.0, 48.0), 19 * scale_factor, Color("#f0fff5"))
 	else:
-		_draw_text("SELECT OPERATIONAL SECTOR", Vector2(title_size.x * 0.19, title_size.y * 0.42), 22, Color("#d8eee0"))
-		var names: Array[String] = ["01  SUBURBAN OUTSKIRTS", "02  MEDICAL & URBAN CORE", "03  INDUSTRIAL HIGHWAY"]
-		var details: Array[String] = ["BALANCED CASH / CIVILIANS  •  30 WAVES", "HOSPITALS + HIGHRISES / HIGH PRESSURE", "WAREHOUSE + ARMORY CHOKEPOINTS"]
+		_draw_text("SELECT OPERATIONAL DISTRICT", Vector2(title_size.x * 0.09, title_size.y * 0.335), 17 * scale_factor, Color("#d8eee0"))
+		var names: Array[String] = ["SUBURBAN OUTSKIRTS", "MEDICAL & URBAN CORE", "INDUSTRIAL HIGHWAY"]
+		var resource_ratings: Array[String] = ["SUPPLIES  HIGH  //  FOOD  HIGH", "MEDICAL  HIGH  //  SCRAP  MEDIUM", "FUEL  HIGH  //  MATERIALS  HIGH"]
+		var threat_ratings: Array[int] = [2, 4, 3]
+		var details: Array[String] = ["LOW-DENSITY STREETS  /  BALANCED THREAT", "DENSE BLOCKS  /  HOSPITALS  /  HIGH THREAT", "WAREHOUSES  /  HIGHWAY CHOKEPOINTS"]
+		var card_height: float = minf(150.0, title_size.y * 0.145)
+		var card_gap: float = 14.0
 		for index in range(3):
-			var y := title_size.y * 0.44 + float(index) * title_size.y * 0.12
-			draw_rect(Rect2(title_size.x * 0.10, y, title_size.x * 0.80, 96.0), Color("#18352a"))
-			draw_rect(Rect2(title_size.x * 0.10, y, title_size.x * 0.80, 96.0), Color("#69b98a"), false, 2.0)
-			_draw_text(names[index], Vector2(title_size.x * 0.14, y + 38.0), 20, Color("#e8fff0"))
-			_draw_text(details[index], Vector2(title_size.x * 0.14, y + 70.0), 13, Color("#a9c8b7"))
-	_draw_text("ANDROID TACTICAL RESPONSE UNIT", Vector2(title_size.x * 0.21, title_size.y * 0.86), 15, Color("#648675"))
+			var card_rect := Rect2(title_size.x * 0.06, title_size.y * 0.36 + float(index) * (card_height + card_gap), title_size.x * 0.88, card_height)
+			draw_rect(card_rect, Color("#102a23", 0.96))
+			draw_rect(card_rect, Color("#6fba8b"), false, 2.0)
+			_draw_text("%02d  %s" % [index + 1, names[index]], card_rect.position + Vector2(12.0, 27.0), 13 * scale_factor, Color("#e8fff0"))
+			_draw_text(resource_ratings[index], card_rect.position + Vector2(12.0, 53.0), 9 * scale_factor, Color("#b7d7c2"))
+			_draw_text(details[index], card_rect.position + Vector2(12.0, 76.0), 8 * scale_factor, Color("#8eaa99"))
+			_draw_text("THREAT", card_rect.position + Vector2(12.0, 103.0), 8 * scale_factor, Color("#e2b2a4"))
+			for pip in range(5):
+				var pip_color: Color = Color("#e45c50") if pip < threat_ratings[index] else Color("#46574f")
+				draw_circle(card_rect.position + Vector2(74.0 + float(pip) * 15.0, 99.0), 4.5, pip_color)
+			var launch_rect := Rect2(card_rect.end.x - 166.0, card_rect.position.y + card_rect.size.y - 58.0, 154.0, 48.0)
+			draw_rect(launch_rect, Color("#245b3c"))
+			draw_rect(launch_rect, Color("#91ddb0"), false, 1.5)
+			_draw_text("[DEPLOY CONVOY]", launch_rect.position + Vector2(8.0, 30.0), 10 * scale_factor, Color("#f0fff5"))
+	_draw_text("[FIELD MANUAL]", Vector2(title_size.x * 0.31, title_size.y * 0.875), 14 * scale_factor, Color("#c9e6d1"))
+	_draw_text("TACTICAL RESPONSE COMMAND  //  SECURE THE EXCLUSION ZONE", Vector2(title_size.x * 0.07, title_size.y * 0.925), 8 * scale_factor, Color("#6e9680"))
+	_draw_field_manual(title_size)
 
 func _draw_pause_overlay() -> void:
 	draw_rect(Rect2(Vector2.ZERO, viewport_size), Color(0.01, 0.04, 0.03, 0.78))
@@ -4088,6 +4274,10 @@ func _update_audio() -> void:
 				audio_samples_left = 4400
 			"infection":
 				audio_samples_left = 3300
+			"menu_click":
+				audio_samples_left = 1800
+			"radar":
+				audio_samples_left = 4200
 	while playback.get_frames_available() > 0:
 		var sample := 0.0
 		if audio_samples_left > 0:
@@ -4102,6 +4292,11 @@ func _update_audio() -> void:
 				"infection":
 					var beep_phase := fposmod(audio_phase, 0.11)
 					sample = sin(audio_phase * TAU * 1040.0) * 0.22 if beep_phase < 0.055 else 0.0
+				"menu_click":
+					sample = sin(audio_phase * TAU * 1320.0) * (float(audio_samples_left) / 1800.0) * 0.20
+				"radar":
+					var radar_phase := fposmod(audio_phase, 0.19)
+					sample = sin(audio_phase * TAU * 740.0) * 0.18 if radar_phase < 0.065 else 0.0
 			audio_phase += 1.0 / AUDIO_SAMPLE_RATE
 			audio_samples_left -= 1
 		if playback != null:
