@@ -5410,7 +5410,7 @@ func _milestone14_handle_panel_tap(position: Vector2) -> bool:
 		var squad_action: int = clampi(floori((position.x - panel_rect.position.x) / squad_cell), 0, 3)
 		_milestone14_squad_ui_action(squad_action)
 		return true
-	if position.y >= panel_rect.position.y + 90.0 and position.y <= panel_rect.position.y + 128.0:
+	if position.y >= panel_rect.position.y + 84.0 and position.y <= panel_rect.position.y + 138.0:
 		var panel_ratio: float = (position.x - panel_rect.position.x) / panel_rect.size.x
 		if panel_ratio < 0.34:
 			_milestone14_cycle_doctrine()
