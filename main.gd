@@ -572,9 +572,6 @@ func _process(delta: float) -> void:
 		zombie["unit_attack_cooldown"] = maxf(0.0, float(zombie.get("unit_attack_cooldown", 0.0)) - sim_delta)
 		var zpos: Vector2 = zombie["pos"]
 		var offscreen_stagger_frame: bool = stagger_offscreen_zombies and not viewport_world_rect.has_point(zpos) and posmod(Engine.get_physics_frames() + i, 2) == 1
-		if offscreen_stagger_frame:
-			zombies[i] = zombie
-			continue
 		var target_index: int = _find_nearest_entity(civilian_grid, civilians, zpos, 640.0 * (1.25 if day_phase == "NIGHT" else 1.0))
 		var target: Vector2 = _nearest_evac_zone(zpos)
 		if target_index >= 0:
@@ -606,10 +603,11 @@ func _process(delta: float) -> void:
 		if float(zombie.get("stagger_timer", 0.0)) > 0.0:
 			zombie["stagger_timer"] = maxf(0.0, float(zombie["stagger_timer"]) - sim_delta)
 			zombie_speed *= 0.55
-		if day_phase == "NIGHT" and not _is_position_illuminated(zpos):
+		if day_phase == "NIGHT" and not offscreen_stagger_frame and not _is_position_illuminated(zpos):
 			zombie_speed *= 1.20
-		var displacement: Vector2 = (target - zpos).normalized() * zombie_speed * sim_delta
-		zpos = _move_circle_with_buildings(zpos, displacement, 10.0 if zombie_kind == "brute" else 7.0, sim_delta, target, zombie, true)
+		if not offscreen_stagger_frame:
+			var displacement: Vector2 = (target - zpos).normalized() * zombie_speed * sim_delta
+			zpos = _move_circle_with_buildings(zpos, displacement, 10.0 if zombie_kind == "brute" else 7.0, sim_delta, target, zombie, true)
 		var contacted_building_index: int = _building_contact_index(zpos, 22.0)
 		if contacted_building_index < 0 and siege_building_index >= 0 and siege_building_index < buildings.size() and zpos.distance_to(buildings[siege_building_index].get_center()) <= 28.0:
 			contacted_building_index = siege_building_index
