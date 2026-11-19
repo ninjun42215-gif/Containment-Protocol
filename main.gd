@@ -1012,7 +1012,11 @@ func _update_building_effects(delta: float) -> void:
 					continue
 				var ally: Dictionary = units[ally_index]
 				if unit["pos"].distance_squared_to(ally["pos"]) <= 110.0 * 110.0:
-					ally["hp"] = minf(float(ally.get("max_hp", 100.0)), float(ally.get("hp", 100.0)) + 6.0 * delta)
+					ally["hp"] = minf(float(ally.get("max_hp", 100.0)), float(ally.get("hp", 100.0)) + 6.0 * delta
+					for survivor_index in range(survivors.size()):
+						if int(survivors[survivor_index].get("id", -2)) == int(unit.get("survivor_id", -1)):
+							survivors[survivor_index]["medical_xp"] = int(survivors[survivor_index].get("medical_xp", 0)) + 1
+							break
 					units[ally_index] = ally
 		units[unit_index] = unit
 	for building_index in range(buildings.size()):
@@ -3144,6 +3148,11 @@ func _draw_entities() -> void:
 		elif kind == "spitter":
 			draw_circle(p, 7.5, Color("#50ff54"))
 			draw_circle(p, 2.5, Color("#d4ffd0"))
+		elif kind == "police_zed":
+			draw_circle(p, 9.5, Color("#6e8198"))
+			draw_circle(p, 4.0, Color("#d0e2f4"))
+			draw_rect(Rect2(p + Vector2(-6.0, -2.0), Vector2(12.0, 6.0)), Color("#243b5a"))
+			draw_rect(Rect2(p + Vector2(-6.0, -2.0), Vector2(12.0, 6.0)), Color("#a7c5e8"), false, 1.0)
 		else:
 			draw_circle(p, 7.0, Color("#f0444f"))
 	for wall in barricades:
@@ -3693,6 +3702,11 @@ func _damage_zombie(index: int, damage: float, attacker_unit_index: int = -1) ->
 			world_callouts.append({"pos": dead_position, "text": "+25 MATS", "life": 2.0})
 	if attacker_unit_index >= 0 and attacker_unit_index < units.size():
 		var veteran: Dictionary = units[attacker_unit_index]
+		var survivor_id: int = int(veteran.get("survivor_id", -1))
+		for survivor_index in range(survivors.size()):
+			if int(survivors[survivor_index].get("id", -2)) == survivor_id:
+				survivors[survivor_index]["combat_xp"] = int(survivors[survivor_index].get("combat_xp", 0)) + 10
+				break
 		var kills: int = int(veteran.get("kills", 0)) + 1
 		var old_rank: int = clampi(int(veteran.get("rank", 0)), 0, 3)
 		var new_rank: int = mini(3, int(floor(float(kills) / 5.0)))
@@ -4379,6 +4393,9 @@ func _milestone13_tick_construction(delta: float) -> void:
 			site["progress"] = minf(100.0, float(site.get("progress", 0.0)) + delta * rate * 4.0)
 			if float(site["progress"]) >= 100.0:
 				site["constructing"] = false
+				for survivor_index in range(survivors.size()):
+					if str(survivors[survivor_index].get("role", "")) in ["WORKER", "ENGINEER"]:
+						survivors[survivor_index]["build_xp"] = int(survivors[survivor_index].get("build_xp", 0)) + 5
 		constructed_buildings[i] = site
 
 func _draw_milestone13_roster_panel() -> void:
@@ -4443,6 +4460,9 @@ func _milestone13_tick_crafting(delta: float) -> void:
 				speed = maxf(speed, 1.0)
 		if speed > 0.0:
 			order["remaining"] = maxf(0.0, float(order.get("remaining", 24.0)) - delta * speed)
+			for survivor_index in range(survivors.size()):
+				if str(survivors[survivor_index].get("role", "")) in ["WORKER", "ENGINEER"]:
+					survivors[survivor_index]["build_xp"] = int(survivors[survivor_index].get("build_xp", 0)) + 1
 		if float(order.get("remaining", 1.0)) <= 0.0:
 			var crafted_key: String = str(order.get("weapon", "rifles"))
 			weapons[crafted_key] = int(weapons.get(crafted_key, 0)) + 1
