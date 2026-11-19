@@ -349,6 +349,7 @@ func _start_sector(index: int) -> void:
 			if _is_open_world_position(spawn_point, 18.0):
 				civilians.append(spawn_point)
 				civilian_steering.append({})
+				_milestone14_add_refugee("", false)
 	initial_civilian_count = civilians.size()
 	_populate_ecology()
 	for district_index in range(spawn_districts.size()):
@@ -2814,8 +2815,9 @@ func _handle_tap(pos: Vector2) -> void:
 			message_timer = 1.5
 		queue_redraw()
 		return
-	var required_scrap: int = 25 if kind == "turret" else (10 if kind == "wall" else (15 if kind == "gate" else 0))
-	if scrap < cost or scrap < required_scrap:
+	var required_scrap: int = 25 if kind == "turret" else (0 if kind == "wall" else (15 if kind == "gate" else 0))
+	var resource_shortage: bool = (wood < cost if kind == "wall" else scrap < cost)
+	if resource_shortage or scrap < required_scrap:
 		message = "INSUFFICIENT MATERIALS / MATS"
 		message_timer = 1.5
 		queue_redraw()
@@ -2841,7 +2843,10 @@ func _handle_tap(pos: Vector2) -> void:
 			barricades.append({"pos": world_pos, "hp": 400.0, "max_hp": 400.0})
 		"gate":
 			pass
-	scrap -= cost
+	if kind == "wall":
+		wood -= cost
+	else:
+		scrap -= cost
 	scrap -= required_scrap
 	message = str(deployment["name"]) + " DEPLOYED"
 	message_timer = 1.6
@@ -3654,7 +3659,7 @@ func _draw_placement_preview() -> void:
 	elif kind == "turret":
 		valid = scrap >= TURRET_COST and scrap >= 25
 	elif kind == "wall":
-		valid = scrap >= WALL_COST and scrap >= 10
+		valid = wood >= WALL_COST
 	var tint := Color(0.2, 1.0, 0.48, 0.18) if valid else Color(1.0, 0.18, 0.2, 0.20)
 	var line_tint := Color("#56f58f") if valid else Color("#ff555d")
 	draw_circle(preview_position, radius, tint)
@@ -4709,9 +4714,6 @@ func _save_operation() -> void:
 	# Never replace a prior valid campaign with an incomplete HQ-placement state.
 	if not campaign_started or game_state == "hq_placement":
 		return
-	citizens.clear()
-	for survivor_record in survivors:
-		citizens.append(survivor_record.duplicate(true))
 	var state: Dictionary = {"version": SAVE_VERSION, "weapons": weapons, "survivors": survivors, "citizens": citizens, "role_allocations": role_allocations, "raid_squads": raid_squads, "work_zones": work_zones, "wood": wood, "scrap": scrap, "food": food, "last_upkeep_day": last_upkeep_day, "trees": trees, "wildlife": wildlife, "raider_camps": raider_camps, "constructed_buildings": constructed_buildings, "radio_log": radio_log, "radio_day_announced": radio_day_announced, "radio_banner_text": radio_banner_text, "radio_banner_timer": radio_banner_timer, "fuel": fuel, "world_clock_minutes": world_clock_minutes, "survival_day": survival_day, "best_days_survived": best_days_survived, "best_civilians_saved": best_civilians_saved, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer, "tactical_decals": tactical_decals}
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
@@ -4944,7 +4946,7 @@ func _milestone14_initialize_citizens() -> void:
 		survivors[i] = person
 		citizens.append(person.duplicate(true))
 
-func _milestone14_add_refugee(expertise_hint: String = "") -> void:
+func _milestone14_add_refugee(expertise_hint: String = "", recruit_to_workforce: bool = true) -> void:
 	var next_id: int = 1
 	for existing_person in citizens:
 		next_id = maxi(next_id, int(existing_person.get("id", 0)) + 1)
@@ -4964,7 +4966,8 @@ func _milestone14_add_refugee(expertise_hint: String = "") -> void:
 	var expertise: String = expertise_hint if not expertise_hint.is_empty() else _milestone14_expertise_for_id(next_id)
 	var refugee: Dictionary = {"id": next_id, "name": full_name, "role": "WORKER", "expertise": expertise, "combat_xp": 0, "engineering_xp": 0, "build_xp": 0, "medical_xp": 0, "gathering_xp": 0, "veteran_rank": 1, "hp": 100.0, "equipped_weapon": ""}
 	citizens.append(refugee)
-	survivors.append(refugee.duplicate(true))
+	if recruit_to_workforce:
+		survivors.append(refugee.duplicate(true))
 
 func _milestone14_adjust_allocation(category: String, delta: int) -> void:
 	if not role_allocations.has(category):
@@ -4999,6 +5002,7 @@ func _milestone14_adjust_allocation(category: String, delta: int) -> void:
 		for unit_index in range(units.size()):
 			if int(units[unit_index].get("survivor_id", -1)) == int(chosen.get("id", -2)):
 				units[unit_index]["kind"] = str(chosen.get("role", "WORKER")).to_lower()
+				units[unit_index]["assignment_category"] = category
 		role_allocations[category] = current_count + 1
 	elif delta < 0 and current_count > 0:
 		role_allocations[category] = current_count - 1
