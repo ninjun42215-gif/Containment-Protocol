@@ -34,7 +34,7 @@ const FLARE_LURE_RADIUS := 220.0
 const AUDIO_SAMPLE_RATE := 22050.0
 const MAX_ACTIVE_ZOMBIES := 650
 const PENDING_WAVE_SPAWN_INTERVAL := 0.20
-const SAVE_VERSION := 6
+const SAVE_VERSION := 7
 const PREPARATION_SECONDS := 60.0
 const GAME_MINUTES_PER_SECOND := 2.4
 const MAX_TACTICAL_DECALS := 80
@@ -50,25 +50,25 @@ const ARMORY_RADIUS := 180.0
 const WAREHOUSE_HOLD_TIME := 4.0
 
 const UNIT_DEPLOYMENTS := [
-	{"name": "AIRSTRIKE", "detail": "$300", "cost": 300, "kind": "airstrike"},
-	{"name": "FLARE", "detail": "BEACON  $40", "cost": FLARE_COST, "kind": "flare"}
+	{"name": "AIRSTRIKE", "detail": "MATS", "cost": 300, "kind": "airstrike"},
+	{"name": "FLARE", "detail": "BEACON  MATS", "cost": FLARE_COST, "kind": "flare"}
 ]
 const RECRUIT_DEPLOYMENTS := [
-	{"name": "INFANTRY", "detail": "$60", "cost": 60, "kind": "infantry"},
-	{"name": "SNIPER", "detail": "$110", "cost": 110, "kind": "sniper"},
-	{"name": "ENGINEER", "detail": "$85", "cost": 85, "kind": "engineer"},
-	{"name": "MEDIC", "detail": "$95", "cost": 95, "kind": "medic"},
-	{"name": "HEAVY", "detail": "$130", "cost": 130, "kind": "heavy"}
+	{"name": "INFANTRY", "detail": "MATS", "cost": 60, "kind": "infantry"},
+	{"name": "SNIPER", "detail": "MATS", "cost": 110, "kind": "sniper"},
+	{"name": "ENGINEER", "detail": "MATS", "cost": 85, "kind": "engineer"},
+	{"name": "MEDIC", "detail": "MATS", "cost": 95, "kind": "medic"},
+	{"name": "HEAVY", "detail": "MATS", "cost": 130, "kind": "heavy"}
 ]
 const BASE_DEPLOYMENTS := [
-	{"name": "OUTPOST", "detail": "$220", "cost": OUTPOST_COST, "kind": "outpost"},
-	{"name": "TURRET", "detail": "$140", "cost": TURRET_COST, "kind": "turret"},
-	{"name": "WALL", "detail": "$75", "cost": WALL_COST, "kind": "wall"}, {"name": "GATE", "detail": "$90", "cost": GATE_COST, "kind": "gate"},
-	{"name": "FARM", "detail": "$80 / M45", "cost": 80, "kind": "farm"},
-	{"name": "BAKERY", "detail": "$120 / M70", "cost": 120, "kind": "bakery"},
-	{"name": "LIVESTOCK", "detail": "$100 / M60", "cost": 100, "kind": "livestock"},
-	{"name": "WATCHTOWER", "detail": "$90 / M50", "cost": 90, "kind": "watchtower"},
-	{"name": "FIELD CLINIC", "detail": "$110 / M65", "cost": 110, "kind": "clinic"}
+	{"name": "OUTPOST", "detail": "MATS", "cost": OUTPOST_COST, "kind": "outpost"},
+	{"name": "TURRET", "detail": "MATS", "cost": TURRET_COST, "kind": "turret"},
+	{"name": "WALL", "detail": "MATS", "cost": WALL_COST, "kind": "wall"}, {"name": "GATE", "detail": "MATS", "cost": GATE_COST, "kind": "gate"},
+	{"name": "FARM", "detail": "MATS / M45", "cost": 80, "kind": "farm"},
+	{"name": "BAKERY", "detail": "MATS / M70", "cost": 120, "kind": "bakery"},
+	{"name": "LIVESTOCK", "detail": "MATS / M60", "cost": 100, "kind": "livestock"},
+	{"name": "WATCHTOWER", "detail": "MATS / M50", "cost": 90, "kind": "watchtower"},
+	{"name": "FIELD CLINIC", "detail": "MATS / M65", "cost": 110, "kind": "clinic"}
 ]
 
 var civilians: Array[Vector2] = []
@@ -130,7 +130,11 @@ var audio_effect := ""
 var audio_phase := 0.0
 var audio_samples_left := 0
 var audio_rng := RandomNumberGenerator.new()
-var funds := 300
+var scrap := 300
+var weapons: Dictionary = {"rifles": 6, "snipers": 2, "heavy_mgs": 1, "medkits": 3}
+var survivors: Array[Dictionary] = []
+var selected_survivor_index := -1
+var crafting_orders: Array[Dictionary] = []
 var saved_count := 0
 var lost_count := 0
 var selected_deployment := 0
@@ -293,13 +297,16 @@ func _start_sector(index: int) -> void:
 	command_tab = 0
 	manual_paused = false
 	lifecycle_paused = false
-	funds = [500, 420, 620][sector_index]
+	scrap = 0
+	weapons = {"rifles": 6, "snipers": 2, "heavy_mgs": 1, "medkits": 3}
+	survivors = _milestone13_survivors()
+	crafting_orders.clear()
 	saved_count = 0
 	lost_count = 0
 	wave = 0
 	wave_timer = 180.0
 	elapsed = 0.0
-	game_state = "hq_placement"
+	game_state = "prologue"
 	selected_deployment = 0
 	selected_unit_index = -1
 	selected_structure_type = ""
@@ -396,6 +403,7 @@ func _process(delta: float) -> void:
 	_shelter_flush_timer_step(sim_delta)
 	_update_supply_drops(sim_delta)
 	_update_building_effects(sim_delta)
+	_milestone13_tick_construction(sim_delta)
 	_update_gate_states()
 	# Day phase transitions are driven by the continuous 24-hour clock.
 
@@ -439,8 +447,8 @@ func _process(delta: float) -> void:
 				outposts[reached_outpost_index]["sheltered"] = int(outposts[reached_outpost_index].get("sheltered", 0)) + 1
 			else:
 				saved_count += 1
-				funds += 35
-			message = "CIVILIAN SHELTERED / EVACUATED  +$35"
+				scrap += 35
+			message = "CIVILIAN SHELTERED / EVACUATED  +MATS"
 			message_timer = 1.1
 
 	_rebuild_spatial_grid(civilian_grid, civilians)
@@ -614,7 +622,7 @@ func _process(delta: float) -> void:
 		outpost["income_timer"] = float(outpost["income_timer"]) - sim_delta
 		if float(outpost["income_timer"]) <= 0.0:
 			var income_amount := 15 if int(outpost.get("level", 1)) >= 2 else 10
-			funds += income_amount
+			scrap += income_amount
 			outpost["income_timer"] = OUTPOST_INCOME_INTERVAL
 			message = "OUTPOST SUPPLY +$%d" % income_amount
 			message_timer = 0.8
@@ -1028,9 +1036,9 @@ func _update_building_effects(delta: float) -> void:
 				food += 55
 				message = "SUPERMARKET SCAVENGED +55 FOOD"
 			else:
-				funds += 100
+				scrap += 100
 				scrap += 20
-				message = "WAREHOUSE CACHE SECURED +$100 / M20"
+				message = "WAREHOUSE CACHE SECURED +MATS / M20"
 			message_timer = 2.0
 		building_archetypes[building_index] = archetype
 
@@ -1132,19 +1140,27 @@ func _update_outpost_placement_from_anchor(world_position: Vector2) -> void:
 	var top_left := Vector2(minf(world_position.x, outpost_placement_anchor.x), minf(world_position.y, outpost_placement_anchor.y))
 	outpost_placement_rect = Rect2(top_left, size)
 	var cost: int = _outpost_build_cost(size)
-	outpost_placement_valid = _outpost_rect_valid(outpost_placement_rect) and funds >= cost and scrap >= 40 and (outpost_placement_kind == "hq" or outposts.size() < OUTPOST_MAX_COUNT + 1)
+	outpost_placement_valid = _outpost_rect_valid(outpost_placement_rect) and scrap >= cost and scrap >= 40 and (outpost_placement_kind == "hq" or outposts.size() < OUTPOST_MAX_COUNT + 1)
 	queue_redraw()
 
 func _confirm_outpost_placement() -> void:
 	var size: Vector2 = outpost_placement_rect.size
 	var cost: int = _outpost_build_cost(size)
-	if not outpost_placement_valid or funds < cost or scrap < 40:
-		message = "OUTPOST FOOTPRINT BLOCKED OR INSUFFICIENT FUNDS"
+	if not outpost_placement_valid or scrap < cost or scrap < 40:
+		message = "OUTPOST FOOTPRINT BLOCKED OR INSUFFICIENT MATERIALS"
 		message_timer = 1.5
 		return
 	var center: Vector2 = outpost_placement_rect.get_center()
 	if outpost_placement_kind == "hq":
+		var anchor_index: int = _milestone13_nearest_building(center, 520.0)
+		if anchor_index < 0:
+			message = "HQ REQUIRES AN INTACT CITY BUILDING"
+			message_timer = 2.0
+			return
+		center = buildings[anchor_index].get_center()
+		building_archetypes[anchor_index]["converted_to"] = "HEADQUARTERS"
 		primary_hq_position = center
+		_milestone13_spawn_survivors(center)
 		evacuation_zones.clear()
 		evacuation_zones.append(center)
 		var hq_capacity: int = maxi(12, roundi(size.x * size.y / 18000.0))
@@ -1160,7 +1176,7 @@ func _confirm_outpost_placement() -> void:
 		var fortified_count: int = _fortify_enclosed_buildings(outpost_placement_rect, new_outpost_index)
 		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 260.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 900.0, "max_hp": 900.0, "level": 1, "capacity": capacity + fortified_count * 8, "sheltered": 0, "evac_timer": 11.25, "rescue_beacon_timer": 0.0, "fortified_buildings": _fortified_building_indices(new_outpost_index)})
 		_create_outpost_perimeter(outpost_placement_rect, outposts.size() - 1)
-	funds -= cost
+	scrap -= cost
 	scrap -= 40
 	if outpost_placement_kind == "hq":
 		# The HQ, perimeter and evacuation zone are now registered before the campaign can tick.
@@ -1227,7 +1243,7 @@ func _snap_turret_to_outpost(position: Vector2) -> Vector2:
 	return best_position
 
 func _try_place_gate(position: Vector2) -> bool:
-	if funds < GATE_COST or scrap < 15:
+	if scrap < GATE_COST or scrap < 15:
 		return false
 	for outpost_index in range(outposts.size()):
 		var rect: Rect2 = outposts[outpost_index]["rect"]
@@ -1267,7 +1283,7 @@ func _try_place_gate(position: Vector2) -> bool:
 					var bottom_rect := Rect2(Vector2(wall_rect.position.x, bottom_start), Vector2(wall_rect.size.x, bottom_height))
 					barricades.append({"pos": bottom_rect.get_center(), "rect": bottom_rect, "hp": float(wall["hp"]), "max_hp": float(wall["max_hp"]), "kind": "perimeter", "outpost_index": outpost_index})
 			gates.append({"pos": gate_rect.get_center(), "rect": gate_rect, "hp": 500.0, "max_hp": 500.0, "open": false, "outpost_index": outpost_index})
-			funds -= GATE_COST
+			scrap -= GATE_COST
 			scrap -= 15
 			_save_operation()
 			return true
@@ -1622,7 +1638,7 @@ func _draw_buildings() -> void:
 			if bool(state.get("cache_available", false)):
 				var cache_center: Vector2 = building.get_center()
 				draw_rect(Rect2(cache_center - Vector2(14.0, 14.0), Vector2(28.0, 28.0)), Color("#d8b65b"))
-				_draw_text("$100", cache_center + Vector2(-15.0, 5.0), 13, Color("#fff0b0"))
+				_draw_text("MATS", cache_center + Vector2(-15.0, 5.0), 13, Color("#fff0b0"))
 		if archetype != "HOSPITAL":
 			for vent_index in range(3):
 				var vent_pos: Vector2 = building.position + Vector2(26.0 + float(vent_index) * 34.0, 30.0)
@@ -1672,14 +1688,14 @@ func _recruit_unit(kind: String) -> void:
 	var base_cost: int = 60 if kind == "infantry" else (110 if kind == "sniper" else (85 if kind == "engineer" else (95 if kind == "medic" else 130)))
 	var discounted: bool = _is_near_building_type(outposts[source_index]["pos"], "ARMORY", ARMORY_RADIUS)
 	var cost: int = roundi(float(base_cost) * (0.75 if discounted else 1.0))
-	if funds < cost:
+	if scrap < cost:
 		message = "RECRUITMENT REQUIRES $%d" % cost
 		message_timer = 1.5
 		return
 	var spawn_position: Vector2 = _outpost_recruit_spawn(source_index, outposts[source_index]["pos"])
 	outposts[source_index]["sheltered"] = maxi(0, int(outposts[source_index].get("sheltered", 0)) - 1)
 	units.append({"id": _next_unit_id(), "pos": spawn_position, "kind": kind, "cooldown": 0.1, "hp": 100.0, "max_hp": 100.0, "kills": 0, "rank": 0, "garrisoned": false, "garrison_building": -1, "move_target": null, "manual_order": false, "ai_task": "", "steering": {}})
-	funds -= cost
+	scrap -= cost
 	selected_unit_index = units.size() - 1
 	message = "%s RECRUITED — $%d" % [kind.to_upper(), cost]
 	message_timer = 2.0
@@ -1788,9 +1804,9 @@ func _update_auto_ops(delta: float) -> void:
 						food += 55
 						world_callouts.append({"pos": buildings[cache_index].get_center(), "text": "+55 FOOD", "life": 2.0})
 					else:
-						funds += 100
+						scrap += 100
 						scrap += 20
-						world_callouts.append({"pos": buildings[cache_index].get_center(), "text": "+$100 / M20", "life": 2.0})
+						world_callouts.append({"pos": buildings[cache_index].get_center(), "text": "+MATS / M20", "life": 2.0})
 					unit["ai_task"] = ""
 					unit["move_target"] = null
 					units[unit_index] = unit
@@ -1805,10 +1821,10 @@ func _update_auto_ops(delta: float) -> void:
 		if task == "SUPPLY":
 			var crate_index: int = int(unit.get("ai_target_index", -1))
 			if crate_index >= 0 and crate_index < supply_crates.size() and position.distance_to(supply_crates[crate_index]["pos"]) <= 30.0:
-				funds += 80
+				scrap += 80
 				scrap += 15
 				fuel = minf(300.0, fuel + 15.0)
-				world_callouts.append({"pos": supply_crates[crate_index]["pos"], "text": "+$80 / ⚙15", "life": 2.0})
+				world_callouts.append({"pos": supply_crates[crate_index]["pos"], "text": "+MATS / ⚙15", "life": 2.0})
 				supply_crates.remove_at(crate_index)
 				unit["ai_task"] = ""
 				unit["move_target"] = null
@@ -2054,7 +2070,7 @@ func _salvage_nearest_vehicle() -> void:
 		message_timer = 1.8
 		return
 	var vehicle: Dictionary = vehicles[best_index]
-	if funds < int(vehicle.get("salvage_cost", 0)):
+	if scrap < int(vehicle.get("salvage_cost", 0)):
 		message = "SALVAGE REQUIRES $%d" % int(vehicle.get("salvage_cost", 0))
 		message_timer = 1.5
 		return
@@ -2095,8 +2111,8 @@ func _update_vehicles(delta: float) -> void:
 						engineer_present = true
 				if holding_unit:
 					vehicle["salvage_timer"] = maxf(0.0, float(vehicle.get("salvage_timer", 4.0)) - delta * (2.0 if engineer_present else 1.0))
-					if float(vehicle["salvage_timer"]) <= 0.0 and funds >= int(vehicle.get("salvage_cost", 0)):
-						funds -= int(vehicle.get("salvage_cost", 0))
+					if float(vehicle["salvage_timer"]) <= 0.0 and scrap >= int(vehicle.get("salvage_cost", 0)):
+						scrap -= int(vehicle.get("salvage_cost", 0))
 						scrap += 15
 						vehicle["active"] = true
 						vehicle["salvage_started"] = false
@@ -2135,7 +2151,7 @@ func _update_vehicles(delta: float) -> void:
 							var rescued: int = int(vehicle["onboard"])
 							vehicle["onboard"] = 0
 							saved_count += rescued
-							funds += rescued * 35
+							scrap += rescued * 35
 							world_callouts.append({"pos": position, "text": "+$%d" % (rescued * 35), "life": 2.0})
 							message = "VEHICLE EVACUATION — %d CIVILIANS" % rescued
 							message_timer = 2.0
@@ -2383,6 +2399,13 @@ func _handle_tap(pos: Vector2) -> void:
 			_resume_operation()
 		else:
 			game_state = "sector_select"
+		queue_redraw()
+		return
+	if game_state == "prologue":
+		if pos.y >= viewport_size.y - 160.0:
+			game_state = "hq_placement"
+			message = "SELECT AN INTACT BUILDING TO ANCHOR YOUR HQ"
+			message_timer = 3.0
 		queue_redraw()
 		return
 	if game_state == "hq_placement":
@@ -2683,7 +2706,7 @@ func _handle_tap(pos: Vector2) -> void:
 		outpost_placement_dragging = false
 		queue_redraw()
 		return
-	if kind == "farm" or kind == "bakery" or kind == "livestock" or kind == "watchtower" or kind == "clinic":
+	if kind == "farm" or kind == "bakery" or kind == "livestock" or kind == "watchtower" or kind == "clinic" or kind == "workshop":
 		_construct_survival_building(kind, world_pos)
 		queue_redraw()
 		return
@@ -2692,13 +2715,13 @@ func _handle_tap(pos: Vector2) -> void:
 			message = "PERIMETER GATE INSTALLED"
 			message_timer = 1.5
 		else:
-			message = "GATE MUST SNAP TO AN OUTPOST WALL — $90"
+			message = "GATE MUST SNAP TO AN OUTPOST WALL — MATS"
 			message_timer = 1.5
 		queue_redraw()
 		return
 	var required_scrap: int = 25 if kind == "turret" else (10 if kind == "wall" else (15 if kind == "gate" else 0))
-	if funds < cost or scrap < required_scrap:
-		message = "INSUFFICIENT FUNDS / MATS"
+	if scrap < cost or scrap < required_scrap:
+		message = "INSUFFICIENT MATERIALS / MATS"
 		message_timer = 1.5
 		queue_redraw()
 		return
@@ -2723,7 +2746,7 @@ func _handle_tap(pos: Vector2) -> void:
 			barricades.append({"pos": world_pos, "hp": 400.0, "max_hp": 400.0})
 		"gate":
 			pass
-	funds -= cost
+	scrap -= cost
 	scrap -= required_scrap
 	message = str(deployment["name"]) + " DEPLOYED"
 	message_timer = 1.6
@@ -2750,7 +2773,7 @@ func _execute_airstrike(center: Vector2) -> void:
 	if casualties > 0:
 		lost_count += casualties
 		var penalty := casualties * 75
-		funds = maxi(0, funds - penalty)
+		scrap = maxi(0, scrap - penalty)
 		message = "FRIENDLY FIRE: %d CIVILIANS LOST (-$%d)" % [casualties, penalty]
 	else:
 		message = "AIRSTRIKE COMPLETE"
@@ -2768,8 +2791,28 @@ func _draw() -> void:
 		_draw_title_screen()
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 		return
+	if game_state == "prologue":
+		draw_rect(Rect2(Vector2.ZERO, viewport_size), Color("#07110f"))
+		draw_rect(Rect2(24.0, 36.0, viewport_size.x - 48.0, viewport_size.y - 72.0), Color("#10241d"))
+		draw_rect(Rect2(24.0, 36.0, viewport_size.x - 48.0, viewport_size.y - 72.0), Color("#75c99a"), false, 2.0)
+		_draw_text("STATE EXCLUSION ZONE // DAY 01", Vector2(48.0, 86.0), 15, Color("#91e4b0"))
+		_draw_text("THE LAZARUS COLLAPSE", Vector2(48.0, 138.0), 27, Color("#f1fff4"))
+		_draw_text("The Lazarus Neuro-Pathogen began as neural repair therapy.", Vector2(48.0, 194.0), 13, Color("#d6e9dc"))
+		_draw_text("It rewired the dead and turned the living into vectors.", Vector2(48.0, 220.0), 13, Color("#d6e9dc"))
+		_draw_text("Nations fell. The State Exclusion Zone is the last corridor.", Vector2(48.0, 246.0), 13, Color("#d6e9dc"))
+		_draw_text("18 CONVOY SURVIVORS", Vector2(48.0, 302.0), 17, Color("#f4d77b"))
+		_draw_text("Medics, engineers, officers and civilians arrive with", Vector2(48.0, 332.0), 13, Color("#d6e9dc"))
+		_draw_text("limited rations and salvaged gear. Secure a building.", Vector2(48.0, 358.0), 13, Color("#d6e9dc"))
+		for i in range(mini(8, survivors.size())):
+			_draw_text(str(survivors[i].get("name", "SURVIVOR")) + " / " + str(survivors[i].get("role", "WORKER")), Vector2(48.0, 414.0 + float(i) * 25.0), 12, Color("#b8d5c3"))
+		_draw_text("+ " + str(maxi(0, survivors.size() - 8)) + " additional convoy members", Vector2(48.0, 630.0), 12, Color("#b8d5c3"))
+		draw_rect(Rect2(40.0, viewport_size.y - 140.0, viewport_size.x - 80.0, 48.0), Color("#245a3c"))
+		draw_rect(Rect2(40.0, viewport_size.y - 140.0, viewport_size.x - 80.0, 48.0), Color("#75e6a0"), false, 2.0)
+		_draw_text("[ESTABLISH HEADQUARTERS]", Vector2(58.0, viewport_size.y - 109.0), 15, Color("#f0fff5"))
+		_draw_text("[SKIP]", Vector2(viewport_size.x - 105.0, viewport_size.y - 74.0), 12, Color("#a9c8b7"))
+		return
 	if game_state == "hq_placement":
-		var hq_hint := "DRAG TO SIZE THE STATE HQ PERIMETER" if outpost_placement_active else "DRAG ON AN OPEN STREET TO DESIGN HQ"
+		var hq_hint := "DRAG A PERIMETER AROUND AN INTACT BUILDING" if outpost_placement_active else "SELECT AN INTACT BUILDING TO ANCHOR HQ"
 		_draw_world_scene()
 		if outpost_placement_active:
 			var hq_origin: Vector2 = viewport_size * 0.5 - camera_position * camera_zoom
@@ -3226,7 +3269,7 @@ func _draw_hud() -> void:
 	_draw_text("CONTAINMENT PROTOCOL", Vector2(hud_left + 16.0, hud_top + 34.0), 22, Color("#e2f4e9"))
 	if campaign_start_grace_timer > 0.0:
 		_draw_text("PREP  %02d:%02d" % [int(ceil(campaign_start_grace_timer)) / 60, int(ceil(campaign_start_grace_timer)) % 60], Vector2(hud_left + 255.0, hud_top + 34.0), 14, Color("#80e8b1"))
-	_draw_text("FUNDS $%d   FOOD 🌾%d   MATS 🪵⚙%d   FUEL ⛽%.0f" % [funds, food, scrap, fuel], Vector2(hud_left + 16.0, hud_top + 70.0), 13, Color("#f4d77b"))
+	_draw_text("FOOD 🌾%d  MATS 🪵⚙%d  FUEL ⛽%.0f  RIFLES %d SNR %d HMG %d MED %d" % [food, scrap, fuel, int(weapons.get("rifles", 0)), int(weapons.get("snipers", 0)), int(weapons.get("heavy_mgs", 0)), int(weapons.get("medkits", 0))], Vector2(hud_left + 16.0, hud_top + 70.0), 10, Color("#f4d77b"))
 	_draw_text("DAY %d  |  %s  |  WAVE %d" % [survival_day, _format_world_clock(), wave], Vector2(hud_left + 16.0, hud_top + 104.0), 15, Color("#ffad62"))
 	_draw_text("SAVED %d  LOST %d  HORDE %d/%d" % [saved_count, lost_count, zombies.size(), MAX_ACTIVE_ZOMBIES], Vector2(hud_left + 16.0, hud_top + 124.0), 13, Color("#9cbcaf"))
 	_draw_text("%s  |  POP %d  |  SAVED %d" % [day_phase, civilians.size() + _total_sheltered_civilians(), saved_count], Vector2(hud_left + 16.0, hud_top + 144.0), 12, Color("#a9c8b7"))
@@ -3256,16 +3299,16 @@ func _draw_hud() -> void:
 	for recruit_rect in [inf_rect, sniper_rect]:
 		draw_rect(recruit_rect, Color("#183329"))
 		draw_rect(recruit_rect, Color("#6ccf91"), false, 2.0)
-	_draw_text("[RECRUIT INF $60]", inf_rect.position + Vector2(5.0, touch_target_size * 0.62), 10, Color("#e5f8eb"))
-	_draw_text("[RECRUIT SNIPER $110]", sniper_rect.position + Vector2(4.0, touch_target_size * 0.62), 9, Color("#e5f8eb"))
+	_draw_text("[ASSIGN INFANTRY]", inf_rect.position + Vector2(5.0, touch_target_size * 0.62), 10, Color("#e5f8eb"))
+	_draw_text("[ASSIGN SNIPER]", sniper_rect.position + Vector2(4.0, touch_target_size * 0.62), 9, Color("#e5f8eb"))
 	var engineer_rect := _engineer_button_rect()
 	draw_rect(engineer_rect, Color("#183329"))
 	draw_rect(engineer_rect, Color("#6ccf91"), false, 2.0)
-	_draw_text("[RECRUIT ENG $85]", engineer_rect.position + Vector2(4.0, touch_target_size * 0.62), 10, Color("#e5f8eb"))
+	_draw_text("[ASSIGN ENGINEER]", engineer_rect.position + Vector2(4.0, touch_target_size * 0.62), 10, Color("#e5f8eb"))
 	var beacon_rect := _rescue_broadcast_rect()
 	draw_rect(beacon_rect, Color("#243b4c"))
 	draw_rect(beacon_rect, Color("#75c9e8"), false, 2.0)
-	_draw_text("[RESCUE BEACON $75 / ⚙25]", beacon_rect.position + Vector2(4.0, touch_target_size * 0.62), 9, Color("#e5f8eb"))
+	_draw_text("[RESCUE BEACON MATS / ⚙25]", beacon_rect.position + Vector2(4.0, touch_target_size * 0.62), 9, Color("#e5f8eb"))
 	var salvage_rect := _salvage_button_rect()
 	draw_rect(salvage_rect, Color("#3a3420"))
 	draw_rect(salvage_rect, Color("#e4c66d"), false, 2.0)
@@ -3326,7 +3369,7 @@ func _draw_structure_actions() -> void:
 	_draw_text("%s  HP %d/%d" % [structure_label, roundi(structure_hp), roundi(structure_max_hp)], Vector2(safe_insets.x + 30.0, action_top + 24.0), 14, Color("#dcefe4"))
 	draw_rect(Rect2(safe_insets.x + 24.0, action_top + 42.0, 166.0, touch_target_size), Color("#254538"))
 	draw_rect(Rect2(safe_insets.x + 24.0, action_top + 42.0, 166.0, touch_target_size), Color("#72d69a"), false, 2.0)
-	_draw_text("REPAIR $40", Vector2(safe_insets.x + 40.0, action_top + 42.0 + touch_target_size * 0.62), 16, Color("#f0fff5"))
+	_draw_text("REPAIR MATS", Vector2(safe_insets.x + 40.0, action_top + 42.0 + touch_target_size * 0.62), 16, Color("#f0fff5"))
 	if can_upgrade:
 		var level := 1
 		if selected_structure_type == "outpost":
@@ -3336,7 +3379,7 @@ func _draw_structure_actions() -> void:
 		if level < 2:
 			draw_rect(Rect2(safe_insets.x + 204.0, action_top + 42.0, 166.0, touch_target_size), Color("#3a3420"))
 			draw_rect(Rect2(safe_insets.x + 204.0, action_top + 42.0, 166.0, touch_target_size), Color("#e4c66d"), false, 2.0)
-			_draw_text("UPGRADE $150", Vector2(safe_insets.x + 213.0, action_top + 42.0 + touch_target_size * 0.62), 15, Color("#fff4c7"))
+			_draw_text("UPGRADE MATS", Vector2(safe_insets.x + 213.0, action_top + 42.0 + touch_target_size * 0.62), 15, Color("#fff4c7"))
 
 func _draw_deployment_bar() -> void:
 	var panel_height: float = _deployment_panel_height()
@@ -3392,8 +3435,8 @@ func _select_structure_at(world_position: Vector2) -> bool:
 	return false
 
 func _repair_selected_structure() -> void:
-	if funds < STRUCTURE_REPAIR_COST or scrap < 8:
-		message = "REPAIR REQUIRES $40 AND ⚙8"
+	if scrap < STRUCTURE_REPAIR_COST or scrap < 8:
+		message = "REPAIR REQUIRES MATS AND ⚙8"
 		message_timer = 1.2
 		return
 	var repaired := false
@@ -3420,7 +3463,7 @@ func _repair_selected_structure() -> void:
 				barricades[selected_structure_index] = structure
 				repaired = float(structure["hp"]) > old_hp
 	if repaired:
-		funds -= STRUCTURE_REPAIR_COST
+		scrap -= STRUCTURE_REPAIR_COST
 		scrap -= 8
 		message = "STRUCTURE REPAIRED +100 HP"
 	else:
@@ -3429,8 +3472,8 @@ func _repair_selected_structure() -> void:
 	queue_redraw()
 
 func _upgrade_selected_structure() -> void:
-	if funds < STRUCTURE_UPGRADE_COST or scrap < 15:
-		message = "UPGRADE REQUIRES $150 AND ⚙15"
+	if scrap < STRUCTURE_UPGRADE_COST or scrap < 15:
+		message = "UPGRADE REQUIRES MATS AND ⚙15"
 		message_timer = 1.2
 		return
 	var upgraded := false
@@ -3452,7 +3495,7 @@ func _upgrade_selected_structure() -> void:
 			outposts[selected_structure_index] = outpost
 			upgraded = true
 	if upgraded:
-		funds -= STRUCTURE_UPGRADE_COST
+		scrap -= STRUCTURE_UPGRADE_COST
 		scrap -= 15
 		message = "STRUCTURE UPGRADED TO LEVEL 2"
 	else:
@@ -3485,15 +3528,15 @@ func _draw_placement_preview() -> void:
 	var kind: String = str(deployment["kind"])
 	var radius := _deployment_range(kind)
 	var deployment_cost := _deployment_cost(kind)
-	var valid := _is_valid_street_position(preview_position) and funds >= deployment_cost
+	var valid := _is_valid_street_position(preview_position) and scrap >= deployment_cost
 	if kind == "outpost" and outposts.size() >= OUTPOST_MAX_COUNT + 1:
 		valid = false
 	if kind == "gate":
-		valid = funds >= GATE_COST and scrap >= 15
+		valid = scrap >= GATE_COST and scrap >= 15
 	elif kind == "turret":
-		valid = funds >= TURRET_COST and scrap >= 25
+		valid = scrap >= TURRET_COST and scrap >= 25
 	elif kind == "wall":
-		valid = funds >= WALL_COST and scrap >= 10
+		valid = scrap >= WALL_COST and scrap >= 10
 	var tint := Color(0.2, 1.0, 0.48, 0.18) if valid else Color(1.0, 0.18, 0.2, 0.20)
 	var line_tint := Color("#56f58f") if valid else Color("#ff555d")
 	draw_circle(preview_position, radius, tint)
@@ -3853,7 +3896,7 @@ func _shelter_flush_timer_step(delta: float) -> void:
 		outpost["evac_timer"] = float(outpost.get("evac_timer", interval)) - delta
 		if float(outpost["evac_timer"]) <= 0.0:
 			saved_count += sheltered
-			funds += sheltered * 35
+			scrap += sheltered * 35
 			outpost["sheltered"] = 0
 			outpost["evac_timer"] = interval
 			message = "OUTPOST EVACUATION — %d CIVILIANS  +$%d" % [sheltered, sheltered * 35]
@@ -3888,11 +3931,11 @@ func _update_supply_drops(delta: float) -> void:
 				secured = true
 				break
 		if secured:
-			funds += 120
+			scrap += 120
 			scrap += 15
 			fuel = minf(300.0, fuel + 25.0)
 			supply_crates.remove_at(crate_index)
-			message = "TACTICAL SUPPLY SECURED  +$120"
+			message = "TACTICAL SUPPLY SECURED  +MATS"
 			message_timer = 2.0
 
 func _draw_supply_crates() -> void:
@@ -3934,8 +3977,8 @@ func _rescue_broadcast_rect() -> Rect2:
 	return Rect2(safe_insets.x + HUD_EDGE_PADDING + 180.0, safe_insets.y + HUD_EDGE_PADDING + 196.0, 200.0, touch_target_size)
 
 func _activate_rescue_broadcast() -> void:
-	if funds < 75 or scrap < 25:
-		message = "RESCUE BEACON REQUIRES $75 AND ⚙25"
+	if scrap < 75 or scrap < 25:
+		message = "RESCUE BEACON REQUIRES MATS AND ⚙25"
 		message_timer = 1.6
 		return
 	if outposts.is_empty():
@@ -3945,7 +3988,7 @@ func _activate_rescue_broadcast() -> void:
 	var target_index: int = _nearest_outpost_index(camera_position)
 	if target_index < 0:
 		target_index = 0
-	funds -= 75
+	scrap -= 75
 	scrap -= 25
 	outposts[target_index]["rescue_beacon_timer"] = 30.0
 	message = "RESCUE BEACON ACTIVE — CIVILIANS GUIDED TO OPEN GATE"
@@ -4081,8 +4124,8 @@ func _construct_survival_building(kind: String, position: Vector2) -> void:
 		message = "SURVIVAL BUILDINGS MUST BE INSIDE AN OUTPOST"
 		message_timer = 2.0
 		return
-	var cost_funds: int = 80 if kind == "farm" else (120 if kind == "bakery" else (100 if kind == "livestock" else (90 if kind == "watchtower" else 110)))
-	var cost_materials: int = 45 if kind == "farm" else (70 if kind == "bakery" else (60 if kind == "livestock" else (50 if kind == "watchtower" else 65)))
+	var cost_scrap: int = 0
+	var cost_materials: int = 45 if kind == "farm" else (70 if kind == "bakery" else (60 if kind == "livestock" else (50 if kind == "watchtower" else (65 if kind == "clinic" else 90))))
 	for city_index in range(buildings.size()):
 		if not bool(building_archetypes[city_index].get("destroyed", false)) and buildings[city_index].has_point(position):
 			message = "CLEAR THE FOOTPRINT BEFORE CONSTRUCTION"
@@ -4093,13 +4136,22 @@ func _construct_survival_building(kind: String, position: Vector2) -> void:
 			message = "CONSTRUCTION FOOTPRINT OCCUPIED"
 			message_timer = 1.5
 			return
-	if funds < cost_funds or scrap < cost_materials:
-		message = "REQUIRES $%d AND %d MATS" % [cost_funds, cost_materials]
+	if scrap < cost_materials:
+		message = "REQUIRES $%d AND %d MATS" % [cost_scrap, cost_materials]
 		message_timer = 1.8
 		return
+	if kind == "bakery" or kind == "clinic" or kind == "workshop":
+		var indoor_type: String = "RESIDENTIAL" if kind == "bakery" else ("HOSPITAL" if kind == "clinic" else "ARMORY")
+		var indoor_index: int = _milestone13_nearest_building(position, 180.0)
+		if indoor_index < 0 or str(building_archetypes[indoor_index].get("type", "")) not in [indoor_type, "SUPERMARKET", "WAREHOUSE"]:
+			message = "FACILITY NEEDS INTACT " + indoor_type
+			message_timer = 2.0
+			return
+		building_archetypes[indoor_index]["converted_to"] = "WEAPONS_WORKSHOP" if kind == "workshop" else ("BAKERY" if kind == "bakery" else "FIELD_CLINIC")
+		position = buildings[indoor_index].get_center()
 	var food_yield: int = 18 if kind == "farm" else (32 if kind == "bakery" else (22 if kind == "livestock" else 0))
-	constructed_buildings.append({"kind": kind, "pos": position, "outpost_index": owner_index, "food_per_day": food_yield, "hp": 500.0})
-	funds -= cost_funds
+	constructed_buildings.append({"kind": kind, "pos": position, "outpost_index": owner_index, "food_per_day": food_yield, "hp": 500.0, "progress": 0.0, "constructing": true})
+	
 	scrap -= cost_materials
 	message = "%s CONSTRUCTED" % kind.to_upper()
 	message_timer = 2.0
@@ -4123,18 +4175,92 @@ func _interact_raider_camp(position: Vector2) -> void:
 			food += int(camp.get("food_stock", 0))
 			scrap += int(camp.get("materials_stock", 0))
 			fuel = minf(300.0, fuel + float(camp.get("fuel_stock", 0)))
-			funds += 150
+			scrap += 150
 			camp["raided"] = true
 			raider_camps[index] = camp
 			message = "RAIDER CACHE CAPTURED — FOOD / MATS / FUEL"
-		elif funds >= 100:
-			funds -= 100
+		elif scrap >= 100:
+			scrap -= 100
 			food += 60
 			message = "TRADE COMPLETE — +60 FOOD"
 		else:
-			message = "TRADE REQUIRES $100 OR A SQUAD TO RAID"
+			message = "TRADE REQUIRES MATS OR A SQUAD TO RAID"
 		message_timer = 2.2
 		return
+
+func _milestone13_survivors() -> Array[Dictionary]:
+	var names: Array[String] = ["Mara Vance", "Elias Chen", "Nadia Rostova", "Jonah Price", "Asha Patel", "Theo Brooks", "Mina Okafor", "Lucas Reed", "Iris Navarro", "Samir Haddad", "Grace Kim", "Owen Clarke", "Leah Morgan", "Rafael Costa", "Tess Walker", "Noah Bennett", "Yuki Tanaka", "Caleb Foster"]
+	var roster: Array[Dictionary] = []
+	for i in range(names.size()):
+		var role: String = "ENGINEER" if i == 1 else ("MEDIC" if i == 2 else "WORKER")
+		roster.append({"id": i + 1, "name": names[i], "role": role, "combat_xp": 0, "build_xp": 0, "medical_xp": 0, "veteran_rank": 1, "hp": 100.0, "equipped_weapon": ""})
+	return roster
+
+func _milestone13_nearest_building(position: Vector2, radius: float) -> int:
+	var best := -1
+	var best_distance: float = radius * radius
+	for i in range(buildings.size()):
+		if bool(building_archetypes[i].get("destroyed", false)):
+			continue
+		var distance: float = position.distance_squared_to(buildings[i].get_center())
+		if distance <= best_distance:
+			best_distance = distance
+			best = i
+	return best
+
+func _milestone13_spawn_survivors(origin: Vector2) -> void:
+	if not units.is_empty():
+		return
+	for i in range(survivors.size()):
+		var angle: float = TAU * float(i) / float(maxi(1, survivors.size()))
+		var spawn: Vector2 = origin + Vector2(cos(angle), sin(angle)) * 58.0
+		units.append({"id": _next_unit_id(), "survivor_id": int(survivors[i]["id"]), "pos": spawn, "kind": str(survivors[i]["role"]).to_lower(), "cooldown": 0.2, "hp": 100.0, "max_hp": 100.0, "kills": 0, "rank": 0, "garrisoned": false, "garrison_building": -1, "move_target": null, "manual_order": false, "ai_task": "", "steering": {}})
+
+func _milestone13_assign_role(index: int, role: String) -> void:
+	if index < 0 or index >= survivors.size():
+		return
+	var survivor: Dictionary = survivors[index]
+	var old_weapon: String = str(survivor.get("equipped_weapon", ""))
+	if not old_weapon.is_empty():
+		weapons[old_weapon] = int(weapons.get(old_weapon, 0)) + 1
+	var required_weapon: String = ""
+	match role:
+		"INFANTRY": required_weapon = "rifles"
+		"SNIPER": required_weapon = "snipers"
+		"HEAVY": required_weapon = "heavy_mgs"
+		"MEDIC": required_weapon = "medkits"
+		"WORKER", "ENGINEER": pass
+		_: return
+	if not required_weapon.is_empty():
+		if int(weapons.get(required_weapon, 0)) <= 0:
+			message = "NO " + required_weapon.to_upper() + " IN STOCKPILE"
+			message_timer = 2.0
+			return
+		weapons[required_weapon] = int(weapons.get(required_weapon, 0)) - 1
+	survivor["role"] = role
+	survivor["equipped_weapon"] = required_weapon
+	survivors[index] = survivor
+	for unit_index in range(units.size()):
+		if int(units[unit_index].get("survivor_id", -1)) == int(survivor["id"]):
+			units[unit_index]["kind"] = role.to_lower()
+	message = str(survivor["name"]) + " ASSIGNED " + role
+	message_timer = 2.0
+	_save_operation()
+
+func _milestone13_tick_construction(delta: float) -> void:
+	for i in range(constructed_buildings.size()):
+		var site: Dictionary = constructed_buildings[i]
+		if not bool(site.get("constructing", false)):
+			continue
+		var rate := 0.0
+		for unit in units:
+			if unit["pos"].distance_to(site.get("pos", Vector2.ZERO)) <= 56.0:
+				rate += 2.0 if str(unit.get("kind", "")) == "engineer" else 1.0
+		if rate > 0.0:
+			site["progress"] = minf(100.0, float(site.get("progress", 0.0)) + delta * rate * 4.0)
+			if float(site["progress"]) >= 100.0:
+				site["constructing"] = false
+		constructed_buildings[i] = site
 
 func _pause_button_rect() -> Rect2:
 	return Rect2(safe_insets.x + HUD_EDGE_PADDING + 350.0, safe_insets.y + HUD_EDGE_PADDING + 104.0, 130.0, 42.0)
@@ -4327,7 +4453,7 @@ func _save_operation() -> void:
 	# Never replace a prior valid campaign with an incomplete HQ-placement state.
 	if not campaign_started or game_state == "hq_placement":
 		return
-	var state: Dictionary = {"version": SAVE_VERSION, "materials": scrap, "food": food, "last_upkeep_day": last_upkeep_day, "trees": trees, "wildlife": wildlife, "raider_camps": raider_camps, "constructed_buildings": constructed_buildings, "radio_log": radio_log, "radio_day_announced": radio_day_announced, "radio_banner_text": radio_banner_text, "radio_banner_timer": radio_banner_timer, "scrap": scrap, "fuel": fuel, "world_clock_minutes": world_clock_minutes, "survival_day": survival_day, "best_days_survived": best_days_survived, "best_civilians_saved": best_civilians_saved, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "funds": funds, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer, "tactical_decals": tactical_decals}
+	var state: Dictionary = {"version": SAVE_VERSION, "weapons": weapons, "survivors": survivors, "crafting_orders": crafting_orders, "materials": scrap, "food": food, "last_upkeep_day": last_upkeep_day, "trees": trees, "wildlife": wildlife, "raider_camps": raider_camps, "constructed_buildings": constructed_buildings, "radio_log": radio_log, "radio_day_announced": radio_day_announced, "radio_banner_text": radio_banner_text, "radio_banner_timer": radio_banner_timer, ""fuel": fuel, "world_clock_minutes": world_clock_minutes, "survival_day": survival_day, "best_days_survived": best_days_survived, "best_civilians_saved": best_civilians_saved, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer, "tactical_decals": tactical_decals}
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify(_save_variant(state)))
@@ -4344,6 +4470,12 @@ func _resume_operation() -> void:
 	if not parsed is Dictionary:
 		return
 	var state: Dictionary = _restore_variant(parsed)
+	if int(state.get("version", 2)) < 7:
+		state["weapons"] = {"rifles": 6, "snipers": 2, "heavy_mgs": 1, "medkits": 3}
+		state["survivors"] = _milestone13_survivors()
+		state["crafting_orders"] = []
+		state.erase("scrap")
+		state["version"] = 7
 	_configure_sector(int(state.get("sector_index", 0)))
 	sector_index = int(state.get("sector_index", 0))
 	campaign_map_seed = int(state.get("campaign_map_seed", campaign_map_seed))
@@ -4351,7 +4483,10 @@ func _resume_operation() -> void:
 	if state.has("district_seed_points"):
 		district_seed_points.assign(state["district_seed_points"])
 	wave = int(state.get("wave", 0))
-	funds = int(state.get("funds", 300))
+	scrap = 0
+	weapons = state.get("weapons", {"rifles": 6, "snipers": 2, "heavy_mgs": 1, "medkits": 3})
+	survivors.assign(state.get("survivors", _milestone13_survivors()))
+	crafting_orders.assign(state.get("crafting_orders", []))
 	scrap = maxi(0, int(state.get("materials", state.get("scrap", 120))))
 	food = maxi(0, int(state.get("food", 120)))
 	last_upkeep_day = maxi(1, int(state.get("last_upkeep_day", int(state.get("survival_day", 1)))))
