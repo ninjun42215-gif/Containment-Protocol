@@ -623,7 +623,7 @@ func _process(delta: float) -> void:
 			var income_amount := 15 if int(outpost.get("level", 1)) >= 2 else 10
 			scrap += income_amount
 			outpost["income_timer"] = OUTPOST_INCOME_INTERVAL
-			message = "OUTPOST SUPPLY +$%d" % income_amount
+			message = "OUTPOST SUPPLY +MATS %d" % income_amount
 			message_timer = 0.8
 		outposts[outpost_index] = outpost
 
@@ -847,7 +847,7 @@ func _generate_state_map() -> void:
 				rect.position.y = clampf(rect.position.y, region.position.y + 18.0, region.end.y - rect.size.y - 18.0)
 				var base_hp: float = 1800.0 if archetype == "HIGHRISE" else 900.0
 				buildings.append(rect)
-				building_archetypes.append({"type": archetype, "district": district_index, "cache_available": archetype == "WAREHOUSE" or archetype == "SUPERMARKET", "cache_hold": 0.0, "hp": base_hp, "max_hp": base_hp, "destroyed": false, "fortified": false, "secured": false, "fortified_outpost_index": -1})
+				building_archetypes.append({"type": archetype, "district": district_index, "cache_available": archetype in ["WAREHOUSE", "SUPERMARKET", "GUN_SHOP", "ARMORY", "RESIDENTIAL"], "cache_hold": 0.0, "hp": base_hp, "max_hp": base_hp, "destroyed": false, "fortified": false, "secured": false, "fortified_outpost_index": -1})
 	# A valid campaign always has visible structures, even if future road-clearance
 	# or district-generation rules reject every procedural candidate.
 	while buildings.size() < 8:
@@ -869,11 +869,11 @@ func _generate_state_map() -> void:
 	for vehicle_index in range(6):
 		var industrial_region: Rect2 = district_regions[2]
 		var humvee_pos: Vector2 = _find_vehicle_spawn_position(map_rng, industrial_region, 34.0, vehicle_index, "humvee")
-		vehicles.append({"kind": "humvee", "pos": humvee_pos, "hp": 350.0, "max_hp": 350.0, "active": false, "salvage_timer": 4.0, "salvage_cost": 120, "move_target": null, "onboard": 0, "cooldown": 0.0, "salvage_started": false})
+		vehicles.append({"kind": "humvee", "pos": humvee_pos, "hp": 350.0, "max_hp": 350.0, "active": false, "salvage_timer": 4.0, "salvage_cost": 120, "fuel_cost": 20.0, "move_target": null, "onboard": 0, "cooldown": 0.0, "salvage_started": false})
 	for helicopter_index in range(3):
 		var medical_region: Rect2 = district_regions[3]
 		var helicopter_pos: Vector2 = _find_vehicle_spawn_position(map_rng, medical_region, 42.0, helicopter_index, "helicopter")
-		vehicles.append({"kind": "helicopter", "pos": helicopter_pos, "hp": 260.0, "max_hp": 260.0, "active": false, "salvage_timer": 4.0, "salvage_cost": 220, "move_target": null, "onboard": 0, "cooldown": 0.0, "salvage_started": false})
+		vehicles.append({"kind": "helicopter", "pos": helicopter_pos, "hp": 260.0, "max_hp": 260.0, "active": false, "salvage_timer": 4.0, "salvage_cost": 220, "fuel_cost": 55.0, "move_target": null, "onboard": 0, "cooldown": 0.0, "salvage_started": false})
 
 func _populate_ecology() -> void:
 	var ecology_rng := RandomNumberGenerator.new()
@@ -913,11 +913,11 @@ func _find_vehicle_spawn_position(map_rng: RandomNumberGenerator, region: Rect2,
 func _building_type_for_district(district_index: int, row: int, column: int) -> String:
 	match district_index:
 		0:
-			return "SUPERMARKET" if row == 1 and column == 2 else ("HIGHRISE" if (row + column) % 4 == 0 else "RESIDENTIAL")
+			return "GUN_SHOP" if row == 2 and column == 3 else ("SUPERMARKET" if row == 1 and column == 2 else ("HIGHRISE" if (row + column) % 4 == 0 else "RESIDENTIAL"))
 		1:
-			return "SUPERMARKET" if row == 0 and column == 1 else ("RESIDENTIAL" if (row + column) % 3 != 0 else "HIGHRISE")
+			return "GUN_SHOP" if row == 2 and column == 2 else ("SUPERMARKET" if row == 0 and column == 1 else ("RESIDENTIAL" if (row + column) % 3 != 0 else "HIGHRISE"))
 		2:
-			return "ARMORY" if column % 4 == 0 else "WAREHOUSE"
+			return "GUN_SHOP" if column == 0 and row == 1 else ("ARMORY" if column % 4 == 0 else "WAREHOUSE")
 		3:
 			return "HOSPITAL" if column % 3 == 0 else "RESIDENTIAL"
 		6:
@@ -1015,7 +1015,7 @@ func _update_building_effects(delta: float) -> void:
 					units[ally_index] = ally
 		units[unit_index] = unit
 	for building_index in range(buildings.size()):
-		if _building_type_at(building_index) != "WAREHOUSE" and _building_type_at(building_index) != "SUPERMARKET":
+		if _building_type_at(building_index) not in ["WAREHOUSE", "SUPERMARKET", "GUN_SHOP", "ARMORY", "RESIDENTIAL"]:
 			continue
 		var archetype: Dictionary = building_archetypes[building_index]
 		if not bool(archetype.get("cache_available", true)):
@@ -1031,13 +1031,19 @@ func _update_building_effects(delta: float) -> void:
 		archetype["cache_hold"] = hold_time
 		if hold_time >= WAREHOUSE_HOLD_TIME:
 			archetype["cache_available"] = false
-			if _building_type_at(building_index) == "SUPERMARKET":
+			var loot_type: String = _building_type_at(building_index)
+			if loot_type == "SUPERMARKET":
 				food += 55
 				message = "SUPERMARKET SCAVENGED +55 FOOD"
+			elif loot_type == "GUN_SHOP" or loot_type == "ARMORY":
+				_milestone13_loot_weapons(building_index)
+				scrap += 35
+				message = "WEAPON CACHE SECURED — GEAR +35 MATS"
 			else:
 				scrap += 100
-				scrap += 20
-				message = "WAREHOUSE CACHE SECURED +MATS / M20"
+				if randf() < 0.25:
+					weapons["rifles"] = int(weapons.get("rifles", 0)) + 1
+				message = "BUILDING CACHE SECURED +100 MATS"
 			message_timer = 2.0
 		building_archetypes[building_index] = archetype
 
@@ -1187,7 +1193,7 @@ func _confirm_outpost_placement() -> void:
 		radio_day_announced = 1
 	outpost_placement_active = false
 	outpost_placement_dragging = false
-	message = "CUSTOM OUTPOST ESTABLISHED — $%d" % cost
+	message = "CUSTOM OUTPOST ESTABLISHED — MATS %d" % cost
 	message_timer = 2.5
 	_save_operation()
 	queue_redraw()
@@ -1624,6 +1630,11 @@ func _draw_buildings() -> void:
 			draw_rect(Rect2(center - Vector2(6.0, 20.0), Vector2(12.0, 40.0)), Color("#fff4f5"))
 		elif archetype == "ARMORY":
 			draw_line(building.position + Vector2(20.0, 20.0), building.end - Vector2(20.0, 20.0), edge, 5.0)
+		elif archetype == "GUN_SHOP":
+			draw_rect(building.grow(-12.0), Color("#a66bd0", 0.20), false, 5.0)
+			_draw_text("GUNS // ARMAMENTS", building.position + Vector2(18.0, 46.0), 13, Color("#f0d9ff"))
+			if bool(state.get("cache_available", false)):
+				_draw_text("GEAR CACHE", building.get_center() + Vector2(-40.0, 12.0), 11, Color("#f0d9ff"))
 		elif archetype == "SUPERMARKET":
 			var market_sign: Rect2 = Rect2(building.position + Vector2(20.0, 20.0), Vector2(building.size.x - 40.0, 28.0))
 			draw_rect(market_sign, Color("#e1c36b"))
@@ -1940,7 +1951,7 @@ func _nearest_unreserved_warehouse(position: Vector2, radius: float, reserved: A
 	var best_index := -1
 	var best_distance: float = radius * radius
 	for index in range(buildings.size()):
-		if (_building_type_at(index) != "WAREHOUSE" and _building_type_at(index) != "SUPERMARKET") or index in reserved or not bool(building_archetypes[index].get("cache_available", false)):
+		if _building_type_at(index) not in ["WAREHOUSE", "SUPERMARKET", "GUN_SHOP", "ARMORY", "RESIDENTIAL"] or index in reserved or not bool(building_archetypes[index].get("cache_available", false)):
 			continue
 		var distance: float = position.distance_squared_to(buildings[index].get_center())
 		if distance < best_distance:
@@ -2073,8 +2084,8 @@ func _salvage_nearest_vehicle() -> void:
 		message_timer = 1.8
 		return
 	var vehicle: Dictionary = vehicles[best_index]
-	if scrap < int(vehicle.get("salvage_cost", 0)):
-		message = "SALVAGE REQUIRES $%d" % int(vehicle.get("salvage_cost", 0))
+	if scrap < int(vehicle.get("salvage_cost", 0)) or fuel < float(vehicle.get("fuel_cost", 0.0)):
+		message = "SALVAGE REQUIRES %d MATS + %.0f FUEL" % [int(vehicle.get("salvage_cost", 0)), float(vehicle.get("fuel_cost", 0.0))]
 		message_timer = 1.5
 		return
 	var engineer_salvage: bool = _unit_near_vehicle_kind(vehicle["pos"], "engineer", 75.0)
@@ -2114,8 +2125,9 @@ func _update_vehicles(delta: float) -> void:
 						engineer_present = true
 				if holding_unit:
 					vehicle["salvage_timer"] = maxf(0.0, float(vehicle.get("salvage_timer", 4.0)) - delta * (2.0 if engineer_present else 1.0))
-					if float(vehicle["salvage_timer"]) <= 0.0 and scrap >= int(vehicle.get("salvage_cost", 0)):
+					if float(vehicle["salvage_timer"]) <= 0.0 and scrap >= int(vehicle.get("salvage_cost", 0)) and fuel >= float(vehicle.get("fuel_cost", 0.0)):
 						scrap -= int(vehicle.get("salvage_cost", 0))
+						fuel -= float(vehicle.get("fuel_cost", 0.0))
 						scrap += 15
 						vehicle["active"] = true
 						vehicle["salvage_started"] = false
@@ -2155,7 +2167,7 @@ func _update_vehicles(delta: float) -> void:
 							vehicle["onboard"] = 0
 							saved_count += rescued
 							scrap += rescued * 35
-							world_callouts.append({"pos": position, "text": "+$%d" % (rescued * 35), "life": 2.0})
+							world_callouts.append({"pos": position, "text": "+MATS %d" % (rescued * 35), "life": 2.0})
 							message = "VEHICLE EVACUATION — %d CIVILIANS" % rescued
 							message_timer = 2.0
 			if not helicopter and moved:
@@ -2275,6 +2287,9 @@ func _spawn_one_wave_zombie() -> bool:
 		hp = 180.0 + float(wave) * 15.0
 	elif kind == "spitter":
 		hp = 42.0 + float(wave) * 4.0
+	if (sector_index == 0 or sector_index == 2) and randf() < 0.09:
+		kind = "police_zed"
+		hp = 115.0 + float(wave) * 6.0
 	zombies.append({"pos": spawn_point, "kind": kind, "hp": hp, "max_hp": hp, "wall_cooldown": 0.0})
 	return true
 
@@ -2783,7 +2798,7 @@ func _execute_airstrike(center: Vector2) -> void:
 		lost_count += casualties
 		var penalty := casualties * 75
 		scrap = maxi(0, scrap - penalty)
-		message = "FRIENDLY FIRE: %d CIVILIANS LOST (-$%d)" % [casualties, penalty]
+		message = "FRIENDLY FIRE: %d CIVILIANS LOST (-MATS %d)" % [casualties, penalty]
 	else:
 		message = "AIRSTRIKE COMPLETE"
 	message_timer = 2.5
@@ -2833,7 +2848,7 @@ func _draw() -> void:
 		_draw_text("SELECT HQ LOCATION", Vector2(safe_insets.x + 24.0, hq_panel_top + 24.0), 20, Color("#e8fff0"))
 		_draw_text(hq_hint, Vector2(safe_insets.x + 24.0, hq_panel_top + 48.0), 13, Color("#a9c8b7"))
 		if outpost_placement_active:
-			_draw_text("%.0f x %.0f  COST $%d  SHELTER %d  %s" % [outpost_placement_rect.size.x, outpost_placement_rect.size.y, _outpost_build_cost(outpost_placement_rect.size), maxi(12, roundi(outpost_placement_rect.size.x * outpost_placement_rect.size.y / 18000.0)), "VALID" if outpost_placement_valid else "BLOCKED"], Vector2(safe_insets.x + 24.0, hq_panel_top + 76.0), 12, Color("#e8fff0"))
+			_draw_text("%.0f x %.0f  COST MATS %d  SHELTER %d  %s" % [outpost_placement_rect.size.x, outpost_placement_rect.size.y, _outpost_build_cost(outpost_placement_rect.size), maxi(12, roundi(outpost_placement_rect.size.x * outpost_placement_rect.size.y / 18000.0)), "VALID" if outpost_placement_valid else "BLOCKED"], Vector2(safe_insets.x + 24.0, hq_panel_top + 76.0), 12, Color("#e8fff0"))
 			_draw_outpost_placement_hud(_safe_bottom_y(touch_target_size + 6.0))
 		return
 	var shake_offset := Vector2.ZERO
@@ -3173,7 +3188,7 @@ func _draw_entities() -> void:
 		draw_rect(Rect2(vehicle_pos + Vector2(-24.0, -25.0), Vector2(48.0 * health_ratio, 4.0)), Color("#67e89b"))
 		if not bool(vehicle.get("active", false)):
 			var salvage_remaining: float = float(vehicle.get("salvage_timer", 4.0))
-			_draw_text("SALVAGE $%d  %.1fS" % [int(vehicle.get("salvage_cost", 0)), salvage_remaining], vehicle_pos + Vector2(-48.0, -34.0), 10, Color("#f4d77b"))
+			_draw_text("SALVAGE %d MATS + %.0f FUEL  %.1fS" % [int(vehicle.get("salvage_cost", 0)), float(vehicle.get("fuel_cost", 0.0)), salvage_remaining], vehicle_pos + Vector2(-48.0, -34.0), 10, Color("#f4d77b"))
 		else:
 			_draw_text("ONBOARD %d/6" % int(vehicle.get("onboard", 0)), vehicle_pos + Vector2(-34.0, 38.0), 10, Color("#b8f1df"))
 	for unit_index in range(units.size()):
@@ -3338,7 +3353,7 @@ func _draw_outpost_placement_hud(top: float) -> void:
 	var half_width: float = safe_width * 0.5
 	draw_rect(Rect2(safe_left, top, half_width - 6.0, touch_target_size), confirm_color)
 	draw_rect(Rect2(safe_left, top, half_width - 6.0, touch_target_size), Color("#72d69a") if outpost_placement_valid else Color("#ff6868"), false, 2.0)
-	_draw_text("[CONFIRM BUILD ($%d)]" % _outpost_build_cost(outpost_placement_rect.size), Vector2(safe_left + 10.0, top + touch_target_size * 0.62), 14, Color("#f0fff5"))
+	_draw_text("[CONFIRM BUILD (MATS %d)]" % _outpost_build_cost(outpost_placement_rect.size), Vector2(safe_left + 10.0, top + touch_target_size * 0.62), 14, Color("#f0fff5"))
 	var cancel_left: float = safe_left + half_width + 6.0
 	draw_rect(Rect2(cancel_left, top, half_width - 6.0, touch_target_size), Color("#472a2a"))
 	draw_rect(Rect2(cancel_left, top, half_width - 6.0, touch_target_size), Color("#d77b7b"), false, 2.0)
@@ -3418,7 +3433,7 @@ func _draw_deployment_bar() -> void:
 		_draw_text(str(deployment["name"]), Vector2(x + 5.0, cards_top + card_height * 0.27), item_title_size, Color("#e8fff0") if selected else Color("#b2c7bc"))
 		var detail := str(deployment["detail"])
 		if str(deployment["kind"]) == "outpost":
-			detail = "$%d" % _deployment_cost("outpost")
+			detail = "MATS %d" % _deployment_cost("outpost")
 		_draw_text(detail, Vector2(x + 5.0, cards_top + card_height * 0.52), item_detail_size, Color("#f0cc77"))
 		_draw_text("TAP MAP", Vector2(x + 5.0, cards_top + card_height * 0.78), 8 if choices.size() > 6 else 10, Color("#8da99a"))
 
@@ -3610,6 +3625,23 @@ func _damage_zombie(index: int, damage: float, attacker_unit_index: int = -1) ->
 		return
 	var dead_position: Vector2 = zombie["pos"]
 	var dead_kind: String = str(zombie["kind"])
+	if dead_kind == "police_zed":
+		var drop_roll: float = randf()
+		if drop_roll < 0.30:
+			weapons["rifles"] = int(weapons.get("rifles", 0)) + 1
+			world_callouts.append({"pos": dead_position, "text": "+1 RIFLE", "life": 2.0})
+		elif drop_roll < 0.48:
+			weapons["snipers"] = int(weapons.get("snipers", 0)) + 1
+			world_callouts.append({"pos": dead_position, "text": "+1 SNIPER", "life": 2.0})
+		elif drop_roll < 0.58:
+			weapons["heavy_mgs"] = int(weapons.get("heavy_mgs", 0)) + 1
+			world_callouts.append({"pos": dead_position, "text": "+1 HEAVY MG", "life": 2.0})
+		elif drop_roll < 0.76:
+			weapons["medkits"] = int(weapons.get("medkits", 0)) + 1
+			world_callouts.append({"pos": dead_position, "text": "+1 MEDKIT", "life": 2.0})
+		else:
+			scrap += 25
+			world_callouts.append({"pos": dead_position, "text": "+25 MATS", "life": 2.0})
 	if attacker_unit_index >= 0 and attacker_unit_index < units.size():
 		var veteran: Dictionary = units[attacker_unit_index]
 		var kills: int = int(veteran.get("kills", 0)) + 1
@@ -3627,6 +3659,7 @@ func _damage_zombie(index: int, damage: float, attacker_unit_index: int = -1) ->
 	zombies.remove_at(index)
 	if dead_kind == "spitter":
 		_spitter_burst(dead_position)
+	_save_operation()
 
 func _spitter_burst(center: Vector2) -> void:
 	shockwaves.append({"pos": center, "radius": 45.0, "life": 0.35, "max_life": 0.35, "toxic": true})
@@ -3908,7 +3941,7 @@ func _shelter_flush_timer_step(delta: float) -> void:
 			scrap += sheltered * 35
 			outpost["sheltered"] = 0
 			outpost["evac_timer"] = interval
-			message = "OUTPOST EVACUATION — %d CIVILIANS  +$%d" % [sheltered, sheltered * 35]
+			message = "OUTPOST EVACUATION — %d CIVILIANS  +MATS %d" % [sheltered, sheltered * 35]
 			message_timer = 2.0
 		outposts[index] = outpost
 
@@ -4129,8 +4162,8 @@ func _construct_survival_building(kind: String, position: Vector2) -> void:
 		if rect.grow(-30.0).has_point(position):
 			owner_index = index
 			break
-	if owner_index < 0:
-		message = "SURVIVAL BUILDINGS MUST BE INSIDE AN OUTPOST"
+	if owner_index < 0 and kind in ["farm", "livestock", "watchtower"]:
+		message = "FARMS AND LIVESTOCK MUST BE ADJACENT TO AN OUTPOST"
 		message_timer = 2.0
 		return
 	var cost_scrap: int = 0
@@ -4146,17 +4179,18 @@ func _construct_survival_building(kind: String, position: Vector2) -> void:
 			message_timer = 1.5
 			return
 	if scrap < cost_materials:
-		message = "REQUIRES $%d AND %d MATS" % [cost_scrap, cost_materials]
+		message = "REQUIRES %d MATS" % cost_materials
 		message_timer = 1.8
 		return
 	if kind == "bakery" or kind == "clinic" or kind == "workshop":
-		var indoor_type: String = "RESIDENTIAL" if kind == "bakery" else ("HOSPITAL" if kind == "clinic" else "ARMORY")
-		var indoor_index: int = _milestone13_nearest_building(position, 180.0)
-		if indoor_index < 0 or str(building_archetypes[indoor_index].get("type", "")) not in [indoor_type, "SUPERMARKET", "WAREHOUSE"]:
-			message = "FACILITY NEEDS INTACT " + indoor_type
+		var allowed_types: Array[String] = ["RESIDENTIAL", "SUPERMARKET"] if kind == "bakery" else (["HOSPITAL", "RESIDENTIAL"] if kind == "clinic" else ["ARMORY", "WAREHOUSE", "GUN_SHOP"])
+		var indoor_index: int = _milestone13_nearest_building(position, 520.0)
+		if indoor_index < 0 or bool(building_archetypes[indoor_index].get("destroyed", false)) or str(building_archetypes[indoor_index].get("type", "")) not in allowed_types:
+			message = "FACILITY NEEDS INTACT BUILDING: " + " / ".join(allowed_types)
 			message_timer = 2.0
 			return
 		building_archetypes[indoor_index]["converted_to"] = "WEAPONS_WORKSHOP" if kind == "workshop" else ("BAKERY" if kind == "bakery" else "FIELD_CLINIC")
+		building_archetypes[indoor_index]["cache_available"] = false
 		position = buildings[indoor_index].get_center()
 	var food_yield: int = 18 if kind == "farm" else (32 if kind == "bakery" else (22 if kind == "livestock" else 0))
 	constructed_buildings.append({"kind": kind, "pos": position, "outpost_index": owner_index, "food_per_day": food_yield, "hp": 500.0, "progress": 0.0, "constructing": true})
@@ -4188,14 +4222,31 @@ func _interact_raider_camp(position: Vector2) -> void:
 			camp["raided"] = true
 			raider_camps[index] = camp
 			message = "RAIDER CACHE CAPTURED — FOOD / MATS / FUEL"
-		elif scrap >= 100:
-			scrap -= 100
+		elif scrap >= 30:
+			scrap -= 30
 			food += 60
-			message = "TRADE COMPLETE — +60 FOOD"
+			message = "BARTER COMPLETE — 30 MATS FOR +60 FOOD"
+		elif int(weapons.get("rifles", 0)) > 0:
+			weapons["rifles"] = int(weapons.get("rifles", 0)) - 1
+			food += 60
+			message = "BARTER COMPLETE — 1 RIFLE FOR +60 FOOD"
 		else:
-			message = "TRADE REQUIRES MATS OR A SQUAD TO RAID"
+			message = "BARTER: 30 MATS OR 1 RIFLE; SQUAD CAN RAID"
 		message_timer = 2.2
 		return
+
+func _milestone13_loot_weapons(building_index: int) -> void:
+	var roll: float = randf()
+	if roll < 0.38:
+		weapons["rifles"] = int(weapons.get("rifles", 0)) + 1
+	elif roll < 0.62:
+		weapons["snipers"] = int(weapons.get("snipers", 0)) + 1
+	elif roll < 0.76:
+		weapons["heavy_mgs"] = int(weapons.get("heavy_mgs", 0)) + 1
+	else:
+		weapons["medkits"] = int(weapons.get("medkits", 0)) + 1
+	if building_index >= 0 and building_index < building_archetypes.size():
+		building_archetypes[building_index]["cache_available"] = false
 
 func _milestone13_survivors() -> Array[Dictionary]:
 	var names: Array[String] = ["Mara Vance", "Elias Chen", "Nadia Rostova", "Jonah Price", "Asha Patel", "Theo Brooks", "Mina Okafor", "Lucas Reed", "Iris Navarro", "Samir Haddad", "Grace Kim", "Owen Clarke", "Leah Morgan", "Rafael Costa", "Tess Walker", "Noah Bennett", "Yuki Tanaka", "Caleb Foster"]
@@ -4263,8 +4314,9 @@ func _milestone13_tick_construction(delta: float) -> void:
 			continue
 		var rate := 0.0
 		for unit in units:
-			if unit["pos"].distance_to(site.get("pos", Vector2.ZERO)) <= 56.0:
-				rate += 2.0 if str(unit.get("kind", "")) == "engineer" else 1.0
+			var worker_kind: String = str(unit.get("kind", ""))
+			if not bool(unit.get("garrisoned", false)) and unit["pos"].distance_to(site.get("pos", Vector2.ZERO)) <= 56.0 and worker_kind in ["worker", "engineer"]:
+				rate += 2.0 if worker_kind == "engineer" else 1.0
 		if rate > 0.0:
 			site["progress"] = minf(100.0, float(site.get("progress", 0.0)) + delta * rate * 4.0)
 			if float(site["progress"]) >= 100.0:
