@@ -1012,7 +1012,7 @@ func _update_building_effects(delta: float) -> void:
 					continue
 				var ally: Dictionary = units[ally_index]
 				if unit["pos"].distance_squared_to(ally["pos"]) <= 110.0 * 110.0:
-					ally["hp"] = minf(float(ally.get("max_hp", 100.0)), float(ally.get("hp", 100.0)) + 6.0 * delta
+					ally["hp"] = minf(float(ally.get("max_hp", 100.0)), float(ally.get("hp", 100.0)) + 6.0 * delta)
 					for survivor_index in range(survivors.size()):
 						if int(survivors[survivor_index].get("id", -2)) == int(unit.get("survivor_id", -1)):
 							survivors[survivor_index]["medical_xp"] = int(survivors[survivor_index].get("medical_xp", 0)) + 1
