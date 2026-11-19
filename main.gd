@@ -2642,13 +2642,13 @@ func _to_canvas_delta(raw_delta: Vector2) -> Vector2:
 func _input(event: InputEvent) -> void:
 	if event is InputEventScreenDrag and work_zone_dragging:
 		var zone_drag := event as InputEventScreenDrag
-		var zone_drag_pos: Vector2 = _to_canvas_pos(zone_drag_pos)
+		var zone_drag_pos: Vector2 = _to_canvas_pos(zone_drag.position)
 		work_zone_current = _screen_to_world(zone_drag_pos)
 		queue_redraw()
 		return
 	if event is InputEventScreenTouch:
 		var touch := event as InputEventScreenTouch
-		var touch_pos: Vector2 = _to_canvas_pos(touch_pos)
+		var touch_pos: Vector2 = _to_canvas_pos(touch.position)
 		if touch.pressed:
 			touch_points[touch.index] = touch_pos
 			if touch_points.size() == 1:
@@ -2706,8 +2706,8 @@ func _input(event: InputEvent) -> void:
 				camera_dragging = false
 	elif event is InputEventScreenDrag:
 		var drag := event as InputEventScreenDrag
-		var drag_pos: Vector2 = _to_canvas_pos(drag_pos)
-		var drag_delta: Vector2 = _to_canvas_delta(drag_delta)
+		var drag_pos: Vector2 = _to_canvas_pos(drag.position)
+		var drag_delta: Vector2 = _to_canvas_delta(drag.relative)
 		if touch_points.has(drag.index):
 			touch_points[drag.index] = drag_pos
 		if touch_points.size() >= 2:
@@ -2735,7 +2735,7 @@ func _input(event: InputEvent) -> void:
 				queue_redraw()
 	elif event is InputEventMouseButton:
 		var mouse := event as InputEventMouseButton
-		var mouse_pos: Vector2 = _to_canvas_pos(mouse_pos)
+		var mouse_pos: Vector2 = _to_canvas_pos(mouse.position)
 		if mouse.button_index == MOUSE_BUTTON_LEFT:
 			if mouse.pressed:
 				var mouse_world: Vector2 = _screen_to_world(mouse_pos)
@@ -2765,8 +2765,8 @@ func _input(event: InputEvent) -> void:
 			_zoom_camera(0.89, mouse_pos)
 	elif event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		var motion := event as InputEventMouseMotion
-		var motion_pos: Vector2 = _to_canvas_pos(motion_pos)
-		var motion_delta: Vector2 = _to_canvas_delta(motion_delta)
+		var motion_pos: Vector2 = _to_canvas_pos(motion.position)
+		var motion_delta: Vector2 = _to_canvas_delta(motion.relative)
 		camera_drag_distance += motion_delta.length()
 		if camera_drag_distance > CAMERA_DRAG_THRESHOLD:
 			camera_dragging = true
