@@ -1677,28 +1677,32 @@ func _outpost_recruit_spawn(outpost_index: int, fallback: Vector2) -> Vector2:
 	return outposts[outpost_index]["pos"] + Vector2(0.0, 118.0)
 
 func _recruit_unit(kind: String) -> void:
-	if kind != "infantry" and kind != "sniper" and kind != "engineer" and kind != "medic" and kind != "heavy":
-		return
-	var source_index: int = _best_recruitment_outpost()
-	if source_index < 0:
-		message = "REQUIRES 1 SHELTERED SETTLER IN AN OUTPOST"
+	if selected_survivor_index < 0 or selected_survivor_index >= survivors.size():
+		message = "SELECT ONE OF THE 18 SURVIVORS FIRST"
 		message_timer = 2.0
 		return
-	var base_cost: int = 60 if kind == "infantry" else (110 if kind == "sniper" else (85 if kind == "engineer" else (95 if kind == "medic" else 130)))
-	var discounted: bool = _is_near_building_type(outposts[source_index]["pos"], "ARMORY", ARMORY_RADIUS)
-	var cost: int = roundi(float(base_cost) * (0.75 if discounted else 1.0))
-	if scrap < cost:
-		message = "RECRUITMENT REQUIRES $%d" % cost
-		message_timer = 1.5
+	var role: String = kind.to_upper()
+	var weapon_key: String = "rifles" if kind == "infantry" else ("snipers" if kind == "sniper" else ("heavy_mgs" if kind == "heavy" else ("medkits" if kind == "medic" else "")))
+	var survivor: Dictionary = survivors[selected_survivor_index]
+	var previous_weapon: String = str(survivor.get("equipped_weapon", ""))
+	if not weapon_key.is_empty() and int(weapons.get(weapon_key, 0)) <= 0:
+		message = "NO " + weapon_key.to_upper() + " IN STOCKPILE"
+		message_timer = 2.0
 		return
-	var spawn_position: Vector2 = _outpost_recruit_spawn(source_index, outposts[source_index]["pos"])
-	outposts[source_index]["sheltered"] = maxi(0, int(outposts[source_index].get("sheltered", 0)) - 1)
-	units.append({"id": _next_unit_id(), "pos": spawn_position, "kind": kind, "cooldown": 0.1, "hp": 100.0, "max_hp": 100.0, "kills": 0, "rank": 0, "garrisoned": false, "garrison_building": -1, "move_target": null, "manual_order": false, "ai_task": "", "steering": {}})
-	scrap -= cost
-	selected_unit_index = units.size() - 1
-	message = "%s RECRUITED — $%d" % [kind.to_upper(), cost]
+	if not previous_weapon.is_empty():
+		weapons[previous_weapon] = int(weapons.get(previous_weapon, 0)) + 1
+	if not weapon_key.is_empty():
+		weapons[weapon_key] = int(weapons.get(weapon_key, 0)) - 1
+	survivor["role"] = role
+	survivor["equipped_weapon"] = weapon_key
+	survivors[selected_survivor_index] = survivor
+	for unit_index in range(units.size()):
+		if int(units[unit_index].get("survivor_id", -1)) == int(survivor.get("id", -1)):
+			units[unit_index]["kind"] = kind
+			selected_unit_index = unit_index
+			break
+	message = str(survivor.get("name", "SURVIVOR")) + " ASSIGNED " + role + " — XP / RANK PRESERVED"
 	message_timer = 2.0
-	world_callouts.append({"pos": spawn_position, "text": "RECRUITED", "life": 2.0})
 	_save_operation()
 
 func _ai_button_rect() -> Rect2:
@@ -2677,7 +2681,13 @@ func _handle_tap(pos: Vector2) -> void:
 	for squad_index in range(units.size() - 1, -1, -1):
 		if world_pos.distance_to(units[squad_index]["pos"]) <= UNIT_SELECT_RADIUS:
 			selected_unit_index = squad_index
-			message = "SQUAD SELECTED — TAP STREET TO MOVE"
+			selected_survivor_index = -1
+			var survivor_id: int = int(units[squad_index].get("survivor_id", -1))
+			for survivor_index in range(survivors.size()):
+				if int(survivors[survivor_index].get("id", -2)) == survivor_id:
+					selected_survivor_index = survivor_index
+					break
+			message = "SURVIVOR SELECTED — ASSIGN ROLE FROM RECRUIT TAB"
 			message_timer = 2.0
 			queue_redraw()
 			return
