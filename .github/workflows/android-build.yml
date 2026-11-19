@@ -203,7 +203,7 @@ jobs:
           DIRECT_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$RELEASE_APK"
           DOWNLOADED_APK="$RUNNER_TEMP/ContainmentProtocol.release-check.apk"
           HTTP_STATUS="$(curl --silent --show-error --location --retry 3 \
-            --header "Authorization: token $GH_TOKEN" \
+            --user "$GITHUB_ACTOR:$GH_TOKEN" \
             --header "Accept: application/octet-stream" \
             --output "$DOWNLOADED_APK" --write-out '%{http_code}' "$DIRECT_URL")"
           echo "Direct APK download HTTP status: $HTTP_STATUS"
@@ -225,7 +225,7 @@ jobs:
           rm -f "$RELEASE_APK"
 
       - name: Upload APK Artifact
-        if: always() && hashFiles('build/android/ContainmentProtocol.apk') != ''
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ContainmentProtocol-APK
