@@ -5072,18 +5072,41 @@ func _milestone14_create_raid_squad() -> void:
 		message = "MAXIMUM 20 RAID SQUADS"
 		message_timer = 1.5
 		return
-	var members: Array[int] = []
+	var already_assigned: Array[int] = []
+	for squad in raid_squads:
+		for member_id in squad.get("members", []):
+			already_assigned.append(int(member_id))
+	var candidates: Array[int] = []
 	for i in range(survivors.size()):
+		var person: Dictionary = survivors[i]
+		var role: String = str(person.get("role", ""))
+		var citizen_id: int = int(person.get("id", i))
+		if role in ["INFANTRY", "SNIPER", "HEAVY", "MEDIC"] and not already_assigned.has(citizen_id):
+			candidates.append(i)
+	candidates.sort_custom(func(a: int, b: int) -> bool:
+		var person_a: Dictionary = survivors[a]
+		var person_b: Dictionary = survivors[b]
+		var xp_a: int = int(person_a.get("combat_xp", 0)) + int(person_a.get("medical_xp", 0))
+		var xp_b: int = int(person_b.get("combat_xp", 0)) + int(person_b.get("medical_xp", 0))
+		var role_a: String = str(person_a.get("role", ""))
+		var role_b: String = str(person_b.get("role", ""))
+		var expert_a: String = str(person_a.get("expertise", ""))
+		var expert_b: String = str(person_b.get("expertise", ""))
+		var bonus_a: int = 200 if ((role_a == "MEDIC" and expert_a == "Medic") or (role_a != "MEDIC" and expert_a == "Marksman")) else 0
+		var bonus_b: int = 200 if ((role_b == "MEDIC" and expert_b == "Medic") or (role_b != "MEDIC" and expert_b == "Marksman")) else 0
+		return xp_a + bonus_a > xp_b + bonus_b
+	)
+	var members: Array[int] = []
+	for candidate_index in candidates:
 		if members.size() >= 8:
 			break
-		if str(survivors[i].get("role", "")) in ["INFANTRY", "SNIPER", "HEAVY", "MEDIC"]:
-			members.append(int(survivors[i].get("id", i)))
+		members.append(int(survivors[candidate_index].get("id", candidate_index)))
 	if members.is_empty():
-		message = "ALLOCATE ARMED SURVIVORS BEFORE FORMING A SQUAD"
+		message = "NO UNASSIGNED ARMED SURVIVORS AVAILABLE"
 	else:
-		raid_squads.append({"id": raid_squads.size() + 1, "members": members, "name": "RAID SQUAD %02d" % (raid_squads.size() + 1)})
+		raid_squads.append({"id": raid_squads.size() + 1, "members": members, "name": "RAID SQUAD %02d" % (raid_squads.size() + 1), "morale": 100, "status": "READY"})
 		role_allocations["SQUAD"] = raid_squads.size()
-		message = "RAID SQUAD FORMED — %d MEMBERS" % members.size()
+		message = "RAID SQUAD FORMED — %d XP-PRIORITIZED MEMBERS" % members.size()
 	message_timer = 1.8
 	_save_operation()
 
