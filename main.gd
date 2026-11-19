@@ -5427,7 +5427,7 @@ func _milestone14_update_raider_warbands(delta: float) -> void:
 						units[target_unit_index] = target_unit
 						message = "RAIDER WARBAND ENGAGING PLAYER SQUAD"
 				else:
-						var defended_outpost: Dictionary = outposts[target_outpost_index]
+					var defended_outpost: Dictionary = outposts[target_outpost_index]
 					defended_outpost["hp"] = maxf(1.0, float(defended_outpost.get("hp", 500.0)) - 22.0)
 					outposts[target_outpost_index] = defended_outpost
 					message = "RAIDER WARBAND ATTACKING OUTPOST"
