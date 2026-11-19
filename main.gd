@@ -34,7 +34,7 @@ const FLARE_LURE_RADIUS := 220.0
 const AUDIO_SAMPLE_RATE := 22050.0
 const MAX_ACTIVE_ZOMBIES := 650
 const PENDING_WAVE_SPAWN_INTERVAL := 0.20
-const SAVE_VERSION := 10
+const SAVE_VERSION := 11
 const PREPARATION_SECONDS := 60.0
 const GAME_MINUTES_PER_SECOND := 2.4
 const MAX_TACTICAL_DECALS := 80
@@ -297,11 +297,11 @@ func _start_sector(index: int) -> void:
 	campaign_started = false
 	campaign_start_grace_timer = 0.0
 	initial_civilian_count = 0
-	scrap = 120
-	wood = 80
+	scrap = 140
+	wood = 180
 	food = 120
 	last_upkeep_day = 1
-	fuel = 300.0
+	fuel = 80.0
 	endless_containment = true
 	world_clock_minutes = 450.0
 	survival_day = 1
@@ -318,8 +318,15 @@ func _start_sector(index: int) -> void:
 	ops_monitor_open = false
 	manual_paused = false
 	lifecycle_paused = false
-	scrap = 0
-	weapons = {"rifles": 6, "snipers": 2, "heavy_mgs": 1, "medkits": 3}
+	scrap = 140
+	wood = 180
+	food = 120
+	fuel = 80.0
+	weapons = {"rifles": 4, "snipers": 1, "heavy_mgs": 0, "medkits": 2}
+	recent_gunfire.clear()
+	population_heat_targets.clear()
+	population_heat_refresh_timer = 0.0
+	outpost_expanding_index = -1
 	survivors = _milestone13_survivors()
 	citizens.clear()
 	raid_squads.clear()
@@ -433,6 +440,7 @@ func _process(delta: float) -> void:
 	_milestone14_tick_workforce(sim_delta)
 	_milestone15_tick_infections(sim_delta)
 	_milestone14_update_factions(sim_delta)
+	_milestone151_update_population_heat(sim_delta)
 	_refresh_light_source_cache()
 	message_timer = maxf(0.0, message_timer - sim_delta)
 	airstrike_timer = maxf(0.0, airstrike_timer - sim_delta)
@@ -507,6 +515,9 @@ func _process(delta: float) -> void:
 		var target: Vector2 = _nearest_evac_zone(zpos)
 		if target_index >= 0:
 			target = civilians[target_index]
+		var heat_target: Vector2 = _milestone151_hottest_target(zpos)
+		if heat_target != Vector2.ZERO:
+			target = target.lerp(heat_target, 0.32 if target_index >= 0 else 1.0)
 		if bool(zombie.get("turned_inside_outpost", false)):
 			var nearest_indoor_unit: int = -1
 			var nearest_indoor_distance: float = 320.0 * 320.0
@@ -840,14 +851,10 @@ func _scenario_civilian_count(district_index: int, base_count: int) -> int:
 	return maxi(8, roundi(float(base_count) * multiplier))
 
 func _scenario_initial_zombie_count(district_index: int) -> int:
-	match sector_index:
-		0:
-			return 7 if district_index == 1 else 3
-		1:
-			return 14 if district_index == 0 or district_index == 3 else 3
-		2:
-			return 10 if district_index == 2 else (8 if district_index == 4 else 2)
-	return 6
+	# Seed a broad, low-intensity state-wide presence rather than a starting swarm.
+	var urban_bonus: int = 2 if district_index in [0, 1, 3, 6] else 0
+	var sector_bias: int = 1 if (sector_index == 1 and district_index in [0, 3]) or (sector_index == 2 and district_index in [2, 4]) else 0
+	return clampi(8 + urban_bonus + sector_bias, 8, 14)
 
 func _generate_state_map() -> void:
 	buildings.clear()
@@ -1160,6 +1167,41 @@ func _outpost_build_cost(size: Vector2) -> int:
 	var wall_segments: int = ceili((2.0 * (size.x + size.y)) / 40.0)
 	return OUTPOST_COST + wall_segments * 5
 
+func _outpost_placement_cost() -> int:
+	if outpost_placement_kind == "hq":
+		return 0
+	if outpost_placement_kind == "expand" and outpost_expanding_index >= 0 and outpost_expanding_index < outposts.size():
+		var old_rect: Rect2 = outposts[outpost_expanding_index].get("rect", outpost_placement_rect)
+		var old_segments: int = ceili((2.0 * (old_rect.size.x + old_rect.size.y)) / 40.0)
+		var new_segments: int = ceili((2.0 * (outpost_placement_rect.size.x + outpost_placement_rect.size.y)) / 40.0)
+		return maxi(0, new_segments - old_segments) * 5
+	return _outpost_build_cost(outpost_placement_rect.size)
+
+func _outpost_placement_wood_cost() -> int:
+	if outpost_placement_kind != "expand" or outpost_expanding_index < 0 or outpost_expanding_index >= outposts.size():
+		return 0
+	var old_rect: Rect2 = outposts[outpost_expanding_index].get("rect", outpost_placement_rect)
+	var old_segments: int = ceili((2.0 * (old_rect.size.x + old_rect.size.y)) / 40.0)
+	var new_segments: int = ceili((2.0 * (outpost_placement_rect.size.x + outpost_placement_rect.size.y)) / 40.0)
+	return maxi(0, new_segments - old_segments) * 2
+
+func _outpost_placement_status() -> String:
+	if not _outpost_rect_valid(outpost_placement_rect):
+		return "OVERLAPS ROAD/OUTPOST"
+	if outpost_placement_kind == "hq":
+		var enclosed_hq_building := false
+		for building_index in range(buildings.size()):
+			if outpost_placement_rect.encloses(buildings[building_index]) and not bool(building_archetypes[building_index].get("destroyed", false)):
+				enclosed_hq_building = true
+				break
+		if not enclosed_hq_building:
+			return "NO BUILDING ENCLOSED"
+	var required_wood: int = _outpost_placement_wood_cost()
+	var required_scrap: int = _outpost_placement_cost() + (0 if outpost_placement_kind in ["hq", "expand"] else 40)
+	if wood < required_wood or scrap < required_scrap:
+		return "NOT ENOUGH WOOD/SCRAP"
+	return "VALID"
+
 func _snap_outpost_size(size: Vector2) -> Vector2:
 	return Vector2(clampf(roundf(size.x / OUTPOST_SNAP) * OUTPOST_SNAP, OUTPOST_MIN_SIZE, OUTPOST_MAX_SIZE), clampf(roundf(size.y / OUTPOST_SNAP) * OUTPOST_SNAP, OUTPOST_MIN_SIZE, OUTPOST_MAX_SIZE))
 
@@ -1176,9 +1218,17 @@ func _outpost_rect_valid(rect: Rect2) -> bool:
 			for edge_band in edge_bands:
 				if edge_band.intersects(building):
 					return false
-	for outpost in outposts:
-		var other_rect: Rect2 = outpost.get("rect", Rect2(outpost["pos"] - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
+	for outpost_index in range(outposts.size()):
+		if outpost_placement_kind == "expand" and outpost_index == outpost_expanding_index:
+			continue
+		var other_rect: Rect2 = outposts[outpost_index].get("rect", Rect2(outposts[outpost_index]["pos"] - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
 		if rect.intersects(other_rect.grow(40.0)):
+			return false
+	for segment in highway_segments + secondary_road_segments:
+		var road_from: Vector2 = segment.get("from", Vector2.ZERO)
+		var road_to: Vector2 = segment.get("to", Vector2.ZERO)
+		var road_width: float = float(segment.get("width", 48.0))
+		if Rect2(road_from, road_to - road_from).abs().grow(road_width * 0.5 + 8.0).intersects(rect):
 			return false
 	return true
 
@@ -1187,10 +1237,26 @@ func _begin_outpost_placement(world_position: Vector2, placement_kind: String) -
 	outpost_placement_dragging = true
 	outpost_placement_gesture_mode = "resize"
 	outpost_placement_kind = placement_kind
+	outpost_expanding_index = -1
 	outpost_placement_start = world_position
 	outpost_placement_anchor = world_position
 	outpost_placement_rect = Rect2(world_position, Vector2(OUTPOST_MIN_SIZE, OUTPOST_MIN_SIZE))
 	_update_outpost_placement_from_anchor(world_position + Vector2(OUTPOST_MIN_SIZE, OUTPOST_MIN_SIZE))
+
+func _begin_outpost_expansion(index: int) -> void:
+	if index < 0 or index >= outposts.size():
+		return
+	outpost_expanding_index = index
+	outpost_placement_kind = "expand"
+	outpost_placement_active = true
+	outpost_placement_dragging = false
+	outpost_placement_rect = outposts[index].get("rect", Rect2(outposts[index].get("pos", Vector2.ZERO) - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
+	outpost_placement_anchor = outpost_placement_rect.end
+	outpost_placement_status = "VALID"
+	outpost_placement_valid = true
+	message = "DRAG A CORNER OUTWARD TO EXPAND THE PERIMETER"
+	message_timer = 2.2
+	queue_redraw()
 
 func _begin_outpost_resize(world_position: Vector2) -> void:
 	var corners: Array[Vector2] = [outpost_placement_rect.position, Vector2(outpost_placement_rect.end.x, outpost_placement_rect.position.y), outpost_placement_rect.end, Vector2(outpost_placement_rect.position.x, outpost_placement_rect.end.y)]
@@ -1213,24 +1279,58 @@ func _update_outpost_placement(world_position: Vector2) -> void:
 func _update_outpost_placement_from_anchor(world_position: Vector2) -> void:
 	var delta: Vector2 = world_position - outpost_placement_anchor
 	var size: Vector2 = _snap_outpost_size(Vector2(absf(delta.x), absf(delta.y)))
+	if outpost_placement_kind == "hq":
+		size.x = minf(size.x, 560.0)
+		size.y = minf(size.y, 560.0)
 	var top_left := Vector2(minf(world_position.x, outpost_placement_anchor.x), minf(world_position.y, outpost_placement_anchor.y))
 	outpost_placement_rect = Rect2(top_left, size)
-	var cost: int = _outpost_build_cost(size)
-	outpost_placement_valid = _outpost_rect_valid(outpost_placement_rect) and scrap >= cost and scrap >= 40 and (outpost_placement_kind == "hq" or outposts.size() < OUTPOST_MAX_COUNT + 1)
+	outpost_placement_status = _outpost_placement_status()
+	outpost_placement_valid = outpost_placement_status == "VALID" and (outpost_placement_kind in ["hq", "expand"] or outposts.size() < OUTPOST_MAX_COUNT + 1)
 	queue_redraw()
 
 func _confirm_outpost_placement() -> void:
 	var size: Vector2 = outpost_placement_rect.size
-	var cost: int = _outpost_build_cost(size)
-	if not outpost_placement_valid or scrap < cost or scrap < 40:
-		message = "OUTPOST FOOTPRINT BLOCKED OR INSUFFICIENT MATERIALS"
-		message_timer = 1.5
+	var cost: int = _outpost_placement_cost()
+	var wood_cost: int = _outpost_placement_wood_cost()
+	outpost_placement_status = _outpost_placement_status()
+	if not outpost_placement_valid or outpost_placement_status != "VALID":
+		message = outpost_placement_status
+		message_timer = 1.8
 		return
 	var center: Vector2 = outpost_placement_rect.get_center()
-	if outpost_placement_kind == "hq":
+	if outpost_placement_kind == "expand":
+		if outpost_expanding_index < 0 or outpost_expanding_index >= outposts.size():
+			message = "OUTPOST NO LONGER AVAILABLE"
+			message_timer = 1.8
+			return
+		var expanded_outpost: Dictionary = outposts[outpost_expanding_index]
+		for wall_index in range(barricades.size() - 1, -1, -1):
+			if int(barricades[wall_index].get("outpost_index", -1)) == outpost_expanding_index:
+				barricades.remove_at(wall_index)
+		for gate_index in range(gates.size() - 1, -1, -1):
+			if int(gates[gate_index].get("outpost_index", -1)) == outpost_expanding_index:
+				gates.remove_at(gate_index)
+		var newly_fortified: int = _fortify_enclosed_buildings(outpost_placement_rect, outpost_expanding_index)
+		expanded_outpost["rect"] = outpost_placement_rect
+		expanded_outpost["pos"] = center
+		expanded_outpost["safe_radius"] = minf(size.x, size.y) * 0.42
+		expanded_outpost["capacity"] = int(expanded_outpost.get("capacity", 12)) + newly_fortified * 8
+		outposts[outpost_expanding_index] = expanded_outpost
+		_create_outpost_perimeter(outpost_placement_rect, outpost_expanding_index)
+		wood -= wood_cost
+		scrap -= cost
+		message = "OUTPOST PERIMETER EXPANDED — +%d SHELTER" % (newly_fortified * 8)
+		outpost_expanding_index = -1
+		outpost_placement_active = false
+		outpost_placement_dragging = false
+		message_timer = 2.5
+		_save_operation()
+		queue_redraw()
+		return
+	if outpost_placement_kind == "hq'
 		var anchor_index: int = _milestone13_nearest_building(center, 520.0)
 		if anchor_index < 0:
-			message = "HQ REQUIRES AN INTACT CITY BUILDING"
+			message = "NO BUILDING ENCLOSED"
 			message_timer = 2.0
 			return
 		center = buildings[anchor_index].get_center()
@@ -1252,8 +1352,9 @@ func _confirm_outpost_placement() -> void:
 		var fortified_count: int = _fortify_enclosed_buildings(outpost_placement_rect, new_outpost_index)
 		outposts.append({"pos": center, "rect": outpost_placement_rect, "income_timer": OUTPOST_INCOME_INTERVAL, "safe_radius": minf(size.x, size.y) * 0.42, "vision_radius": 260.0, "command_radius": OUTPOST_COMMAND_RADIUS, "hp": 900.0, "max_hp": 900.0, "level": 1, "capacity": capacity + fortified_count * 8, "sheltered": 0, "evac_timer": 11.25, "rescue_beacon_timer": 0.0, "fortified_buildings": _fortified_building_indices(new_outpost_index)})
 		_create_outpost_perimeter(outpost_placement_rect, outposts.size() - 1)
-	scrap -= cost
-	scrap -= 40
+	if outpost_placement_kind != "hq":
+		scrap -= cost
+		scrap -= 40
 	if outpost_placement_kind == "hq":
 		# The HQ, perimeter and evacuation zone are now registered before the campaign can tick.
 		campaign_started = not outposts.is_empty() and float(outposts[0].get("hp", 0.0)) > 0.0
@@ -1264,7 +1365,7 @@ func _confirm_outpost_placement() -> void:
 		radio_day_announced = 1
 	outpost_placement_active = false
 	outpost_placement_dragging = false
-	message = "CUSTOM OUTPOST ESTABLISHED — MATS %d" % cost
+	message = "FREE CONVOY HQ ESTABLISHED" if outpost_placement_kind == "hq" else "CUSTOM OUTPOST ESTABLISHED — MATS %d" % cost
 	message_timer = 2.5
 	_save_operation()
 	queue_redraw()
@@ -1647,6 +1748,9 @@ func _update_combat_effects(delta: float) -> void:
 
 func _add_bullet_tracer(origin: Vector2, target: Vector2) -> void:
 	bullet_tracers.append({"from": origin, "to": target, "life": 0.12, "max_life": 0.12})
+	recent_gunfire.append({"pos": origin, "strength": 1.0, "life": 12.0})
+	if recent_gunfire.size() > 80:
+		recent_gunfire.pop_front()
 
 func _draw_buildings() -> void:
 	var visible_rect: Rect2 = _camera_view_rect().grow(120.0)
@@ -2300,9 +2404,11 @@ func _spawn_wave() -> void:
 	var escalation_phase: int = int(float(wave - 1) / 6.0) + 1
 	var phase_multiplier: float = minf(1.0 + float(escalation_phase - 1) * 0.25, 3.0)
 	var day_multiplier: float = minf(1.0 + float(survival_day - 1) * 0.12, 3.0)
+	var early_curve: float = 0.45 if survival_day <= 2 else minf(1.0, 0.45 + float(survival_day - 2) * 0.18)
+	var population_curve: float = 1.0 + minf(0.25, float(civilians.size() + _total_sheltered_civilians()) / 400.0)
 	var night_multiplier: float = (1.4 + minf(float(survival_day - 1) * 0.02, 0.6)) if day_phase == "NIGHT" else 1.0
 	var relief_multiplier: float = 0.88 if recent_outpost_loss_timer > 0.0 else 1.0
-	var count: int = mini(roundi(float(18 + wave * 8) * phase_multiplier * day_multiplier * night_multiplier * relief_multiplier), 900)
+	var count: int = mini(roundi(float(18 + wave * 8) * phase_multiplier * day_multiplier * early_curve * population_curve * night_multiplier * relief_multiplier), 900)
 	pending_wave_spawns += count
 	_spawn_pending_wave_spawns(0.0, true)
 	if wave % 5 == 0:
@@ -2663,6 +2769,9 @@ func _handle_tap(pos: Vector2) -> void:
 		diagnostics_enabled = not diagnostics_enabled
 		queue_redraw()
 		return
+	if selected_structure_type == "outpost" and pos.y >= _structure_action_top() + 48.0 + touch_target_size and pos.y <= _structure_action_top() + 48.0 + touch_target_size * 2.0 and pos.x >= safe_insets.x + 24.0 and pos.x <= safe_insets.x + 370.0:
+		_begin_outpost_expansion(selected_structure_index)
+		return
 	if not selected_structure_type.is_empty() and pos.y >= _structure_action_top() + 42.0 and pos.y <= _structure_action_top() + 42.0 + touch_target_size:
 		if pos.x >= safe_insets.x + 24.0 and pos.x <= safe_insets.x + 190.0:
 			_repair_selected_structure()
@@ -2978,7 +3087,7 @@ func _draw() -> void:
 		_draw_text("SELECT HQ LOCATION", Vector2(safe_insets.x + 24.0, hq_panel_top + 24.0), 20, Color("#e8fff0"))
 		_draw_text(hq_hint, Vector2(safe_insets.x + 24.0, hq_panel_top + 48.0), 13, Color("#a9c8b7"))
 		if outpost_placement_active:
-			_draw_text("%.0f x %.0f  COST MATS %d  SHELTER %d  %s" % [outpost_placement_rect.size.x, outpost_placement_rect.size.y, _outpost_build_cost(outpost_placement_rect.size), maxi(12, roundi(outpost_placement_rect.size.x * outpost_placement_rect.size.y / 18000.0)), "VALID" if outpost_placement_valid else "BLOCKED"], Vector2(safe_insets.x + 24.0, hq_panel_top + 76.0), 12, Color("#e8fff0"))
+			_draw_text("%.0f x %.0f  WOOD %d  SCRAP %d  SHELTER %d  %s" % [outpost_placement_rect.size.x, outpost_placement_rect.size.y, _outpost_placement_wood_cost(), _outpost_placement_cost(), maxi(12, roundi(outpost_placement_rect.size.x * outpost_placement_rect.size.y / 18000.0)), outpost_placement_status], Vector2(safe_insets.x + 24.0, hq_panel_top + 76.0), 10, Color("#e8fff0"))
 			_draw_outpost_placement_hud(_safe_bottom_y(touch_target_size + 6.0))
 		return
 	var shake_offset := Vector2.ZERO
@@ -3493,7 +3602,7 @@ func _draw_outpost_placement_hud(top: float) -> void:
 	var half_width: float = safe_width * 0.5
 	draw_rect(Rect2(safe_left, top, half_width - 6.0, touch_target_size), confirm_color)
 	draw_rect(Rect2(safe_left, top, half_width - 6.0, touch_target_size), Color("#72d69a") if outpost_placement_valid else Color("#ff6868"), false, 2.0)
-	_draw_text("[CONFIRM BUILD (MATS %d)]" % _outpost_build_cost(outpost_placement_rect.size), Vector2(safe_left + 10.0, top + touch_target_size * 0.62), 14, Color("#f0fff5"))
+	_draw_text("[CONFIRM (W%d S%d)]" % [_outpost_placement_wood_cost(), _outpost_placement_cost()], Vector2(safe_left + 10.0, top + touch_target_size * 0.62), 14, Color("#f0fff5"))
 	var cancel_left: float = safe_left + half_width + 6.0
 	draw_rect(Rect2(cancel_left, top, half_width - 6.0, touch_target_size), Color("#472a2a"))
 	draw_rect(Rect2(cancel_left, top, half_width - 6.0, touch_target_size), Color("#d77b7b"), false, 2.0)
@@ -3528,7 +3637,7 @@ func _draw_structure_actions() -> void:
 		_:
 			return
 	var action_top: float = _structure_action_top()
-	var action_panel_height: float = touch_target_size + 52.0
+	var action_panel_height: float = touch_target_size * (2.0 if selected_structure_type == "outpost" else 1.0) + 64.0
 	draw_rect(Rect2(safe_insets.x + 18.0, action_top, 380.0, action_panel_height), Color("#0b1b17", 0.96))
 	_draw_text("%s  HP %d/%d" % [structure_label, roundi(structure_hp), roundi(structure_max_hp)], Vector2(safe_insets.x + 30.0, action_top + 24.0), 14, Color("#dcefe4"))
 	draw_rect(Rect2(safe_insets.x + 24.0, action_top + 42.0, 166.0, touch_target_size), Color("#254538"))
@@ -3544,6 +3653,11 @@ func _draw_structure_actions() -> void:
 			draw_rect(Rect2(safe_insets.x + 204.0, action_top + 42.0, 166.0, touch_target_size), Color("#3a3420"))
 			draw_rect(Rect2(safe_insets.x + 204.0, action_top + 42.0, 166.0, touch_target_size), Color("#e4c66d"), false, 2.0)
 			_draw_text("UPGRADE MATS", Vector2(safe_insets.x + 213.0, action_top + 42.0 + touch_target_size * 0.62), 15, Color("#fff4c7"))
+		if selected_structure_type == "outpost":
+			var expand_rect := Rect2(safe_insets.x + 24.0, action_top + 48.0 + touch_target_size, 346.0, touch_target_size)
+			draw_rect(expand_rect, Color("#244b3a"))
+			draw_rect(expand_rect, Color("#72d69a"), false, 2.0)
+			_draw_text("[EXPAND OUTPOST]", expand_rect.position + Vector2(16.0, touch_target_size * 0.62), 15, Color("#f0fff5"))
 
 func _draw_milestone13_rooftop_bars() -> void:
 	var visible_rect: Rect2 = _camera_view_rect().grow(80.0)
@@ -4824,7 +4938,7 @@ func _save_operation() -> void:
 	# Never replace a prior valid campaign with an incomplete HQ-placement state.
 	if not campaign_started or game_state == "hq_placement":
 		return
-	var state: Dictionary = {"version": SAVE_VERSION, "faction_doctrine": faction_doctrine, "doctrine_change_day": doctrine_change_day, "doctrine_morale_shock_days": doctrine_morale_shock_days, "doctrine_morale_recovery_day": doctrine_morale_recovery_day, "faction_settlements": faction_settlements, "faction_foundation_timer": faction_foundation_timer, "outpost_morale": outpost_morale, "weapons": weapons, "survivors": survivors, "citizens": citizens, "role_allocations": role_allocations, "raid_squads": raid_squads, "work_zones": work_zones, "wood": wood, "scrap": scrap, "food": food, "last_upkeep_day": last_upkeep_day, "trees": trees, "wildlife": wildlife, "raider_camps": raider_camps, "constructed_buildings": constructed_buildings, "radio_log": radio_log, "radio_day_announced": radio_day_announced, "radio_banner_text": radio_banner_text, "radio_banner_timer": radio_banner_timer, "fuel": fuel, "world_clock_minutes": world_clock_minutes, "survival_day": survival_day, "best_days_survived": best_days_survived, "best_civilians_saved": best_civilians_saved, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer, "tactical_decals": tactical_decals, "ops_monitor_open": ops_monitor_open}
+\tvar state: Dictionary = {"version": SAVE_VERSION, "faction_doctrine": faction_doctrine, "doctrine_change_day": doctrine_change_day, "doctrine_morale_shock_days": doctrine_morale_shock_days, "doctrine_morale_recovery_day": doctrine_morale_recovery_day, "faction_settlements": faction_settlements, "faction_foundation_timer": faction_foundation_timer, "outpost_morale": outpost_morale, "weapons": weapons, "survivors": survivors, "citizens": citizens, "role_allocations": role_allocations, "raid_squads": raid_squads, "work_zones": work_zones, "wood": wood, "scrap": scrap, "food": food, "last_upkeep_day": last_upkeep_day, "trees": trees, "wildlife": wildlife, "raider_camps": raider_camps, "constructed_buildings": constructed_buildings, "radio_log": radio_log, "radio_day_announced": radio_day_announced, "radio_banner_text": radio_banner_text, "radio_banner_timer": radio_banner_timer, "fuel": fuel, "world_clock_minutes": world_clock_minutes, "survival_day": survival_day, "best_days_survived": best_days_survived, "best_civilians_saved": best_civilians_saved, "initial_civilian_count": initial_civilian_count, "campaign_map_seed": campaign_map_seed, "starting_district_index": starting_district_index, "district_seed_points": district_seed_points, "sector_index": sector_index, "wave": wave, "saved_count": saved_count, "lost_count": lost_count, "primary_hq_position": primary_hq_position, "evacuation_zones": evacuation_zones, "civilians": civilians, "zombies": zombies, "units": units, "vehicles": vehicles, "auto_ops_enabled": auto_ops_enabled, "highway_segments": highway_segments, "secondary_road_segments": secondary_road_segments, "world_callouts": world_callouts, "outposts": outposts, "turrets": turrets, "barricades": barricades, "flares": flares, "camera_position": camera_position, "camera_zoom": camera_zoom, "elapsed": elapsed, "wave_timer": wave_timer, "shelter_flush_timer": shelter_flush_timer, "supply_drop_timer": supply_drop_timer, "supply_crates": supply_crates, "civilian_steering": civilian_steering, "endless_containment": endless_containment, "buildings": buildings, "spawn_districts": spawn_districts, "building_archetypes": building_archetypes, "district_regions": district_regions, "gates": gates, "warehouse_hold_timers": warehouse_hold_timers, "zombie_grid_serialized": _serialize_spatial_grid(zombie_grid), "civilian_grid_serialized": _serialize_spatial_grid(civilian_grid), "time_scale_index": time_scale_index, "day_phase": day_phase, "pending_wave_spawns": pending_wave_spawns, "pending_wave_spawn_timer": pending_wave_spawn_timer, "tactical_decals": tactical_decals, "ops_monitor_open": ops_monitor_open, "recent_gunfire": recent_gunfire}
 	var file := FileAccess.open(save_path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify(_save_variant(state)))
@@ -4879,6 +4993,9 @@ func _resume_operation() -> void:
 		state["survivors"] = legacy_survivors
 		state["ops_monitor_open"] = false
 		state["version"] = 10
+	if int(state.get("version", 10)) < 11:
+		state["recent_gunfire"] = []
+		state["version"] = 11
 	faction_doctrine = str(state.get("faction_doctrine", "PRAGMATIC FREEHOLD"))
 	doctrine_change_day = int(state.get("doctrine_change_day", 1))
 	doctrine_morale_shock_days = int(state.get("doctrine_morale_shock_days", 0))
@@ -4990,6 +5107,8 @@ func _resume_operation() -> void:
 		_populate_ecology()
 	if state.has("gates"):
 		gates.assign(state["gates"])
+	if state.has("recent_gunfire"):
+		recent_gunfire.assign(state["recent_gunfire"])
 	if state.has("tactical_decals"):
 		tactical_decals.assign(state["tactical_decals"])
 	if tactical_decals.size() > MAX_TACTICAL_DECALS:
@@ -5981,6 +6100,77 @@ func _milestone14_cycle_doctrine() -> void:
 	message = "FACTION DOCTRINE: " + faction_doctrine
 	message_timer = 3.0
 	_save_operation()
+
+func _milestone151_update_population_heat(delta: float) -> void:
+	for i in range(recent_gunfire.size() - 1, -1, -1):
+		var noise: Dictionary = recent_gunfire[i]
+		noise["life"] = float(noise.get("life", 0.0)) - delta
+		if float(noise["life"]) <= 0.0:
+			recent_gunfire.remove_at(i)
+		else:
+			recent_gunfire[i] = noise
+	population_heat_refresh_timer -= delta
+	if population_heat_refresh_timer > 0.0:
+		return
+	population_heat_refresh_timer = 3.0
+	population_heat_targets.clear()
+	for outpost_index in range(outposts.size()):
+		var outpost: Dictionary = outposts[outpost_index]
+		var rect: Rect2 = outpost.get("rect", Rect2(outpost.get("pos", Vector2.ZERO) - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
+		var stationed: int = int(outpost.get("sheltered", 0))
+		for unit in units:
+			if rect.grow(120.0).has_point(unit.get("pos", Vector2.ZERO)):
+				stationed += 1
+		var facilities: int = 0
+		for building_index in range(buildings.size()):
+			if not rect.encloses(buildings[building_index]):
+				continue
+			if building_index < building_archetypes.size() and not bool(building_archetypes[building_index].get("destroyed", false)):
+				var kind: String = _building_type_at(building_index)
+				if kind in ["FACTORY", "WAREHOUSE", "SUPERMARKET", "HOSPITAL", "FARM", "INDUSTRIAL"]:
+					facilities += 1
+		var gunfire_score: float = 0.0
+		for noise in recent_gunfire:
+			var distance: float = rect.get_center().distance_to(noise.get("pos", Vector2.ZERO))
+			if distance < 1800.0:
+				gunfire_score += float(noise.get("life", 0.0)) / 12.0 * maxf(0.0, 1.0 - distance / 1800.0)
+		var heat: float = float(stationed) + float(facilities) * 7.0 + gunfire_score * 12.0
+		outpost["population_heat"] = heat
+		outposts[outpost_index] = outpost
+		population_heat_targets.append({"pos": rect.get_center(), "heat": heat + 1.0, "kind": "PLAYER OUTPOST"})
+	for faction_index in range(faction_settlements.size()):
+		var faction: Dictionary = faction_settlements[faction_index]
+		var faction_pos: Vector2 = faction.get("pos", Vector2.ZERO)
+		var troop_count: float = float(int(faction.get("strength", 1))) * (9.0 if str(faction.get("faction", "")) == "MILITARISTIC" else 5.0)
+		var faction_noise: float = 0.0
+		for noise in recent_gunfire:
+			var distance: float = faction_pos.distance_to(noise.get("pos", Vector2.ZERO))
+			if distance < 1800.0:
+				faction_noise += float(noise.get("life", 0.0)) / 12.0 * maxf(0.0, 1.0 - distance / 1800.0)
+		var faction_heat: float = troop_count + faction_noise * 12.0
+		faction["population_heat"] = faction_heat
+		faction_settlements[faction_index] = faction
+		if not bool(faction.get("warband_defeated", false)):
+			population_heat_targets.append({"pos": faction_pos, "heat": faction_heat + 1.0, "kind": str(faction.get("faction", "SETTLEMENT"))})
+	for district in district_regions:
+		var density: float = 0.0
+		for building in buildings:
+			if district.encloses(building):
+				density += 1.0
+		if density > 0.0:
+			population_heat_targets.append({"pos": district.get_center(), "heat": density * 1.4, "kind": "URBAN DISTRICT"})
+
+func _milestone151_hottest_target(position: Vector2) -> Vector2:
+	var best_position := Vector2.ZERO
+	var best_score: float = 0.0
+	for target in population_heat_targets:
+		var target_pos: Vector2 = target.get("pos", Vector2.ZERO)
+		var distance: float = position.distance_to(target_pos)
+		var score: float = float(target.get("heat", 0.0)) / (1.0 + distance / 1800.0)
+		if score > best_score:
+			best_score = score
+			best_position = target_pos
+	return best_position
 
 func _milestone14_seed_factions() -> void:
 	faction_settlements.clear()
