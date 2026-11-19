@@ -413,7 +413,7 @@ func _process(delta: float) -> void:
 		world_callouts[callout_index]["life"] = float(world_callouts[callout_index].get("life", 0.0)) - delta
 		if float(world_callouts[callout_index]["life"]) <= 0.0:
 			world_callouts.remove_at(callout_index)
-	if game_state == "title" or game_state == "sector_select" or game_state == "prologue":
+	if game_state == "title" or game_state == "sector_select" or game_state == "prologue" or game_state == "hq_placement":
 		title_animation_time += minf(delta, 0.05)
 		if menu_transition_timer > 0.0:
 			menu_transition_timer = maxf(0.0, menu_transition_timer - delta)
@@ -3230,6 +3230,8 @@ func _draw() -> void:
 		if outpost_placement_active:
 			_draw_text("%.0f x %.0f  WOOD %d  SCRAP %d  SHELTER %d  %s" % [outpost_placement_rect.size.x, outpost_placement_rect.size.y, _outpost_placement_wood_cost(), _outpost_placement_cost(), maxi(12, roundi(outpost_placement_rect.size.x * outpost_placement_rect.size.y / 18000.0)), outpost_placement_status], Vector2(safe_insets.x + 24.0, hq_panel_top + 76.0), 10, Color("#e8fff0"))
 			_draw_outpost_placement_hud(_safe_bottom_y(touch_target_size + 6.0))
+		if menu_fade_alpha > 0.0:
+			draw_rect(Rect2(Vector2.ZERO, viewport_size), Color(0.0, 0.015, 0.012, menu_fade_alpha))
 		return
 	var shake_offset := Vector2.ZERO
 	if shake_timer > 0.0:
@@ -3491,26 +3493,26 @@ func _draw_title_screen() -> void:
 	var panel := Rect2(title_size.x * 0.035, title_size.y * 0.025, title_size.x * 0.93, title_size.y * 0.94)
 	draw_rect(panel, Color(0.015, 0.045, 0.04, 0.91))
 	draw_rect(panel, Color("#5c9273"), false, 2.0)
-	_draw_containment_emblem(Vector2(title_size.x * 0.5, title_size.y * 0.105), 35.0 * scale_factor)
-	_draw_text("CONTAINMENT PROTOCOL", Vector2(title_size.x * 0.10, title_size.y * 0.205), 27 * scale_factor, Color("#f0fff5"))
-	_draw_text("STATE EXCLUSION ZONE // SURVIVAL COMMAND", Vector2(title_size.x * 0.085, title_size.y * 0.245), 10 * scale_factor, Color("#a9c8b7"))
+	_draw_containment_emblem(Vector2(title_size.x * 0.5, title_size.y * 0.105), 35.roundi(0.0 * scale_factor))
+	_draw_text("CONTAINMENT PROTOCOL", Vector2(title_size.x * 0.10, title_size.y * 0.205), roundi(27.0 * scale_factor), Color("#f0fff5"))
+	_draw_text("STATE EXCLUSION ZONE // SURVIVAL COMMAND", Vector2(title_size.x * 0.085, title_size.y * 0.245), roundi(10.0 * scale_factor), Color("#a9c8b7"))
 	if best_days_survived > 0 or best_civilians_saved > 0:
-		_draw_text("CAREER RECORD  //  BEST SURVIVAL: DAY %d  |  SAVED: %03d" % [best_days_survived, best_civilians_saved], Vector2(title_size.x * 0.09, title_size.y * 0.295), 10 * scale_factor, Color("#f0d98c"))
+		_draw_text("CAREER RECORD  //  BEST SURVIVAL: DAY %d  |  SAVED: %03d" % [best_days_survived, best_civilians_saved], Vector2(title_size.x * 0.09, title_size.y * 0.295), roundi(10.0 * scale_factor), Color("#f0d98c"))
 	if game_state == "title":
 		var preview: Dictionary = _get_title_save_preview()
 		if not preview.is_empty():
 			var resume_rect := Rect2(title_size.x * 0.08, title_size.y * 0.37, title_size.x * 0.84, 126.0)
 			draw_rect(resume_rect, Color("#273e32"))
 			draw_rect(resume_rect, Color("#e4c66d"), false, 3.0)
-			_draw_text("[RESUME OPERATION]", resume_rect.position + Vector2(16.0, 31.0), 17 * scale_factor, Color("#fff1bd"))
-			_draw_text("SURVIVAL DAY %02d   //   CLOCK %s   //   ACTIVE POPULATION %03d" % [int(preview["day"]), str(preview["clock"]), int(preview["population"])], resume_rect.position + Vector2(16.0, 68.0), 10 * scale_factor, Color("#f3f6dc"))
-			_draw_text("CONTINUE YOUR LAST FIELD OPERATION", resume_rect.position + Vector2(16.0, 99.0), 9 * scale_factor, Color("#c1d8c8"))
+			_draw_text("[RESUME OPERATION]", resume_rect.position + Vector2(16.0, 31.0), roundi(17.0 * scale_factor), Color("#fff1bd"))
+			_draw_text("SURVIVAL DAY %02d   //   CLOCK %s   //   ACTIVE POPULATION %03d" % [int(preview["day"]), str(preview["clock"]), int(preview["population"])], resume_rect.position + Vector2(16.0, 68.0), roundi(10.0 * scale_factor), Color("#f3f6dc"))
+			_draw_text("CONTINUE YOUR LAST FIELD OPERATION", resume_rect.position + Vector2(16.0, 99.0), roundi(9.0 * scale_factor), Color("#c1d8c8"))
 		var deploy_rect := Rect2(title_size.x * 0.14, title_size.y * 0.57, title_size.x * 0.72, 78.0)
 		draw_rect(deploy_rect, Color("#1d5939"))
 		draw_rect(deploy_rect, Color("#79e7a4"), false, 2.5)
-		_draw_text("[DEPLOY CONVOY]", deploy_rect.position + Vector2(22.0, 48.0), 19 * scale_factor, Color("#f0fff5"))
+		_draw_text("[DEPLOY CONVOY]", deploy_rect.position + Vector2(22.0, 48.0), roundi(19.0 * scale_factor), Color("#f0fff5"))
 	else:
-		_draw_text("SELECT OPERATIONAL DISTRICT", Vector2(title_size.x * 0.09, title_size.y * 0.335), 17 * scale_factor, Color("#d8eee0"))
+		_draw_text("SELECT OPERATIONAL DISTRICT", Vector2(title_size.x * 0.09, title_size.y * 0.335), roundi(17.0 * scale_factor), Color("#d8eee0"))
 		var names: Array[String] = ["SUBURBAN OUTSKIRTS", "MEDICAL & URBAN CORE", "INDUSTRIAL HIGHWAY"]
 		var resource_ratings: Array[String] = ["SUPPLIES  HIGH  //  FOOD  HIGH", "MEDICAL  HIGH  //  SCRAP  MEDIUM", "FUEL  HIGH  //  MATERIALS  HIGH"]
 		var threat_ratings: Array[int] = [2, 4, 3]
@@ -3521,19 +3523,19 @@ func _draw_title_screen() -> void:
 			var card_rect := Rect2(title_size.x * 0.06, title_size.y * 0.36 + float(index) * (card_height + card_gap), title_size.x * 0.88, card_height)
 			draw_rect(card_rect, Color("#102a23", 0.96))
 			draw_rect(card_rect, Color("#6fba8b"), false, 2.0)
-			_draw_text("%02d  %s" % [index + 1, names[index]], card_rect.position + Vector2(12.0, 27.0), 13 * scale_factor, Color("#e8fff0"))
-			_draw_text(resource_ratings[index], card_rect.position + Vector2(12.0, 53.0), 9 * scale_factor, Color("#b7d7c2"))
-			_draw_text(details[index], card_rect.position + Vector2(12.0, 76.0), 8 * scale_factor, Color("#8eaa99"))
-			_draw_text("THREAT", card_rect.position + Vector2(12.0, 103.0), 8 * scale_factor, Color("#e2b2a4"))
+			_draw_text("%02d  %s" % [index + 1, names[index]], card_rect.position + Vector2(12.0, 27.0), roundi(13.0 * scale_factor), Color("#e8fff0"))
+			_draw_text(resource_ratings[index], card_rect.position + Vector2(12.0, 53.0), roundi(9.0 * scale_factor), Color("#b7d7c2"))
+			_draw_text(details[index], card_rect.position + Vector2(12.0, 76.0), roundi(8.0 * scale_factor), Color("#8eaa99"))
+			_draw_text("THREAT", card_rect.position + Vector2(12.0, 103.0), roundi(8.0 * scale_factor), Color("#e2b2a4"))
 			for pip in range(5):
 				var pip_color: Color = Color("#e45c50") if pip < threat_ratings[index] else Color("#46574f")
 				draw_circle(card_rect.position + Vector2(74.0 + float(pip) * 15.0, 99.0), 4.5, pip_color)
 			var launch_rect := Rect2(card_rect.end.x - 166.0, card_rect.position.y + card_rect.size.y - 58.0, 154.0, 48.0)
 			draw_rect(launch_rect, Color("#245b3c"))
 			draw_rect(launch_rect, Color("#91ddb0"), false, 1.5)
-			_draw_text("[DEPLOY CONVOY]", launch_rect.position + Vector2(8.0, 30.0), 10 * scale_factor, Color("#f0fff5"))
-	_draw_text("[FIELD MANUAL]", Vector2(title_size.x * 0.31, title_size.y * 0.875), 14 * scale_factor, Color("#c9e6d1"))
-	_draw_text("TACTICAL RESPONSE COMMAND  //  SECURE THE EXCLUSION ZONE", Vector2(title_size.x * 0.07, title_size.y * 0.925), 8 * scale_factor, Color("#6e9680"))
+			_draw_text("[DEPLOY CONVOY]", launch_rect.position + Vector2(8.0, 30.0), roundi(10.0 * scale_factor), Color("#f0fff5"))
+	_draw_text("[FIELD MANUAL]", Vector2(title_size.x * 0.31, title_size.y * 0.875), roundi(14.0 * scale_factor), Color("#c9e6d1"))
+	_draw_text("TACTICAL RESPONSE COMMAND  //  SECURE THE EXCLUSION ZONE", Vector2(title_size.x * 0.07, title_size.y * 0.925), roundi(8.0 * scale_factor), Color("#6e9680"))
 	_draw_field_manual(title_size)
 
 func _draw_pause_overlay() -> void:
