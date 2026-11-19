@@ -403,6 +403,7 @@ func _process(delta: float) -> void:
 	_update_supply_drops(sim_delta)
 	_update_building_effects(sim_delta)
 	_milestone13_tick_construction(sim_delta)
+	_milestone13_tick_crafting(sim_delta)
 	_update_gate_states()
 	# Day phase transitions are driven by the continuous 24-hour clock.
 
@@ -937,7 +938,7 @@ func _residential_density_bonus(region: Rect2) -> int:
 func _building_type_at(index: int) -> String:
 	if index < 0 or index >= building_archetypes.size():
 		return "RESIDENTIAL"
-	return str(building_archetypes[index].get("type", "RESIDENTIAL"))
+	return str(building_archetypes[index].get("converted_to", building_archetypes[index].get("type", "RESIDENTIAL")))
 
 func _is_near_building_type(position: Vector2, archetype: String, radius: float) -> bool:
 	var radius_squared: float = radius * radius
@@ -1817,10 +1818,15 @@ func _update_auto_ops(delta: float) -> void:
 					if _building_type_at(cache_index) == "SUPERMARKET":
 						food += 55
 						world_callouts.append({"pos": buildings[cache_index].get_center(), "text": "+55 FOOD", "life": 2.0})
+					elif _building_type_at(cache_index) in ["GUN_SHOP", "ARMORY"]:
+						_milestone13_loot_weapons(cache_index)
+						scrap += 35
+						world_callouts.append({"pos": buildings[cache_index].get_center(), "text": "WEAPON +35 MATS", "life": 2.0})
 					else:
 						scrap += 100
-						scrap += 20
-						world_callouts.append({"pos": buildings[cache_index].get_center(), "text": "+MATS / M20", "life": 2.0})
+						if randf() < 0.22:
+							weapons["rifles"] = int(weapons.get("rifles", 0)) + 1
+						world_callouts.append({"pos": buildings[cache_index].get_center(), "text": "+100 MATS / RIFLE", "life": 2.0})
 					unit["ai_task"] = ""
 					unit["move_target"] = null
 					units[unit_index] = unit
@@ -2581,6 +2587,31 @@ func _handle_tap(pos: Vector2) -> void:
 			selected_vehicle_index = -1
 			queue_redraw()
 			return
+		if command_tab == 1:
+			var roster_top: float = safe_insets.y + 293.0
+			var row_height: float = 29.0
+			var roster_index: int = floori((pos.y - roster_top) / row_height)
+			if roster_index >= 0 and roster_index < survivors.size() and pos.y < roster_top + row_height * float(survivors.size()):
+				selected_survivor_index = roster_index
+				var role_order: Array[String] = ["WORKER", "ENGINEER", "INFANTRY", "SNIPER", "HEAVY", "MEDIC"]
+				var current_role: String = str(survivors[roster_index].get("role", "WORKER"))
+				var current_index: int = role_order.find(current_role)
+				for step in range(1, role_order.size() + 1):
+					var next_role: String = role_order[(current_index + step) % role_order.size()]
+					var required_key: String = "rifles" if next_role == "INFANTRY" else ("snipers" if next_role == "SNIPER" else ("heavy_mgs" if next_role == "HEAVY" else ("medkits" if next_role == "MEDIC" else "")))
+					var current_weapon: String = str(survivors[roster_index].get("equipped_weapon", ""))
+					if required_key.is_empty() or required_key == current_weapon or int(weapons.get(required_key, 0)) > 0:
+						_milestone13_assign_role(roster_index, next_role)
+						break
+			queue_redraw()
+			return
+		var craft_y: float = safe_insets.y + 293.0 + 29.0 * float(survivors.size()) + 8.0
+		if command_tab == 1 and pos.y >= craft_y and pos.y <= craft_y + 34.0:
+			var craft_slot: int = clampi(floori((pos.x - safe_left) / (safe_width / 4.0)), 0, 3)
+			var craft_keys: Array[String] = ["rifles", "snipers", "heavy_mgs", "medkits"]
+			_milestone13_queue_craft(craft_keys[craft_slot])
+			queue_redraw()
+			return
 		var choices: Array = BASE_DEPLOYMENTS if command_tab == 0 else (RECRUIT_DEPLOYMENTS if command_tab == 1 else UNIT_DEPLOYMENTS)
 		var button_width: float = safe_width / float(choices.size())
 		selected_deployment = clampi(int((pos.x - safe_left) / button_width), 0, choices.size() - 1)
@@ -2861,6 +2892,7 @@ func _draw() -> void:
 	_draw_roads()
 	_draw_evac_zone()
 	_draw_buildings()
+	_draw_milestone13_rooftop_bars()
 	for district_index in range(district_regions.size()):
 		var district_rect: Rect2 = district_regions[district_index]
 		if _camera_view_rect().intersects(district_rect):
@@ -2893,6 +2925,8 @@ func _draw() -> void:
 	elif day_phase == "NIGHT":
 		draw_rect(Rect2(Vector2.ZERO, viewport_size), Color(0.03, 0.06, 0.20, 0.18))
 	_draw_hud()
+	if command_tab == 1:
+		_draw_milestone13_roster_panel()
 	if campaign_start_grace_timer > 0.0:
 		var fast_start_rect := Rect2(safe_insets.x + 24.0, _safe_bottom_y(64.0), 230.0, 56.0)
 		draw_rect(fast_start_rect, Color("#3b3320"))
@@ -3404,6 +3438,21 @@ func _draw_structure_actions() -> void:
 			draw_rect(Rect2(safe_insets.x + 204.0, action_top + 42.0, 166.0, touch_target_size), Color("#3a3420"))
 			draw_rect(Rect2(safe_insets.x + 204.0, action_top + 42.0, 166.0, touch_target_size), Color("#e4c66d"), false, 2.0)
 			_draw_text("UPGRADE MATS", Vector2(safe_insets.x + 213.0, action_top + 42.0 + touch_target_size * 0.62), 15, Color("#fff4c7"))
+
+func _draw_milestone13_rooftop_bars() -> void:
+	var visible_rect: Rect2 = _camera_view_rect().grow(80.0)
+	for site in constructed_buildings:
+		if not bool(site.get("constructing", false)):
+			continue
+		var site_pos: Vector2 = site.get("pos", Vector2.ZERO)
+		if not visible_rect.has_point(site_pos):
+			continue
+		var progress: float = clampf(float(site.get("progress", 0.0)) / 100.0, 0.0, 1.0)
+		var bar_rect := Rect2(site_pos + Vector2(-48.0, -34.0), Vector2(96.0, 9.0))
+		draw_rect(bar_rect, Color("#101a17"))
+		draw_rect(Rect2(bar_rect.position, Vector2(bar_rect.size.x * progress, bar_rect.size.y)), Color("#7de5a5"))
+		draw_rect(bar_rect, Color("#e7fff0"), false, 1.5)
+		_draw_text("CONSTRUCTING %d%%" % roundi(progress * 100.0), site_pos + Vector2(-48.0, -40.0), 10, Color("#f5f4c7"))
 
 func _draw_deployment_bar() -> void:
 	var panel_height: float = _deployment_panel_height()
@@ -4168,11 +4217,12 @@ func _construct_survival_building(kind: String, position: Vector2) -> void:
 		return
 	var cost_scrap: int = 0
 	var cost_materials: int = 45 if kind == "farm" else (70 if kind == "bakery" else (60 if kind == "livestock" else (50 if kind == "watchtower" else (65 if kind == "clinic" else 90))))
-	for city_index in range(buildings.size()):
-		if not bool(building_archetypes[city_index].get("destroyed", false)) and buildings[city_index].has_point(position):
-			message = "CLEAR THE FOOTPRINT BEFORE CONSTRUCTION"
-			message_timer = 1.8
-			return
+	if kind in ["farm", "livestock", "watchtower"]:
+		for city_index in range(buildings.size()):
+			if not bool(building_archetypes[city_index].get("destroyed", false)) and buildings[city_index].has_point(position):
+				message = "FARM / PEN NEEDS OPEN GROUND"
+				message_timer = 1.8
+				return
 	for existing in constructed_buildings:
 		if position.distance_to(existing["pos"]) < 58.0:
 			message = "CONSTRUCTION FOOTPRINT OCCUPIED"
@@ -4281,8 +4331,6 @@ func _milestone13_assign_role(index: int, role: String) -> void:
 		return
 	var survivor: Dictionary = survivors[index]
 	var old_weapon: String = str(survivor.get("equipped_weapon", ""))
-	if not old_weapon.is_empty():
-		weapons[old_weapon] = int(weapons.get(old_weapon, 0)) + 1
 	var required_weapon: String = ""
 	match role:
 		"INFANTRY": required_weapon = "rifles"
@@ -4291,11 +4339,13 @@ func _milestone13_assign_role(index: int, role: String) -> void:
 		"MEDIC": required_weapon = "medkits"
 		"WORKER", "ENGINEER": pass
 		_: return
-	if not required_weapon.is_empty():
-		if int(weapons.get(required_weapon, 0)) <= 0:
-			message = "NO " + required_weapon.to_upper() + " IN STOCKPILE"
-			message_timer = 2.0
-			return
+	if not required_weapon.is_empty() and required_weapon != old_weapon and int(weapons.get(required_weapon, 0)) <= 0:
+		message = "NO " + required_weapon.to_upper() + " IN STOCKPILE"
+		message_timer = 2.0
+		return
+	if not old_weapon.is_empty():
+		weapons[old_weapon] = int(weapons.get(old_weapon, 0)) + 1
+	if not required_weapon.is_empty() and required_weapon != old_weapon:
 		weapons[required_weapon] = int(weapons.get(required_weapon, 0)) - 1
 	survivor["role"] = role
 	survivor["equipped_weapon"] = required_weapon
@@ -4322,6 +4372,76 @@ func _milestone13_tick_construction(delta: float) -> void:
 			if float(site["progress"]) >= 100.0:
 				site["constructing"] = false
 		constructed_buildings[i] = site
+
+func _draw_milestone13_roster_panel() -> void:
+	var panel_left: float = safe_insets.x + 8.0
+	var panel_top: float = safe_insets.y + 268.0
+	var panel_width: float = viewport_size.x - safe_insets.x - safe_insets.z - 16.0
+	var row_height: float = 29.0
+	var panel_height: float = row_height * float(survivors.size()) + 92.0
+	draw_rect(Rect2(panel_left, panel_top, panel_width, panel_height), Color("#071713", 0.96))
+	draw_rect(Rect2(panel_left, panel_top, panel_width, panel_height), Color("#6ccf91"), false, 2.0)
+	_draw_text("CREW ROSTER — TAP A SURVIVOR TO CYCLE ROLE", Vector2(panel_left + 8.0, panel_top + 18.0), 11, Color("#f2d98a"))
+	for survivor_index in range(survivors.size()):
+		var survivor: Dictionary = survivors[survivor_index]
+		var row_rect := Rect2(panel_left + 5.0, panel_top + 25.0 + float(survivor_index) * row_height, panel_width - 10.0, row_height - 1.0)
+		draw_rect(row_rect, Color("#254538") if survivor_index == selected_survivor_index else Color("#10221d"))
+		var rank_text: String = ["I", "II", "III"][clampi(int(survivor.get("veteran_rank", 1)) - 1, 0, 2)]
+		var weapon_text: String = str(survivor.get("equipped_weapon", "—")).to_upper()
+		var row_text: String = "%02d %s | %s | C%d B%d M%d | R%s | %s" % [survivor_index + 1, str(survivor.get("name", "SURVIVOR")), str(survivor.get("role", "WORKER")), int(survivor.get("combat_xp", 0)), int(survivor.get("build_xp", 0)), int(survivor.get("medical_xp", 0)), rank_text, weapon_text]
+		_draw_text(row_text, row_rect.position + Vector2(4.0, 19.0), 8, Color("#e4f4e9"))
+	var craft_y: float = panel_top + 25.0 + row_height * float(survivors.size()) + 8.0
+	var labels: Array[String] = ["RIFLE 25", "SNIPER 40", "HEAVY 55", "MEDKIT 20"]
+	for craft_index in range(4):
+		var craft_rect := Rect2(panel_left + float(craft_index) * (panel_width / 4.0), craft_y, panel_width / 4.0 - 4.0, 32.0)
+		draw_rect(craft_rect, Color("#243b4c"))
+		draw_rect(craft_rect, Color("#75c9e8"), false, 1.0)
+		_draw_text(labels[craft_index], craft_rect.position + Vector2(4.0, 20.0), 9, Color("#e8f7ff"))
+
+func _milestone13_queue_craft(weapon_key: String) -> void:
+	var costs: Dictionary = {"rifles": 25, "snipers": 40, "heavy_mgs": 55, "medkits": 20}
+	if not costs.has(weapon_key) or scrap < int(costs.get(weapon_key, 0)):
+		message = "CRAFTING REQUIRES MORE MATS"
+		message_timer = 1.8
+		return
+	var workshop_position := Vector2.ZERO
+	var found_workshop := false
+	for site in constructed_buildings:
+		if str(site.get("kind", "")) == "workshop" and not bool(site.get("constructing", true)):
+			workshop_position = site.get("pos", Vector2.ZERO)
+			found_workshop = true
+			break
+	if not found_workshop:
+		message = "COMPLETE A WEAPONS WORKSHOP FIRST"
+		message_timer = 2.0
+		return
+	scrap -= int(costs[weapon_key])
+	crafting_orders.append({"weapon": weapon_key, "pos": workshop_position, "remaining": 24.0})
+	message = "CRAFT ORDER QUEUED: " + weapon_key.to_upper()
+	message_timer = 2.0
+	_save_operation()
+
+func _milestone13_tick_crafting(delta: float) -> void:
+	for order_index in range(crafting_orders.size() - 1, -1, -1):
+		var order: Dictionary = crafting_orders[order_index]
+		var speed := 0.0
+		for unit in units:
+			if bool(unit.get("garrisoned", false)) or unit["pos"].distance_to(order.get("pos", Vector2.ZERO)) > 56.0:
+				continue
+			var worker_kind: String = str(unit.get("kind", ""))
+			if worker_kind == "engineer":
+				speed = maxf(speed, 2.0)
+			elif worker_kind == "worker":
+				speed = maxf(speed, 1.0)
+		if speed > 0.0:
+			order["remaining"] = maxf(0.0, float(order.get("remaining", 24.0)) - delta * speed)
+		if float(order.get("remaining", 1.0)) <= 0.0:
+			var crafted_key: String = str(order.get("weapon", "rifles"))
+			weapons[crafted_key] = int(weapons.get(crafted_key, 0)) + 1
+			world_callouts.append({"pos": order.get("pos", Vector2.ZERO), "text": "CRAFTED " + crafted_key.to_upper(), "life": 2.0})
+			crafting_orders.remove_at(order_index)
+		else:
+			crafting_orders[order_index] = order
 
 func _pause_button_rect() -> Rect2:
 	return Rect2(safe_insets.x + HUD_EDGE_PADDING + 350.0, safe_insets.y + HUD_EDGE_PADDING + 104.0, 130.0, 42.0)
