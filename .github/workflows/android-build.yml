@@ -7,18 +7,18 @@ on:
 permissions:
   contents: write
 
-      - name: Validate workflow YAML
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -c "import yaml; yaml.safe_load(open('.github/workflows/WORKFLOW_FILE', encoding='utf-8')); print('YAML syntax: OK')"
-
 jobs:
   export-android:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate workflow YAML
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c "import yaml; yaml.safe_load(open('.github/workflows/android-build.yml', encoding='utf-8')); print('YAML syntax: OK')"
 
       # GitHub's ubuntu-latest image already provides Java and the Android SDK.
       # Avoid setup actions that replace/reconfigure the runner's SDK installation.
