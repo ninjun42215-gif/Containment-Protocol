@@ -2420,6 +2420,21 @@ func _update_vehicles(delta: float) -> void:
 	_rebuild_zombie_spatial_grid()
 
 
+func _milestone151_settlement_population() -> int:
+	var total_population: int = 0
+	for outpost in outposts:
+		var outpost_rect: Rect2 = outpost.get("rect", Rect2(outpost.get("pos", Vector2.ZERO) - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
+		for unit in units:
+			if outpost_rect.grow(120.0).has_point(unit.get("pos", Vector2.ZERO)):
+				total_population += 1
+	for faction in faction_settlements:
+		if bool(faction.get("warband_defeated", false)):
+			continue
+		var faction_kind: String = str(faction.get("faction", "NEUTRAL"))
+		var troop_multiplier: int = 9 if faction_kind == "MILITARISTIC" else 5
+		total_population += maxi(0, int(faction.get("strength", 1))) * troop_multiplier
+	return total_population
+
 func _spawn_wave() -> void:
 	wave += 1
 	if wave == 1:
@@ -2428,7 +2443,7 @@ func _spawn_wave() -> void:
 	var phase_multiplier: float = minf(1.0 + float(escalation_phase - 1) * 0.25, 3.0)
 	var day_multiplier: float = minf(1.0 + float(survival_day - 1) * 0.12, 3.0)
 	var early_curve: float = 0.45 if survival_day <= 2 else minf(1.0, 0.45 + float(survival_day - 2) * 0.18)
-	var population_curve: float = 1.0 + minf(0.25, float(civilians.size() + _total_sheltered_civilians()) / 400.0)
+	var population_curve: float = 1.0 + minf(0.35, float(civilians.size() + _total_sheltered_civilians() + _milestone151_settlement_population()) / 500.0)
 	var night_multiplier: float = (1.4 + minf(float(survival_day - 1) * 0.02, 0.6)) if day_phase == "NIGHT" else 1.0
 	var relief_multiplier: float = 0.88 if recent_outpost_loss_timer > 0.0 else 1.0
 	var count: int = mini(roundi(float(18 + wave * 8) * phase_multiplier * day_multiplier * early_curve * population_curve * night_multiplier * relief_multiplier), 900)
