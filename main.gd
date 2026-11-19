@@ -2503,8 +2503,31 @@ func _spawn_one_wave_zombie() -> bool:
 	var district: Rect2 = spawn_districts[chosen_district_index]
 	var spawn_point := Vector2.ZERO
 	var found_open_spawn := false
+	# Spawn near a weighted local heat source when one exists in this district.
+	var local_heat_total: float = 0.0
+	for heat_target in population_heat_targets:
+		var heat_position: Vector2 = heat_target.get("pos", Vector2.ZERO)
+		if district.has_point(heat_position):
+			local_heat_total += maxf(0.0, float(heat_target.get("heat", 0.0)))
+	var preferred_spawn_center: Vector2 = district.get_center()
+	if local_heat_total > 0.0 and randf() < 0.72:
+		var heat_roll: float = randf() * local_heat_total
+		for heat_target in population_heat_targets:
+			var heat_position: Vector2 = heat_target.get("pos", Vector2.ZERO)
+			if not district.has_point(heat_position):
+				continue
+			heat_roll -= maxf(0.0, float(heat_target.get("heat", 0.0)))
+			if heat_roll <= 0.0:
+				preferred_spawn_center = heat_position
+				break
 	for attempt in range(16):
-		spawn_point = Vector2(randf_range(district.position.x, district.end.x), randf_range(district.position.y, district.end.y))
+		if attempt < 10 and local_heat_total > 0.0:
+			var spawn_offset := Vector2.from_angle(randf_range(0.0, TAU)) * randf_range(120.0, 620.0)
+			spawn_point = preferred_spawn_center + spawn_offset
+			spawn_point.x = clampf(spawn_point.x, district.position.x + 20.0, district.end.x - 20.0)
+			spawn_point.y = clampf(spawn_point.y, district.position.y + 20.0, district.end.y - 20.0)
+		else:
+			spawn_point = Vector2(randf_range(district.position.x, district.end.x), randf_range(district.position.y, district.end.y))
 		if _is_open_world_position(spawn_point, 18.0):
 			found_open_spawn = true
 			break
@@ -6228,16 +6251,25 @@ func _milestone151_update_population_heat(delta: float) -> void:
 			population_heat_targets.append({"pos": district.get_center(), "heat": density * 1.4, "kind": "URBAN DISTRICT"})
 
 func _milestone151_hottest_target(position: Vector2) -> Vector2:
-	var best_position := Vector2.ZERO
-	var best_score: float = 0.0
+	# Blend attraction from every meaningful settlement instead of snapping
+	# roaming infected toward one winner and ignoring nearby population centers.
+	var weighted_position := Vector2.ZERO
+	var total_weight: float = 0.0
 	for target in population_heat_targets:
 		var target_pos: Vector2 = target.get("pos", Vector2.ZERO)
 		var distance: float = position.distance_to(target_pos)
-		var score: float = float(target.get("heat", 0.0)) / (1.0 + distance / 1800.0)
-		if score > best_score:
-			best_score = score
-			best_position = target_pos
-	return best_position
+		if distance > 5200.0:
+			continue
+		var heat: float = maxf(0.0, float(target.get("heat", 0.0)))
+		var distance_weight: float = 1.0 / pow(1.0 + distance / 1800.0, 2.0)
+		var weight: float = heat * distance_weight
+		if weight <= 0.01:
+			continue
+		weighted_position += target_pos * weight
+		total_weight += weight
+	if total_weight <= 0.01:
+		return Vector2.ZERO
+	return weighted_position / total_weight
 
 func _milestone14_seed_factions() -> void:
 	faction_settlements.clear()
