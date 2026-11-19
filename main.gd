@@ -1262,30 +1262,6 @@ func _outpost_placement_status_for_rect(rect: Rect2) -> String:
 func _outpost_rect_valid(rect: Rect2) -> bool:
 	return _outpost_placement_status_for_rect(rect) == "VALID"
 
-func _outpost_rect_geometry_vafunc _outpost_placement_status() -> String:
-	return _outpost_placement_status_for_rect(outpost_placement_rect)
-
-func _outpost_placement_status_for_rect(rect: Rect2) -> String:
-	if not _outpost_rect_geometry_valid(rect):
-		return "OVERLAPS ROAD/OUTPOST"
-	if outpost_placement_kind == "hq":
-		var enclosed_hq_building: bool = false
-		for building_index in range(buildings.size()):
-			if rect.encloses(buildings[building_index]) and not bool(building_archetypes[building_index].get("destroyed", false)):
-				enclosed_hq_building = true
-				break
-		if not enclosed_hq_building:
-			return "NO BUILDING ENCLOSED"
-	var initial_convoy_hq: bool = outpost_placement_kind == "hq" and outposts.is_empty()
-	var required_wood: int = 0 if initial_convoy_hq else _outpost_placement_wood_cost()
-	var required_scrap: int = 0 if initial_convoy_hq else _outpost_placement_cost() + (0 if outpost_placement_kind in ["hq", "expand"] else 40)
-	if wood < required_wood or scrap < required_scrap:
-		return "NOT ENOUGH WOOD/SCRAP"
-	return "VALID"
-
-func _outpost_rect_valid(rect: Rect2) -> bool:
-	return _outpost_placement_status_for_rect(rect) == "VALID"
-
 func _outpost_rect_geometry_valid(rect: Rect2) -> bool:
 	if rect.position.x < 20.0 or rect.position.y < 20.0 or rect.end.x > WORLD_SIZE.x - 20.0 or rect.end.y > WORLD_SIZE.y - 20.0:
 		return false
@@ -1319,36 +1295,6 @@ func _outpost_rect_geometry_valid(rect: Rect2) -> bool:
 ize(size: Vector2) -> Vector2:
 	return Vector2(clampf(roundf(size.x / OUTPOST_SNAP) * OUTPOST_SNAP, OUTPOST_MIN_SIZE, OUTPOST_MAX_SIZE), clampf(roundf(size.y / OUTPOST_SNAP) * OUTPOST_SNAP, OUTPOST_MIN_SIZE, OUTPOST_MAX_SIZE))
 
-func _outpost_rect_valid(rect: Rect2) -> bool:
-	if rect.position.x < 20.0 or rect.position.y < 20.0 or rect.end.x > WORLD_SIZE.x - 20.0 or rect.end.y > WORLD_SIZE.y - 20.0:
-		return false
-	var edge: float = OUTPOST_WALL_THICKNESS + 8.0
-	var edge_bands: Array[Rect2] = [Rect2(rect.position, Vector2(rect.size.x, edge)), Rect2(rect.position, Vector2(edge, rect.size.y)), Rect2(Vector2(rect.end.x - edge, rect.position.y), Vector2(edge, rect.size.y)), Rect2(Vector2(rect.position.x, rect.end.y - edge), Vector2(rect.size.x, edge))]
-	for index in range(buildings.size()):
-		var building: Rect2 = buildings[index]
-		if not rect.intersects(building) or rect.encloses(building):
-			continue
-		if _building_type_at(index) == "HIGHRISE":
-			for edge_band in edge_bands:
-				if edge_band.intersects(building):
-					return false
-	for outpost_index in range(outposts.size()):
-		if outpost_placement_kind == "expand" and outpost_index == outpost_expanding_index:
-			continue
-		var other_rect: Rect2 = outposts[outpost_index].get("rect", Rect2(outposts[outpost_index]["pos"] - Vector2(110.0, 110.0), Vector2(220.0, 220.0)))
-		if rect.intersects(other_rect.grow(40.0)):
-			return false
-	var perimeter_edge: float = OUTPOST_WALL_THICKNESS + 8.0
-	var perimeter_bands: Array[Rect2] = [Rect2(rect.position, Vector2(rect.size.x, perimeter_edge)), Rect2(rect.position, Vector2(perimeter_edge, rect.size.y)), Rect2(Vector2(rect.end.x - perimeter_edge, rect.position.y), Vector2(perimeter_edge, rect.size.y)), Rect2(Vector2(rect.position.x, rect.end.y - perimeter_edge), Vector2(rect.size.x, perimeter_edge))]
-	for segment in highway_segments + secondary_road_segments:
-		var road_from: Vector2 = segment.get("from", Vector2.ZERO)
-		var road_to: Vector2 = segment.get("to", Vector2.ZERO)
-		var road_width: float = float(segment.get("width", 48.0))
-		var road_rect: Rect2 = Rect2(road_from, road_to - road_from).abs().grow(road_width * 0.5 + 8.0)
-		for perimeter_band in perimeter_bands:
-			if road_rect.intersects(perimeter_band):
-				return false
-	return true
 
 func _begin_outpost_placement(world_position: Vector2, placement_kind: String) -> void:
 	outpost_placement_active = true
